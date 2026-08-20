@@ -1,0 +1,264 @@
+import { describe, expect, it } from "vitest";
+import {
+    DiagnosticCode,
+    parseShaderGraphDocument,
+    serializeShaderGraphDocument,
+} from "../src/index.js";
+import type { ParseResult, ShaderGraphDocument } from "../src/index.js";
+
+function baseDocument(): Record<string, unknown> {
+    return {
+        schemaVersion: 1,
+        graphId: "graph.test-surface",
+        profile: "gglab.surface",
+        profileVersion: 1,
+        parameters: [
+            { id: "param.baseTint", name: "Base Tint", class: "VectorParameter" },
+        ],
+        nodes: [
+            { id: "node.constant", type: "ConstantFloat", version: 1, label: "Half", properties: { value: 0.5 } },
+            { id: "node.output", type: "SurfaceOutput", version: 1, properties: {} },
+        ],
+        connections: [
+            {
+                id: "conn.01",
+                from: { nodeId: "node.constant", portId: "value" },
+                to: { nodeId: "node.output", portId: "baseColor" },
+            },
+        ],
+        editorMetadata: {
+            nodes: { "node.constant": { position: { x: 120, y: 80 } } },
+        },
+    };
+}
+
+const baseJson = JSON.stringify(baseDocument());
+
+function parseVariant(mutate: (document: Record<string, unknown>) => void): ParseResult<ShaderGraphDocument> {
+    const document: Record<string, unknown> = JSON.parse(baseJson);
+    mutate(document);
+    return parseShaderGraphDocument(JSON.stringify(document));
+}
+
+function expectParsed(value: ShaderGraphDocument | null): ShaderGraphDocument {
+    if (value === null) {
+        throw new Error("expected a parsed document");
+    }
+    return value;
+}
+
+function expectElement<T>(elements: readonly T[], index: number): T {
+    const element = elements[index];
+    if (element === undefined) {
+        throw new Error(`expected array element ${index}`);
+    }
+    return element;
+}
+
+describe("parseShaderGraphDocument", () => {
+    it("loads a valid document and warns per unknown node type with the default catalog", () => {
+        const result = parseShaderGraphDocument(baseJson);
+        expect(result.ok).toBe(true);
+        const document = expectParsed(result.value);
+        expect(document.schemaVersion).toBe(1);
+        expect(document.graphId).toBe("graph.test-surface");
+        expect(document.profile).toBe("gglab.surface");
+        expect(document.parameters).toHaveLength(1);
+        expect(document.nodes).toHaveLength(2);
+        expect(document.connections).toHaveLength(1);
+        expect(document.editorMetadata.nodes["node.constant"]?.position).toEqual({ x: 120, y: 80 });
+        // No node type catalog supplied: both node types degrade explicitly
+        // (warning) while remaining fully loadable.
+        expect(result.diagnostics).toEqual([
+            expect.objectContaining({ code: DiagnosticCode.UnknownNodeType, severity: "warning", dataPath: "$.nodes[0].type" }),
+            expect.objectContaining({ code: DiagnosticCode.UnknownNodeType, severity: "warning", dataPath: "$.nodes[1].type" }),
+        ]);
+    });
+
+    it("uses the caller-supplied node type catalog for type and version checks", () => {
+        const nodeTypeCatalog = {
+            ConstantFloat: { minimumVersion: 1, maximumVersion: 1 },
+            SurfaceOutput: { minimumVersion: 1, maximumVersion: 2 },
+        };
+        const result = parseShaderGraphDocument(baseJson, { nodeTypeCatalog });
+        expect(result.ok).toBe(true);
+        expect(result.diagnostics).toEqual([]);
+
+        const nodes = (JSON.parse(baseJson) as Record<string, unknown>)["nodes"] as Record<string, unknown>[];
+        expectElement(nodes, 1)["version"] = 3;
+        const bumped = parseShaderGraphDocument(JSON.stringify({ ...baseDocument(), nodes }), { nodeTypeCatalog });
+        expect(bumped.ok).toBe(true);
+        expect(bumped.diagnostics).toEqual([
+            expect.objectContaining({
+                code: DiagnosticCode.UnknownNodeVersion,
+                severity: "warning",
+                dataPath: "$.nodes[1].version",
+            }),
+        ]);
+    });
+
+    it("round-trips byte-stably: parse → serialize → parse → serialize", () => {
+        const first = parseShaderGraphDocument(baseJson);
+        const firstDocument = expectParsed(first.value);
+        const bytes1 = serializeShaderGraphDocument(firstDocument);
+
+        const second = parseShaderGraphDocument(bytes1);
+        expect(second.ok).toBe(true);
+        const secondDocument = expectParsed(second.value);
+        expect(serializeShaderGraphDocument(secondDocument)).toBe(bytes1);
+        expect(secondDocument).toEqual(firstDocument);
+    });
+
+    it("serializes canonical bytes independent of input key order", () => {
+        const reference = parseShaderGraphDocument(baseJson);
+        const referenceBytes = serializeShaderGraphDocument(expectParsed(reference.value));
+
+        const shuffled: Record<string, unknown> = {
+            editorMetadata: baseDocument()["editorMetadata"],
+            connections: baseDocument()["connections"],
+            nodes: baseDocument()["nodes"],
+            parameters: baseDocument()["parameters"],
+            profileVersion: 1,
+            profile: "gglab.surface",
+            graphId: "graph.test-surface",
+            schemaVersion: 1,
+        };
+        const shuffledResult = parseShaderGraphDocument(JSON.stringify(shuffled));
+        expect(shuffledResult.ok).toBe(true);
+        expect(serializeShaderGraphDocument(expectParsed(shuffledResult.value))).toBe(referenceBytes);
+    });
+
+    it("retains unknown top-level fields for lossless round-trip and warns", () => {
+        const result = parseVariant((document) => {
+            document["experimental"] = { nested: [1, { zkey: "z", akey: "a" }] };
+        });
+        expect(result.ok).toBe(true);
+        const document = expectParsed(result.value);
+        expect(document.unknownFields).toEqual({ experimental: { nested: [1, { zkey: "z", akey: "a" }] } });
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({ code: DiagnosticCode.UnexpectedField, severity: "warning", dataPath: "$.experimental" }),
+        );
+
+        const bytes = serializeShaderGraphDocument(document);
+        const roundTripped = parseShaderGraphDocument(bytes);
+        expect(roundTripped.ok).toBe(true);
+        expect(expectParsed(roundTripped.value).unknownFields).toEqual({ experimental: { nested: [1, { zkey: "z", akey: "a" }] } });
+        // Retained nested objects are canonicalized to sorted keys on write.
+        expect(bytes).toContain(`"akey": "a"`);
+    });
+
+    it("retains unknown node fields for lossless round-trip and warns", () => {
+        const result = parseVariant((document) => {
+            const nodes = document["nodes"] as Record<string, unknown>[];
+            expectElement(nodes, 0)["futureTintMode"] = "linear";
+        });
+        expect(result.ok).toBe(true);
+        const node = expectParsed(result.value).nodes[0];
+        expect(node?.unknownFields).toEqual({ futureTintMode: "linear" });
+        expect(node?.id).toBe("node.constant");
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({ code: DiagnosticCode.UnexpectedField, severity: "warning", dataPath: "$.nodes[0].futureTintMode" }),
+        );
+    });
+
+    it("rejects an unsupported schema version before interpreting anything", () => {
+        const result = parseVariant((document) => {
+            document["schemaVersion"] = 2;
+        });
+        expect(result.ok).toBe(false);
+        expect(result.value).toBeNull();
+        expect(result.diagnostics).toEqual([
+            expect.objectContaining({ code: DiagnosticCode.UnsupportedSchemaVersion, severity: "error", dataPath: "$.schemaVersion" }),
+        ]);
+    });
+
+    it("collects missing, mistyped, and malformed-structure diagnostics together", () => {
+        const result = parseVariant((document) => {
+            delete document["profileVersion"];
+            document["nodes"] = "nope";
+        });
+        expect(result.ok).toBe(false);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({ code: DiagnosticCode.MissingRequiredField, severity: "error", dataPath: "$.profileVersion" }),
+        );
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({ code: DiagnosticCode.UnexpectedType, severity: "error", dataPath: "$.nodes" }),
+        );
+    });
+
+    it("rejects unstable ids", () => {
+        const result = parseVariant((document) => {
+            const nodes = document["nodes"] as Record<string, unknown>[];
+            expectElement(nodes, 0)["id"] = "bad id/!";
+        });
+        expect(result.ok).toBe(false);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({ code: DiagnosticCode.InvalidStableId, severity: "error", dataPath: "$.nodes[0].id" }),
+        );
+    });
+
+    it("rejects duplicate node, parameter, and connection ids", () => {
+        const result = parseVariant((document) => {
+            const nodes = document["nodes"] as Record<string, unknown>[];
+            const parameters = document["parameters"] as Record<string, unknown>[];
+            const connections = document["connections"] as Record<string, unknown>[];
+            expectElement(nodes, 1)["id"] = expectElement(nodes, 0)["id"];
+            parameters["push"]({ id: "param.baseTint", name: "Dup", class: "ScalarParameter" });
+            connections["push"]({
+                id: "conn.01",
+                from: { nodeId: "node.constant", portId: "value" },
+                to: { nodeId: "node.output", portId: "roughness" },
+            });
+        });
+        expect(result.ok).toBe(false);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({ code: DiagnosticCode.DuplicateNodeId, severity: "error" }),
+        );
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({ code: DiagnosticCode.DuplicateParameterId, severity: "error" }),
+        );
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({ code: DiagnosticCode.DuplicateConnectionId, severity: "error" }),
+        );
+    });
+
+    it("rejects connections that reference unknown nodes", () => {
+        const result = parseVariant((document) => {
+            const connections = document["connections"] as Record<string, unknown>[];
+            (expectElement(connections, 0)["to"] as Record<string, unknown>)["nodeId"] = "node.missing";
+        });
+        expect(result.ok).toBe(false);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({
+                code: DiagnosticCode.UnresolvedNodeReference,
+                severity: "error",
+                dataPath: "$.connections[0].to.nodeId",
+            }),
+        );
+    });
+
+    it("warns when editor metadata references a node that does not exist", () => {
+        const result = parseVariant((document) => {
+            const metadata = document["editorMetadata"] as Record<string, unknown>;
+            const states = metadata["nodes"] as Record<string, unknown>;
+            states["node.ghost"] = { position: { x: 1, y: 2 } };
+        });
+        expect(result.ok).toBe(true);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({
+                code: DiagnosticCode.UnresolvedNodeReference,
+                severity: "warning",
+                dataPath: "$.editorMetadata.nodes.node.ghost",
+            }),
+        );
+    });
+
+    it("reports malformed JSON input", () => {
+        const result = parseShaderGraphDocument("{ not json");
+        expect(result.ok).toBe(false);
+        expect(result.value).toBeNull();
+        expect(result.diagnostics).toEqual([
+            expect.objectContaining({ code: DiagnosticCode.InvalidJson, severity: "error", dataPath: "$" }),
+        ]);
+    });
+});
