@@ -15,13 +15,15 @@
  *   not-ok.
  * - Unknown but retained data degrades explicitly: unknown fields are kept
  *   for lossless round-trip, and nodes whose type or version is unknown to
- *   the caller-supplied catalog warn while remaining fully preserved.
+ *   the effective catalog (the built-in node catalog by default) warn while
+ *   remaining fully preserved.
  */
 import type { ParseResult, ShaderGraphDiagnostic } from "./diagnostics.js";
 import { DiagnosticCode } from "./diagnostics.js";
 import { hasField, isJsonNumber, isJsonRecord, isJsonString, jsonKind } from "./json-value.js";
 import type { JsonRecord, JsonValue } from "./json-value.js";
 import { errorAt, requireInteger, requireString, takeArray, takeField, takeObject, warnAt } from "./parse-helpers.js";
+import { supportedNodeTypeCatalog } from "./node-definitions.js";
 
 export interface SchemaVersionRange {
     readonly minimum: number;
@@ -40,14 +42,20 @@ export interface NodeTypeSupport {
 }
 
 /**
- * Node type catalog keyed by node type name. It is caller-supplied; the core
- * supplies it from its own node definition module when one exists. An empty
- * (or absent) catalog means every node type is explicitly unknown: nodes are
- * preserved and flagged with warnings, never silently substituted.
+ * Node type catalog keyed by node type name. The core's own catalog comes
+ * from its node definition module; callers may override it per parse.
+ * Every node type missing from the effective catalog is explicitly unknown:
+ * nodes are preserved and flagged with warnings, never silently substituted.
  */
 export type NodeTypeCatalog = Readonly<Record<string, NodeTypeSupport>>;
 
 export interface ParseDocumentOptions {
+    /**
+     * Maps node type names to the range of versions the parsing consumer
+     * supports. Omit to use the core's built-in node catalog (node
+     * definitions); pass an explicit catalog to override — an explicit empty
+     * catalog marks every node type as explicitly unknown.
+     */
     readonly nodeTypeCatalog?: NodeTypeCatalog;
     readonly supportedSchemaVersionRange?: SchemaVersionRange;
 }
@@ -195,7 +203,7 @@ export function parseShaderGraphDocument(rawJson: string, options: ParseDocument
 
     checkUniqueIds(parameters, nodes, connections, diagnostics);
     checkNodeReferences(connections, nodes, diagnostics);
-    checkNodeTypeCatalog(nodes, options.nodeTypeCatalog ?? {}, diagnostics);
+    checkNodeTypeCatalog(nodes, options.nodeTypeCatalog ?? supportedNodeTypeCatalog(), diagnostics);
     checkEditorMetadataReferences(editorMetadata, nodes, diagnostics);
 
     const hasErrors = diagnostics.some((diagnostic) => diagnostic.severity === "error");

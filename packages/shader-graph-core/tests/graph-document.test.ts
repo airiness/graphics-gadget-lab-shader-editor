@@ -16,14 +16,14 @@ function baseDocument(): Record<string, unknown> {
             { id: "param.baseTint", name: "Base Tint", class: "VectorParameter" },
         ],
         nodes: [
-            { id: "node.constant", type: "ConstantFloat", version: 1, label: "Half", properties: { value: 0.5 } },
+            { id: "node.constant", type: "Float", version: 1, label: "Half", properties: { value: 0.5 } },
             { id: "node.output", type: "SurfaceOutput", version: 1, properties: {} },
         ],
         connections: [
             {
                 id: "conn.01",
                 from: { nodeId: "node.constant", portId: "value" },
-                to: { nodeId: "node.output", portId: "baseColor" },
+                to: { nodeId: "node.output", portId: "BaseColor" },
             },
         ],
         editorMetadata: {
@@ -56,7 +56,7 @@ function expectElement<T>(elements: readonly T[], index: number): T {
 }
 
 describe("parseShaderGraphDocument", () => {
-    it("loads a valid document and warns per unknown node type with the default catalog", () => {
+    it("loads a valid document against the core's built-in node catalog without warnings", () => {
         const result = parseShaderGraphDocument(baseJson);
         expect(result.ok).toBe(true);
         const document = expectParsed(result.value);
@@ -67,8 +67,17 @@ describe("parseShaderGraphDocument", () => {
         expect(document.nodes).toHaveLength(2);
         expect(document.connections).toHaveLength(1);
         expect(document.editorMetadata.nodes["node.constant"]?.position).toEqual({ x: 120, y: 80 });
-        // No node type catalog supplied: both node types degrade explicitly
-        // (warning) while remaining fully loadable.
+        // Default catalog: the core's own node definitions; both node types
+        // are known, so parsing produces no diagnostics at all.
+        expect(result.diagnostics).toEqual([]);
+    });
+
+    it("marks every node type explicitly unknown under an explicit empty catalog", () => {
+        const result = parseShaderGraphDocument(baseJson, { nodeTypeCatalog: {} });
+        expect(result.ok).toBe(true);
+        expect(result.value).not.toBeNull();
+        // Explicit empty catalog: every node type degrades (warning) while
+        // remaining fully loadable and preserved.
         expect(result.diagnostics).toEqual([
             expect.objectContaining({ code: DiagnosticCode.UnknownNodeType, severity: "warning", dataPath: "$.nodes[0].type" }),
             expect.objectContaining({ code: DiagnosticCode.UnknownNodeType, severity: "warning", dataPath: "$.nodes[1].type" }),
@@ -77,7 +86,7 @@ describe("parseShaderGraphDocument", () => {
 
     it("uses the caller-supplied node type catalog for type and version checks", () => {
         const nodeTypeCatalog = {
-            ConstantFloat: { minimumVersion: 1, maximumVersion: 1 },
+            Float: { minimumVersion: 1, maximumVersion: 1 },
             SurfaceOutput: { minimumVersion: 1, maximumVersion: 2 },
         };
         const result = parseShaderGraphDocument(baseJson, { nodeTypeCatalog });

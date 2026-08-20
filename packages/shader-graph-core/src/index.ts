@@ -20,5 +20,7 @@ export function getCorePackageName(): string {
 
 export * from "./diagnostics.js";
 export * from "./json-value.js";
+export * from "./graph-types.js";
+export * from "./node-definitions.js";
 export * from "./surface-profile-descriptor.js";
 export * from "./graph-document.js";
