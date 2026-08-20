@@ -1,0 +1,16 @@
+{
+  "name": "@gglab/editor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shader graph editor application shell and composition root.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@gglab/shader-graph-core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

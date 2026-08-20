@@ -2,6 +2,10 @@
 # Dependencies
 node_modules/
 
+# Local pnpm content-addressable store (fallback location when the
+# configured global store is not writable)
+.pnpm-store/
+
 # Logs
 *.log
 
@@ -14,12 +18,29 @@ coverage/
 *.lcov
 .nyc_output
 
+# Test runner artifacts
+test-results/
+playwright-report/
+
 # Build output
 dist/
+dist-ssr/
 build/Release
+
+# Vite
+.vite/
+*.timestamp-*
+*.local
 
 # TypeScript cache
 *.tsbuildinfo
+
+# Rust / Tauri build output
+target/
+
+# ESLint cache
+.eslint-cache
+.eslintcache
 
 # Framework build output and caches
 .cache
