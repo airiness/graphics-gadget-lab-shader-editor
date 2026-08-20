@@ -53,6 +53,14 @@ export const DiagnosticCode = {
     UnsupportedSchemaVersion: "UNSUPPORTED_SCHEMA_VERSION",
     UnsupportedDescriptorVersion: "UNSUPPORTED_DESCRIPTOR_VERSION",
     UnsupportedLanguage: "UNSUPPORTED_LANGUAGE",
+    UnknownPort: "UNKNOWN_PORT",
+    MissingRequiredInput: "MISSING_REQUIRED_INPUT",
+    TypeMismatch: "TYPE_MISMATCH",
+    DuplicateConnection: "DUPLICATE_CONNECTION",
+    InvalidConnection: "INVALID_CONNECTION",
+    CycleDetected: "CYCLE_DETECTED",
+    MissingOutput: "MISSING_OUTPUT",
+    UnknownProfileFeature: "UNKNOWN_PROFILE_FEATURE",
 } as const;
 
 export type DiagnosticCodeValue = (typeof DiagnosticCode)[keyof typeof DiagnosticCode];
