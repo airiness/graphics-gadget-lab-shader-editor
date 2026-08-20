@@ -42,8 +42,10 @@ The GGLab workspace consists of three repositories:
 
 - Main GGLab repository — C++ renderer, Shader Toolchain, authored
   `.shadergraph` documents, and the frozen surface profile descriptors.
-- GGLab docs repository — normative architecture documents.
-- This repository — editor tool implementation only.
+- GGLab docs repository — normative architecture documents for the main GGLab
+  project, plus workspace-wide agent documents.
+- This repository — editor tool implementation, and the normative home for the
+  shader editor's own design documents (under `docs/`).
 
 Rules:
 
@@ -53,8 +55,10 @@ Rules:
 - Authored `.shadergraph` documents and related material/test assets live with
   the consuming product/content authority — initially the main repository —
   not in this tool repository.
-- Design documents live in the docs repository. Reference them; do not copy
-  their content into this repository.
+- Shader editor design documents live in this repository (see "Design
+  authority") and are authored and revised here.
+- Main-project and workspace design documents live in the GGLab docs
+  repository. Reference them by path; do not copy them into this repository.
 - Shader production (compilation, target policy, artifact production) is owned
   by the main repository. This repository consumes its results through
   versioned process/artifact/profile boundaries, never through source-level
@@ -66,23 +70,30 @@ For architecture-sensitive work, read the relevant design documents before
 making changes. The repository state remains authoritative for what is
 currently implemented; the documents are authoritative for what is decided.
 
-Use these documents as task-specific references:
+Shader editor design documents live in this repository under `docs/` and are
+authored and revised here:
 
-- Authoring architecture (normative baseline):
-  - `GGLab_Shader_Graph_Editor_Architecture.md`
-- Frozen surface profile contract:
-  - `GGLab_Surface_Contract_Freeze_v1.md` (freeze decision record and evidence
-    rationale)
-  - Surface Profile Descriptor instance: main repository
-    `Shaders/Profiles/GGLab.Surface/1/descriptor.json` (authoritative
-    machine-readable contract)
-- Pipeline and toolchain authority (as needed):
+- `docs/GGLab_Shader_Graph_Editor_Architecture.md` (authoring architecture,
+  normative baseline)
+- `docs/GGLab_Surface_Contract_Freeze_v1.md` (freeze decision record and
+  evidence rationale for the `gglab.surface` v1 profile contract)
+
+The authoritative machine-readable contract for the frozen profile lives in
+the main repository:
+
+- `Shaders/Profiles/GGLab.Surface/1/descriptor.json` (Surface Profile
+  Descriptor instance)
+
+Documents owned by other repositories (referenced by path, not copied):
+
+- GGLab docs repository:
   - `GGLab_Shader_System_Architecture.md` (pipeline: `.shadergraph` →
     generated HLSL → `gglab-shaderc` → `ShaderArtifact`)
   - `GGLab_Shader_Toochain_Extraction.md` (preserve the current filename
     spelling; toolchain process/result contracts)
-- Terminology:
-  - `GGLab_Project_Terminology.md`
+  - `GGLab_Project_Terminology.md` (project-wide codename terminology)
+  - `GGLab_Agent_Bootstrap_Protocol.md` (workspace agent bootstrap, handoff
+    and review protocol)
 
 Read the architecture document before the freeze record, and the freeze record
 before the descriptor. The architecture document defines the long-term target;
