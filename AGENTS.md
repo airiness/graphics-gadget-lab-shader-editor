@@ -20,8 +20,10 @@ phase-specific gates belong in the design documents listed under
 This repository is the authoring tool repository of the GGLab workspace. It is
 a pnpm TypeScript monorepo:
 
-- `apps/editor/` (`@gglab/editor`) — editor application shell and composition
-  root.
+- `apps/editor/` (`@gglab/editor`) — GUI authoring frontend: editor
+  application shell and composition root.
+- `apps/cli/` (`@gglab/shader-graph-cli`) — machine/automation authoring
+  frontend for AI agents, CI, batch editing, and headless authoring.
 - `packages/shader-graph-core/` (`@gglab/shader-graph-core`) — headless
   ShaderGraph semantics: graph document model, type rules, validation, DAG
   compilation, deterministic HLSL generation, and source maps.
@@ -29,6 +31,13 @@ a pnpm TypeScript monorepo:
   editor.
 - `tests/` — cross-package and end-to-end tests.
 - `docs/` — repository-local documentation.
+
+The GUI (`apps/editor`) and the CLI (`apps/cli`) are two frontends over the
+single semantic authority, `packages/shader-graph-core`; neither frontend
+defines graph semantics. Structured CLI behavior (commands, discovery,
+diagnostics) is serialization of core-owned contracts; the CLI is a thin
+machine/automation frontend and must not bypass `gglab-shaderc`'s ownership
+of native shader production.
 
 Web technology owns the authoring experience. TypeScript owns ordinary
 ShaderGraph semantics. The C++ Shader Toolchain (`gglab-shaderc` /
@@ -222,7 +231,8 @@ Two distinct diagnostic layers, both structured (never an unstructured
   future work.
 - Each workspace package has one responsibility. Dependencies follow the
   ownership direction (`apps/editor` → `@gglab/editor-ui` /
-  `@gglab/shader-graph-core`), never the reverse.
+  `@gglab/shader-graph-core`, `apps/cli` → `@gglab/shader-graph-core`),
+  never the reverse.
 - Do not commit generated build products, caches, IDE state, or local package
   store directories. `.gitignore` is the boundary; extend it before handoff
   when a new artifact class appears.

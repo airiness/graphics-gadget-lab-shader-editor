@@ -24,6 +24,16 @@ importers:
         specifier: ^8.67.0
         version: 8.67.0(eslint@10.8.1)(typescript@6.0.3)
 
+  apps/cli:
+    dependencies:
+      '@gglab/shader-graph-core':
+        specifier: workspace:*
+        version: link:../../packages/shader-graph-core
+    devDependencies:
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   apps/editor:
     dependencies:
       '@gglab/shader-graph-core':
