@@ -39,10 +39,11 @@ diagnostics) is serialization of core-owned contracts; the CLI is a thin
 machine/automation frontend and must not bypass `gglab-shaderc`'s ownership
 of native shader production.
 
-Web technology owns the authoring experience. TypeScript owns ordinary
-ShaderGraph semantics. The C++ Shader Toolchain (`gglab-shaderc` /
-`ShaderToolchainCore`, living in the main GGLab repository) owns Shader
-production. `ShaderArtifact` remains the Runtime boundary. GGLab Runtime
+Web technology owns the GUI authoring experience. `shader-graph-core` owns
+ordinary ShaderGraph semantics. `apps/cli` provides the headless
+machine/automation authoring frontend. The C++ Shader Toolchain
+(`gglab-shaderc` / `ShaderToolchainCore`, living in the main GGLab
+repository) owns Shader production. `ShaderArtifact` remains the Runtime boundary. GGLab Runtime
 remains the native rendering truth.
 
 ## Cross-repository topology
@@ -84,8 +85,6 @@ authored and revised here:
 
 - `docs/GGLab_Shader_Graph_Editor_Architecture.md` (authoring architecture,
   normative baseline)
-- `docs/GGLab_Surface_Contract_Freeze_v1.md` (freeze decision record and
-  evidence rationale for the `gglab.surface` v1 profile contract)
 
 The authoritative machine-readable contract for the frozen profile lives in
 the main repository:
@@ -96,6 +95,8 @@ the main repository:
 Documents owned by other repositories (referenced by path, not copied):
 
 - GGLab docs repository:
+  - `GGLab_Surface_Contract_Freeze_v1.md` (freeze decision record and
+    evidence rationale for the `gglab.surface` v1 profile contract)
   - `GGLab_Shader_System_Architecture.md` (pipeline: `.shadergraph` →
     generated HLSL → `gglab-shaderc` → `ShaderArtifact`)
   - `GGLab_Shader_Toochain_Extraction.md` (preserve the current filename

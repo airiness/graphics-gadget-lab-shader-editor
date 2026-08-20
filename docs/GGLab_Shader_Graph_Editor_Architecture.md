@@ -1,10 +1,10 @@
 # GGLab Shader Graph Editor — Authoring Architecture
 
-> Status: Proposed Architecture v0.2  
-> Scope: Shader Graph authoring model, editor application architecture, graph-to-HLSL compilation, Shader Toolchain integration, diagnostics, preview, and the minimum GGLab Runtime integration seam  
+> Status: Proposed Architecture v0.3  
+> Scope: Shader Graph authoring model, first-class authoring frontends (GUI and CLI), editor application architecture, graph-to-HLSL compilation, Shader Toolchain integration, diagnostics, preview, and the minimum GGLab Runtime integration seam  
 > Authority relationship: Extends the authoring side of `GGLab_Shader_System_Architecture.md`; does not replace Shader Toolchain or Runtime architecture  
-> Primary target: Windows desktop development workflow for Graphics Gadget Lab  
-> Revision note: v0.2 folds the architecture-review amendment and subsequent review closure into this single normative proposal.
+> Primary target: Windows desktop development workflow for Graphics Gadget Lab, plus a headless CLI surface for the same workflow  
+> Revision note: v0.3 adds the first-class CLI authoring frontend (machine/automation authoring over the same headless core) as a normative product boundary. v0.2 folds the architecture-review amendment and subsequent review closure into this single normative proposal.
 
 ---
 
@@ -27,7 +27,7 @@ The goal is not merely to build a visually attractive node canvas. The design mu
 
 The core rule is:
 
-> **Web technology owns authoring experience. TypeScript owns ordinary ShaderGraph semantics. The existing C++ Shader Toolchain owns Shader production. ShaderArtifact remains the Runtime boundary. GGLab Runtime remains the native rendering truth.**
+> **Web technology owns the GUI authoring experience. ShaderGraphCore owns ordinary ShaderGraph semantics. The CLI provides the headless machine/automation authoring frontend. The existing C++ Shader Toolchain owns Shader production. ShaderArtifact remains the Runtime boundary. GGLab Runtime remains the native rendering truth.**
 
 This lets the editor evolve rapidly without creating a second Shader compiler, a second backend policy, a second material ABI, or a second renderer.
 
@@ -71,7 +71,7 @@ Vulkan binding ABI
 Shader artifact cache
 ```
 
-The same architecture requires preview and production to consume the same artifact ABI whenever practical. In this v0.2 proposal, `ShaderPreview Runtime` is a role, not a requirement to build a second renderer executable.
+The same architecture requires preview and production to consume the same artifact ABI whenever practical. In this v0.3 proposal, `ShaderPreview Runtime` is a role, not a requirement to build a second renderer executable.
 
 `GGLab_Shader_Toochain_Extraction.md` additionally establishes two relevant constraints:
 
@@ -97,6 +97,7 @@ The editor should eventually provide:
 - compiler diagnostics mapped back to ShaderGraph nodes;
 - native preview through the same GGLab Runtime contracts used by production;
 - a headless graph compiler usable from tests and future tooling;
+- a first-class CLI authoring frontend for AI agents, CI, automation, and batch tooling over the same headless core;
 - enough observability to trace graph → HLSL → native compile → artifact → preview/runtime.
 
 The architecture should also be friendly to coding-agent-assisted development: UI, graph behavior, tests, and authoring features should be easy to evolve without exposing compiler or RHI internals to the editor.
@@ -283,6 +284,8 @@ Because Gate 0 touches the main renderer/runtime repository, its implementation 
 |---|---|---|
 | Node canvas interaction | React Flow adapter/UI | Shader semantics |
 | Editor session state | Zustand/editor layer | persisted graph authority |
+| CLI command grammar / JSON transport / exit behavior | `apps/cli` CLI frontend | any ShaderGraph semantics |
+| Headless/automation authoring | `apps/cli` over `ShaderGraphCore` | node/type rules, validation, DAG rules, HLSL lowering, profile interpretation |
 | Graph schema | `ShaderGraphCore` | React Flow details |
 | Node/port semantics | `ShaderGraphCore` | DXC/RHI policy |
 | Type checking | `ShaderGraphCore` | backend target lowering |
@@ -385,6 +388,7 @@ The editor tool source should live in a separate repository, for example:
 ```text
 graphics-gadget-lab-shader-editor/
 ├─ apps/editor/
+├─ apps/cli/
 ├─ packages/shader-graph-core/
 ├─ packages/editor-ui/
 ├─ tests/
@@ -426,6 +430,122 @@ deterministic regeneration
 ```
 
 Generated HLSL should not be committed merely to make review convenient. If a future workflow commits it, regeneration must be one-way and mechanically verified; it must never become a second editable authority beside `.shadergraph`.
+
+## 8.1 Authoring frontends: GUI and CLI
+
+The tool provides two first-class authoring frontends over one semantic authority:
+
+```text
+                         ShaderGraphCore
+                        /                 \
+                       /                   \
+                      /                     \
+             GUI authoring frontend   CLI authoring frontend
+             apps/editor              apps/cli
+             Human                    AI / CI / automation
+                      \                     /
+                       \                   /
+                        \                 /
+                shared `.shadergraph` documents
+```
+
+Both frontends edit the same `.shadergraph` documents and receive all semantics
+from the same core. Ownership is fixed:
+
+- `ShaderGraphCore` is the only ShaderGraph semantic authority: node and port
+  semantics, type rules, validation, DAG rules, deterministic HLSL lowering,
+  and profile interpretation.
+- The GUI frontend (`apps/editor`) is a presentation/interaction frontend:
+  canvas, sessions, panels, and navigation over core-owned semantics.
+- The CLI frontend (`apps/cli`) is a headless machine/automation frontend for
+  AI agents, CI, automation, batch editing, and debugging/reproduction.
+
+The CLI frontend owns its own presentation-level behavior:
+
+```text
+command and argument grammar
+stdin/stdout handling
+structured JSON request/response transport
+stable exit behavior
+CLI process/session lifecycle
+```
+
+It must **not** own, and must not re-derive locally:
+
+```text
+node semantics or node registries
+port/type rules and type checking
+connection and graph validation
+DAG rules or lowering order
+HLSL lowering semantics
+Surface Profile interpretation
+```
+
+Every ordinary ShaderGraph semantic decision made through the CLI is a decision
+made by `ShaderGraphCore`. The CLI serializes core-owned results; it keeps no
+second metadata registry, no second error vocabulary, and no second semantic
+rule set.
+
+The split is one-way as well: command/argument grammar is an application
+concern of `apps/cli` and does **not** move into `ShaderGraphCore`. The core
+stays grammar-free; the CLI frontend is the only place command grammar exists.
+
+Both frontends should converge on the same kind of semantic editing operations
+(create node, connect ports, set property, create parameter, ...). A GUI
+gesture and a CLI request both become core-interpreted semantic operations, so
+an AI-authored edit and a human-authored edit carry identical semantics and
+identical validation.
+
+## 8.2 CLI design direction for AI/CI authoring
+
+This is architecture direction, not an implementation commitment. None of the
+capabilities listed below is frozen or implemented by this document.
+
+The CLI primarily serves AI agents, CI, automation, and batch tooling. Its
+target workflow is:
+
+```text
+discover   → query what exists: node families, node ports and types, profile facts
+edit       → express semantic changes as structured requests
+validate   → obtain core-owned structured diagnostics
+emit       → produce deterministic HLSL for the authored graph
+```
+
+An agent queries the system for node/profile information through the frontend
+instead of guessing port names, guessing types, or hand-editing arbitrary
+document JSON. Node semantics come from `ShaderGraphCore`; profile facts come
+from the Surface Profile Descriptor; the CLI only serializes both as
+machine-readable descriptions.
+
+Future command vocabulary under consideration, to be defined from the mature
+core API rather than pre-built:
+
+```text
+describe    machine-readable node/profile descriptions
+validate    structured graph diagnostics
+apply       transactional semantic edits, all-or-nothing
+emit        .shadergraph → generated HLSL
+dry-run     planned changes plus validation result, without writing
+```
+
+Every command result carries structured diagnostics with stable codes and
+graph-local node/port locations.
+
+Terminology boundary:
+
+- ShaderGraph → HLSL is called **emit** in this architecture.
+- HLSL → ShaderArtifact remains the exclusive domain of `gglab-shaderc`.
+- The CLI never replaces `gglab-shaderc`: it never reconstructs native compile
+  invocation, target policy, or backend arguments, and it never derives native
+  build readiness from executable existence.
+
+Machine-use rules for the CLI:
+
+- structured JSON in and structured JSON out; agents are never required to
+  parse console prose;
+- stable, documented exit behavior for success and failure classes;
+- no partial mutation: an invalid request produces structured diagnostics and
+  no partial document change.
 
 ---
 
@@ -535,7 +655,8 @@ graph-native diagnostics
 It should be consumable by:
 
 ```text
-Editor
+GUI editor frontend
+CLI authoring frontend (machine/automation)
 Vitest
 Node CLI / CI
 future batch tooling
@@ -1451,6 +1572,11 @@ Architecture/programmer invariants may still assert in development code, but use
 
 The slices below are sequencing guidance, not durable source identifiers.
 
+The CLI authoring frontend (§8.1/§8.2) rides on the same core milestones. Its
+command surface is derived from the mature `ShaderGraphCore` API and is not
+pre-built into the slices below; establishing the `apps/cli` package boundary
+does not change this sequence.
+
 ## Gate 0 — Surface Integration Probe
 
 Before editor Slice 1, implement the narrow GGLab-side probe defined in §5.
@@ -1677,12 +1803,15 @@ The main GGLab repository retains ownership of Shader Toolchain C++ tests, artif
 27. **Custom HLSL, if introduced, is a constrained escape hatch and cannot bypass the active Surface Profile Contract.**
 28. **Do not build a generic compiler framework for hypothetical future languages/backends.**
 29. **Do not move Shader Toolchain/RHI ownership into the editor for convenience.**
+30. **The GUI and the CLI are two first-class authoring frontends over the single `ShaderGraphCore` semantic authority; neither frontend defines graph semantics.**
+31. **Command/argument grammar, JSON transport, and exit behavior belong to the CLI frontend; they do not move into `ShaderGraphCore`.**
+32. **The CLI frontend never replaces `gglab-shaderc`: ShaderGraph → HLSL is emission; HLSL → ShaderArtifact stays with the Shader Toolchain.**
 
 ---
 
 # 35. Deferred decisions
 
-Deliberately not frozen by v0.2 until evidence requires them:
+Deliberately not frozen by v0.3 until evidence requires them:
 
 - exact package manager/workspace tooling;
 - exact `.shadergraph` field spelling beyond the architectural shape;
@@ -1707,7 +1836,10 @@ Deliberately not frozen by v0.2 until evidence requires them:
 - thin dedicated preview composition root until measured startup/iteration evidence justifies it;
 - embedded native preview;
 - broader cross-repository release orchestration;
-- whether source maps become packaged build artifacts.
+- whether source maps become packaged build artifacts;
+- CLI command grammar and the concrete command set (`describe`/`validate`/`apply`/`emit`/`dry-run`), derived from the mature core API;
+- CLI request/response JSON schema and its versioning;
+- the CLI frontend executable identity (working direction: a distinct name such as `gglab-shadergraph`, clearly separate from `gglab-shaderc`).
 
 If custom HLSL nodes are introduced later, they are a constrained **escape hatch**, not a shortcut around the typed graph/profile architecture. They must still emit within the active Surface Profile Contract and pass the same profile conformance boundary. They must not become an ordinary path for basic math/surface operations, declare backend-specific bindings or entry points, reconstruct DXC/RHI policy, or bypass Gate 0/profile compatibility.
 
@@ -1746,6 +1878,10 @@ Rejected because preview correctness should reuse GGLabRuntime first.
 ## 36.7 Embedded preview first
 
 Rejected because GPU interop/presentation complexity is unrelated to proving the authoring/compiler/artifact/runtime seam.
+
+## 36.8 CLI frontend with its own semantics
+
+Rejected. A CLI-side node registry, type rules, validation, DAG rules, HLSL lowering, or profile interpretation would create a second semantic authority. The CLI serializes `ShaderGraphCore` decisions; only command/argument grammar, JSON transport, and exit behavior are its own.
 
 ---
 
@@ -1915,11 +2051,12 @@ GGLabRuntime / Renderer / RenderGraph / RHI
 The most important decisions are:
 
 - React Flow is presentation, not persistence.
+- The GUI and the CLI are two first-class authoring frontends over the single `ShaderGraphCore` semantic authority; the CLI is a thin machine/automation frontend that owns only grammar, transport, and exit behavior.
 - TypeScript owns ordinary graph/node/type/DAG semantics.
 - Gate 0 proves both Runtime-driven input flow and output consumption before the surface ABI is frozen.
 - Gate 0 anchors the probe to the real Forward PBR material-evaluation site and records replayable named fixtures rather than relying on a constant-only or eyeball-only demonstration.
 - the Surface Profile Descriptor projects proven GGLab cross-boundary facts as serialized data without becoming a second graph-semantic authority or C++ dependency.
-- `gglab-shaderc` remains the editor-facing native Shader production entry point.
+- `gglab-shaderc` remains the editor-facing native Shader production entry point: ShaderGraph → HLSL is emission (`emit`), and the CLI never replaces `gglab-shaderc`.
 - tool/profile compatibility is machine-readable, selects within the requested profile line, and fails explicitly.
 - Shader Toolchain packaging is a deployment closure including required DXC/runtime dependencies.
 - parameter HLSL symbols derive from stable semantic identity rather than mutable display labels.
