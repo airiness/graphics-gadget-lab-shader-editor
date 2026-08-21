@@ -2,8 +2,8 @@
 # Dependencies
 node_modules/
 
-# Local pnpm content-addressable store (fallback location when the
-# configured global store is not writable)
+# Local pnpm content-addressed store (pinned in-repo via storeDir in
+# pnpm-workspace.yaml)
 .pnpm-store/
 
 # Logs
