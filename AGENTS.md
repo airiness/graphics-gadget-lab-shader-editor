@@ -87,16 +87,23 @@ authored and revised here:
   normative baseline)
 
 The authoritative machine-readable contract for the frozen profile lives in
-the main repository:
+the main repository. One instance per `profileVersion`; `descriptorVersion`
+is the independent serialization axis of the same file:
 
 - `Shaders/Profiles/GGLab.Surface/1/descriptor.json` (Surface Profile
-  Descriptor instance)
+  Descriptor instance — `descriptorVersion: 1`, `profileVersion: 1`)
+- `Shaders/Profiles/GGLab.Surface/2/descriptor.json` (Surface Profile
+  Descriptor instance — `descriptorVersion: 2`, `profileVersion: 2`; adds the
+  generated texture-signature contract to the sampling contract)
 
 Documents owned by other repositories (referenced by path, not copied):
 
 - GGLab docs repository:
   - `GGLab_Surface_Contract_Freeze_v1.md` (freeze decision record and
     evidence rationale for the `gglab.surface` v1 profile contract)
+  - `GGLab_Surface_Contract_Freeze_v2.md` (freeze decision record and
+    evidence rationale for the `gglab.surface` v2 profile line: the generated
+    texture-signature contract)
   - `GGLab_Shader_System_Architecture.md` (pipeline: `.shadergraph` →
     generated HLSL → `gglab-shaderc` → `ShaderArtifact`)
   - `GGLab_Shader_Toochain_Extraction.md` (preserve the current filename

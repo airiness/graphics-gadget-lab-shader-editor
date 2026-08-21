@@ -86,14 +86,15 @@ describe("parseSurfaceProfileDescriptor", () => {
             cardinality: "oneParameterPerTexture2DParameter",
             parameterType: "uint2",
             componentOrder: [
-                { position: 0, meaning: "texture binding index into the shared texture resource heap" },
-                { position: 1, meaning: "sampler binding index into the shared sampler heap" },
+                { position: 0, role: "textureBindingIndex", description: "index into the shared texture resource heap" },
+                { position: 1, role: "samplerBindingIndex", description: "index into the shared sampler heap" },
             ],
         });
         expect(sampling.generatedSampleForm).toEqual({
             resourceHeapBuiltin: "ResourceDescriptorHeap",
             resourceElementType: "Texture2D<float4>",
             samplerHeapBuiltin: "SamplerDescriptorHeap",
+            samplerElementType: "SamplerState",
             indexScope: "NonUniformResourceIndex",
             operation: "Sample",
             coordinateType: "float2",
@@ -189,37 +190,33 @@ describe("parseSurfaceProfileDescriptor", () => {
         );
     });
 
-    it("rejects a descriptorVersion 2 file that declares profileVersion 1", () => {
+    it("parses a descriptorVersion 2 file regardless of the profileVersion it declares", () => {
+        // The parser answers "can I understand this serialization?"; the
+        // version axes stay independent, so a v2 serialization declaring any
+        // profile version parses. Compatibility with a requested profile
+        // line is a capability question decided where the document and the
+        // descriptor meet (emission), not here.
         const result = parseVariant(
             (fixture) => {
                 fixture["profileVersion"] = 1;
             },
             canonicalV2Json,
         );
-        expect(result.ok).toBe(false);
-        expect(result.value).toBeNull();
-        expect(result.diagnostics).toEqual([
-            expect.objectContaining({
-                code: DiagnosticCode.ProfileMismatch,
-                severity: "error",
-                dataPath: "$.profileVersion",
-            }),
-        ]);
+        expect(result.ok).toBe(true);
+        expect(result.diagnostics).toEqual([]);
+        const descriptor = expectParsed(result.value);
+        expect(descriptor.profileVersion).toBe(1);
+        expect("generatedTextureSignature" in descriptor.samplingContract).toBe(true);
     });
 
-    it("rejects a descriptorVersion 1 file that declares profileVersion 2", () => {
+    it("parses a descriptorVersion 1 file regardless of the profileVersion it declares", () => {
         const result = parseVariant((fixture) => {
             fixture["profileVersion"] = 2;
         });
-        expect(result.ok).toBe(false);
-        expect(result.value).toBeNull();
-        expect(result.diagnostics).toEqual([
-            expect.objectContaining({
-                code: DiagnosticCode.ProfileMismatch,
-                severity: "error",
-                dataPath: "$.descriptorVersion",
-            }),
-        ]);
+        expect(result.ok).toBe(true);
+        expect(result.diagnostics).toEqual([]);
+        const descriptor = expectParsed(result.value);
+        expect("generatedTextureSignature" in descriptor.samplingContract).toBe(false);
     });
 
     it("rejects a descriptorVersion 2 file missing the texture-signature fields", () => {
@@ -258,7 +255,7 @@ describe("parseSurfaceProfileDescriptor", () => {
         );
     });
 
-    it("rejects a texture-signature component whose position is out of place", () => {
+    it("rejects a texture-signature component position outside the pair slots", () => {
         const result = parseVariant(
             (fixture) => {
                 const sampling = fixture["samplingContract"] as Record<string, unknown>;
@@ -270,6 +267,70 @@ describe("parseSurfaceProfileDescriptor", () => {
         expect(result.ok).toBe(false);
         expect(result.diagnostics).toContainEqual(
             expect.objectContaining({ code: DiagnosticCode.UnexpectedType, severity: "error", dataPath: "$.samplingContract.generatedTextureSignature.componentOrder[1].position" }),
+        );
+    });
+
+    it("rejects a texture-signature component role the reader does not support", () => {
+        const result = parseVariant(
+            (fixture) => {
+                const sampling = fixture["samplingContract"] as Record<string, unknown>;
+                const order = (sampling["generatedTextureSignature"] as Record<string, unknown>)["componentOrder"] as Record<string, unknown>[];
+                expectElement(order, 0)["role"] = "bindingIndex";
+            },
+            canonicalV2Json,
+        );
+        expect(result.ok).toBe(false);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({
+                code: DiagnosticCode.UnexpectedType,
+                severity: "error",
+                dataPath: "$.samplingContract.generatedTextureSignature.componentOrder[0].role",
+                message: 'Expected role "textureBindingIndex" or "samplerBindingIndex", got "bindingIndex".',
+            }),
+        );
+    });
+
+    it("rejects a componentOrder whose two components declare the same role", () => {
+        const result = parseVariant(
+            (fixture) => {
+                const sampling = fixture["samplingContract"] as Record<string, unknown>;
+                const order = (sampling["generatedTextureSignature"] as Record<string, unknown>)["componentOrder"] as Record<string, unknown>[];
+                expectElement(order, 1)["role"] = "textureBindingIndex";
+            },
+            canonicalV2Json,
+        );
+        expect(result.ok).toBe(false);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({ code: DiagnosticCode.UnexpectedType, severity: "error", dataPath: "$.samplingContract.generatedTextureSignature.componentOrder" }),
+        );
+    });
+
+    it("rejects a componentOrder whose two components declare the same slot position", () => {
+        const result = parseVariant(
+            (fixture) => {
+                const sampling = fixture["samplingContract"] as Record<string, unknown>;
+                const order = (sampling["generatedTextureSignature"] as Record<string, unknown>)["componentOrder"] as Record<string, unknown>[];
+                expectElement(order, 1)["position"] = 0;
+            },
+            canonicalV2Json,
+        );
+        expect(result.ok).toBe(false);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({ code: DiagnosticCode.UnexpectedType, severity: "error", dataPath: "$.samplingContract.generatedTextureSignature.componentOrder" }),
+        );
+    });
+
+    it("rejects a generated sample form without its sampler element type", () => {
+        const result = parseVariant(
+            (fixture) => {
+                const sampling = fixture["samplingContract"] as Record<string, unknown>;
+                delete (sampling["generatedSampleForm"] as Record<string, unknown>)["samplerElementType"];
+            },
+            canonicalV2Json,
+        );
+        expect(result.ok).toBe(false);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({ code: DiagnosticCode.MissingRequiredField, severity: "error", dataPath: "$.samplingContract.generatedSampleForm.samplerElementType" }),
         );
     });
 

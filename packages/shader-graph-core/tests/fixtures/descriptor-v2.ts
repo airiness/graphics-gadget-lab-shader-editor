@@ -66,14 +66,15 @@ export const canonicalV2Fixture: Record<string, unknown> = {
             cardinality: "oneParameterPerTexture2DParameter",
             parameterType: "uint2",
             componentOrder: [
-                { position: 0, meaning: "texture binding index into the shared texture resource heap" },
-                { position: 1, meaning: "sampler binding index into the shared sampler heap" },
+                { position: 0, role: "textureBindingIndex", description: "index into the shared texture resource heap" },
+                { position: 1, role: "samplerBindingIndex", description: "index into the shared sampler heap" },
             ],
         },
         generatedSampleForm: {
             resourceHeapBuiltin: "ResourceDescriptorHeap",
             resourceElementType: "Texture2D<float4>",
             samplerHeapBuiltin: "SamplerDescriptorHeap",
+            samplerElementType: "SamplerState",
             indexScope: "NonUniformResourceIndex",
             operation: "Sample",
             coordinateType: "float2",

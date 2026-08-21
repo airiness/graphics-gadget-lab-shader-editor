@@ -21,11 +21,16 @@
  *   a structured UNSUPPORTED_NODE_EMISSION diagnostic and the spelling is
  *   never invented. A descriptorVersion 2 file freezes the generated
  *   signature (one uint2 (texture binding index, sampler binding index)
- *   parameter per texture parameter) and the sample expression (the
- *   compiler-provided bindless heap builtins under NonUniformResourceIndex,
+ *   parameter per texture parameter, each slot's role naming what it
+ *   carries) and the sample expression (the compiler-provided bindless
+ *   heap builtins, the heap element types, NonUniformResourceIndex, and
  *   Sample over a float2 coordinate, yielding float4); emission lowers both
  *   kinds per that serialized contract and emits the sampling helper once,
- *   derived from the descriptor's fields rather than re-spelled here.
+ *   derived from the descriptor's fields — including which slot index each
+ *   heap reads — rather than re-spelled or re-invented here. Compatibility
+ *   with a profile line is judged on capability, never on version numbers:
+ *   a profile line whose semantics require the texture-signature contract
+ *   is refused against a descriptor that does not serialize it.
  * - Port-aware type resolution is not done here: the core's
  *   `resolveGraphTypes` service (graph-type-resolution.ts) is the single
  *   type authority, and emission only *consumes* its resolved
@@ -317,6 +322,25 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
         "generatedTextureSignature" in descriptor.samplingContract
             ? { signature: descriptor.samplingContract.generatedTextureSignature, form: descriptor.samplingContract.generatedSampleForm }
             : undefined;
+
+    // Profile contract compatibility is a capability question, not a
+    // version-number comparison: the gglab.surface v2 line includes the
+    // texture-sampling semantics, so its descriptor must serialize the
+    // generated texture-signature contract (the descriptorVersion 2
+    // addition). A descriptor that cannot express it is incompatible with
+    // that profile line whatever its serialization number is — and a
+    // future serialization that still expresses it keeps working. The
+    // version axes stay independent (AGENTS.md).
+    if (document.profile === "gglab.surface" && document.profileVersion >= 2 && textureContract === undefined) {
+        diagnostics.push(
+            errorAt(
+                "$",
+                DiagnosticCode.ProfileMismatch,
+                `Profile "gglab.surface" version ${document.profileVersion} requires the generated texture-signature contract, which this descriptor does not serialize.`,
+            ),
+        );
+        return fail(diagnostics);
+    }
 
     // Port-aware type resolution: the core's single type authority — it
     // owns the concrete input constraints, including the output node's
@@ -666,24 +690,40 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
     }
     // The generated sampling helper: emitted exactly once when the live
     // graph samples a texture, spelled entirely from the descriptor's
-    // generatedSampleForm — the descriptor is the single contract
-    // statement, and emission never re-invents the spelling.
+    // generatedSampleForm and generatedTextureSignature — the descriptor is
+    // the single contract statement, and emission never re-invents a
+    // spelling. Each heap index uses the slot declared for its role: the
+    // component role is the contract authority for what a slot carries, and
+    // its slot position decides the generated component accessor (no
+    // invisible x/y convention in emission).
     const textureSampled = statements.some((statement) => nodeById.get(statement.nodeId)?.type === "SampleTexture2D");
     const helperLines: EmittedLine[] = [];
     if (textureSampled && textureContract !== undefined) {
         const { signature, form } = textureContract;
-        helperLines.push(
-            { text: "" },
-            {
-                text: `${form.resultType} ${TEXTURE_SAMPLE_HELPER_NAME}(${signature.parameterType} textureSamplerBinding, ${form.coordinateType} uv0)`,
-                range: { role: "textureSampleHelperDeclaration", name: TEXTURE_SAMPLE_HELPER_NAME },
-            },
-            { text: "{" },
-            { text: `    ${form.resourceElementType} texture = ${form.resourceHeapBuiltin}[${form.indexScope}(textureSamplerBinding.x)];` },
-            { text: `    SamplerState sampler = ${form.samplerHeapBuiltin}[${form.indexScope}(textureSamplerBinding.y)];` },
-            { text: `    return texture.${form.operation}(sampler, uv0);` },
-            { text: "}" },
-        );
+        const componentAccessors = [".x", ".y", ".z", ".w"];
+        const accessorForRole = (role: string): string | undefined => {
+            const component = signature.componentOrder.find((candidate) => candidate.role === role);
+            return component === undefined ? undefined : componentAccessors[component.position];
+        };
+        const textureIndexAccessor = accessorForRole("textureBindingIndex");
+        const samplerIndexAccessor = accessorForRole("samplerBindingIndex");
+        // The reader guarantees a descriptorVersion 2 signature carries
+        // both roles over both slots; this guard keeps the guard
+        // structural in case a future shape changes that guarantee.
+        if (textureIndexAccessor !== undefined && samplerIndexAccessor !== undefined) {
+            helperLines.push(
+                { text: "" },
+                {
+                    text: `${form.resultType} ${TEXTURE_SAMPLE_HELPER_NAME}(${signature.parameterType} textureSamplerBinding, ${form.coordinateType} uv0)`,
+                    range: { role: "textureSampleHelperDeclaration", name: TEXTURE_SAMPLE_HELPER_NAME },
+                },
+                { text: "{" },
+                { text: `    ${form.resourceElementType} texture = ${form.resourceHeapBuiltin}[${form.indexScope}(textureSamplerBinding${textureIndexAccessor})];` },
+                { text: `    ${form.samplerElementType} sampler = ${form.samplerHeapBuiltin}[${form.indexScope}(textureSamplerBinding${samplerIndexAccessor})];` },
+                { text: `    return texture.${form.operation}(sampler, uv0);` },
+                { text: "}" },
+            );
+        }
     }
     const lines: EmittedLine[] = [
         { text: "// Generated by GGLab ShaderGraphCore. Do not edit; regenerate from the source .shadergraph document." },

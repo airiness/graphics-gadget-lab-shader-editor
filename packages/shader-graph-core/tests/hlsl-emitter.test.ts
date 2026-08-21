@@ -561,9 +561,10 @@ describe("emitHlsl", () => {
         expect(source).toContain("float v_n_r = gglab_sampleTexture2D_2;");
     });
 
-    it("refuses texture nodes under a descriptorVersion 2 descriptor's profileVersion mismatch", () => {
-        // Document on the v1 profile line against the v2 descriptor: the
-        // profile line must match, never be upgraded implicitly.
+    it("refuses a texture document on the wrong profile line against the v2 descriptor", () => {
+        // Document on the v1 profile line against the descriptor that serves
+        // the v2 line: the profile line must match, never be upgraded
+        // implicitly.
         const document = textureDocument();
         document["profileVersion"] = 1;
         const result = emitParsedAgainstV2(JSON.stringify(document));
@@ -573,6 +574,61 @@ describe("emitHlsl", () => {
             expect.objectContaining({ code: DiagnosticCode.ProfileMismatch, severity: "error", dataPath: "$" }),
         ]);
     });
+
+    it("refuses a profileVersion 2 document against a descriptor that does not serialize the required contract", () => {
+        // The descriptor declares the v2 profile line but serializes it with
+        // descriptorVersion 1, which cannot express the texture-signature
+        // contract the v2 line requires: incompatible on capability, not on
+        // version numbers (the axes stay independent).
+        const raw = JSON.parse(JSON.stringify(canonicalV1Fixture));
+        raw["profileVersion"] = 2;
+        const mismatched = parseSurfaceProfileDescriptor(JSON.stringify(raw));
+        expect(mismatched.ok).toBe(true); // parsing understands the serialization
+        if (mismatched.value === null) {
+            throw new Error("expected the descriptor to parse");
+        }
+        const document = textureDocument();
+        const result = emitParsedAgainst(document, mismatched.value);
+        expect(result.ok).toBe(false);
+        expect(result.source).toBe("");
+        expect(result.diagnostics).toEqual([
+            expect.objectContaining({
+                code: DiagnosticCode.ProfileMismatch,
+                severity: "error",
+                dataPath: "$",
+                message: expect.stringContaining("requires the generated texture-signature contract"),
+            }),
+        ]);
+    });
+
+    it("emits texture sampling for a profileVersion 1 document served by a v2-serialization descriptor", () => {
+        // Independent axes in one direction: the descriptor declares the
+        // v1 profile line (matching the document) while serializing its
+        // contract with descriptorVersion 2. Emission is contract-driven:
+        // the requested line does not demand the texture contract, nothing
+        // forbids it, and the descriptor supplies it — so it works.
+        const raw = JSON.parse(JSON.stringify(canonicalV2Fixture));
+        raw["profileVersion"] = 1;
+        const served = parseSurfaceProfileDescriptor(JSON.stringify(raw));
+        expect(served.ok).toBe(true);
+        if (served.value === null) {
+            throw new Error("expected the descriptor to parse");
+        }
+        const document = textureDocument();
+        document["profileVersion"] = 1;
+        const result = emitParsedAgainst(document, served.value);
+        expect(result.ok).toBe(true);
+        expect(result.source).toContain("float4 v_n_smp = gglab_sampleTexture2D(v_n_tp, v_n_uv);");
+        expect(result.source).toContain("SamplerState sampler = SamplerDescriptorHeap[NonUniformResourceIndex(textureSamplerBinding.y)];");
+    });
+
+    function emitParsedAgainst(document: Record<string, unknown>, descriptor: SurfaceProfileDescriptor): HlslEmission {
+        const parsed = parseShaderGraphDocument(JSON.stringify(document));
+        if (!parsed.ok || parsed.value === null) {
+            throw new Error(`expected a parseable document: ${JSON.stringify(parsed.diagnostics)}`);
+        }
+        return emitHlsl(parsed.value, descriptor);
+    }
 
     it("propagates validation failures without emitting", () => {
         const result = emitVariant((document) => {

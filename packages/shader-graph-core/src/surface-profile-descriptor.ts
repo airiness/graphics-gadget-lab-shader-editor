@@ -21,11 +21,16 @@
  *   must be rejected rather than half-consumed. The descriptor is a
  *   cross-boundary contract; a half-understood contract is a broken
  *   contract.
- * - The version axes stay independent (serialization vs profile semantics),
- *   but their combination is checked: descriptorVersion 2 is the
- *   serialization of the profileVersion 2 texture-signature contract, so a
- *   file mixing descriptorVersion 2 with profileVersion 1 (or the reverse)
- *   is a self-contradictory contract and is rejected explicitly.
+ * - The version axes stay independent (serialization vs profile semantics):
+ *   this reader answers only "can I understand this descriptorVersion's
+ *   serialization?". It does not couple the two version numbers. Whether a
+ *   parsed descriptor is a compatible authority for a given profile line is
+ *   a capability question decided where the document and the descriptor
+ *   meet (emission): a profile line that requires capability X is rejected
+ *   against a descriptor that does not serialize X — never against one
+ *   whose version number simply differs. A future serialization that still
+ *   expresses the texture-signature fields legitimately works for the same
+ *   profile line.
  */
 import type { ParseResult, ShaderGraphDiagnostic } from "./diagnostics.js";
 import { DiagnosticCode } from "./diagnostics.js";
@@ -119,9 +124,10 @@ export interface SamplingContract {
 
 /**
  * The profileVersion 2 addition: how a `Texture2DParameter` appears in the
- * generated signature. One `uint2` parameter per texture parameter whose
- * components are (texture binding index, sampler binding index), in that
- * order — the same pair representation the runtime binding layer uses.
+ * generated signature. One `uint2` parameter per texture parameter; each
+ * component declares its slot position and its machine-readable role —
+ * the roles are the contract authority for what each slot carries (the
+ * description is human-only prose, never semantics).
  */
 export interface GeneratedTextureSignature {
     readonly cardinality: "oneParameterPerTexture2DParameter";
@@ -129,22 +135,29 @@ export interface GeneratedTextureSignature {
     readonly componentOrder: readonly TextureSignatureComponent[];
 }
 
+/** What a generated texture parameter slot carries. */
+export type TextureComponentRole = "textureBindingIndex" | "samplerBindingIndex";
+
 /** One component of the generated texture parameter pair. */
 export interface TextureSignatureComponent {
     readonly position: 0 | 1;
-    readonly meaning: string;
+    readonly role: TextureComponentRole;
+    readonly description: string;
 }
 
 /**
  * The profileVersion 2 addition: the exact generated sampling expression —
- * the compiler-provided bindless heap builtins, the NonUniformResourceIndex
- * wrapping, and the Sample operation over a float2 coordinate yielding the
- * resource class' float4 type.
+ * the compiler-provided bindless heap builtins, the element types looked
+ * up from those heaps (the sampled texture and the SamplerState), the
+ * NonUniformResourceIndex wrapping, and the Sample operation over a float2
+ * coordinate yielding the resource class' float4 type. Every spelling the
+ * emitter needs from the expression comes from these fields.
  */
 export interface GeneratedSampleForm {
     readonly resourceHeapBuiltin: "ResourceDescriptorHeap";
     readonly resourceElementType: "Texture2D<float4>";
     readonly samplerHeapBuiltin: "SamplerDescriptorHeap";
+    readonly samplerElementType: "SamplerState";
     readonly indexScope: "NonUniformResourceIndex";
     readonly operation: "Sample";
     readonly coordinateType: "float2";
@@ -265,32 +278,6 @@ export function parseSurfaceProfileDescriptor(
         processContract === undefined ||
         deferred === undefined
     ) {
-        return { ok: false, value: null, diagnostics };
-    }
-
-    // The version axes stay independent, but their combination is checked:
-    // descriptorVersion 2 is the serialization of the profileVersion 2
-    // texture-signature contract. A file mixing the two is a
-    // self-contradictory contract, rejected explicitly (never reinterpreted).
-    if (version === 2 && profileVersion !== 2) {
-        diagnostics.push(
-            errorAt(
-                "$.profileVersion",
-                DiagnosticCode.ProfileMismatch,
-                `descriptorVersion 2 serializes the profileVersion 2 texture-signature contract; this file declares profileVersion ${profileVersion}.`,
-            ),
-        );
-    }
-    if (version === 1 && profileVersion !== 1) {
-        diagnostics.push(
-            errorAt(
-                "$.descriptorVersion",
-                DiagnosticCode.ProfileMismatch,
-                `profileVersion ${profileVersion} includes the generated texture-signature contract, which the descriptorVersion 1 serialization cannot express.`,
-            ),
-        );
-    }
-    if (diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
         return { ok: false, value: null, diagnostics };
     }
 
@@ -587,10 +574,19 @@ function parseGeneratedTextureSignature(raw: JsonRecord | undefined, path: strin
     }
     let componentOrder: readonly TextureSignatureComponent[] | undefined;
     if (componentOrderRaw !== undefined && componentOrderRaw.length === 2) {
-        const first = parseTextureSignatureComponent(componentOrderRaw[0], `${path}.componentOrder[0]`, 0, diagnostics);
-        const second = parseTextureSignatureComponent(componentOrderRaw[1], `${path}.componentOrder[1]`, 1, diagnostics);
+        const first = parseTextureSignatureComponent(componentOrderRaw[0], `${path}.componentOrder[0]`, diagnostics);
+        const second = parseTextureSignatureComponent(componentOrderRaw[1], `${path}.componentOrder[1]`, diagnostics);
         if (first !== undefined && second !== undefined) {
-            componentOrder = [first, second];
+            // The pair must cover both slots and both roles exactly once:
+            // the role is the machine-readable authority for what each
+            // slot carries, so the two components must not collide.
+            if (first.position === second.position) {
+                diagnostics.push(errorAt(`${path}.componentOrder`, DiagnosticCode.UnexpectedType, `Component positions must be distinct slots; both components declare position ${first.position}.`));
+            } else if (first.role === second.role) {
+                diagnostics.push(errorAt(`${path}.componentOrder`, DiagnosticCode.UnexpectedType, `Component roles must cover textureBindingIndex and samplerBindingIndex; both components declare role "${first.role}".`));
+            } else {
+                componentOrder = [first, second];
+            }
         }
     }
     rejectUnknownFields(raw, ["cardinality", "parameterType", "componentOrder"], path, diagnostics);
@@ -600,22 +596,31 @@ function parseGeneratedTextureSignature(raw: JsonRecord | undefined, path: strin
     return { cardinality, parameterType, componentOrder };
 }
 
-function parseTextureSignatureComponent(value: JsonValue | undefined, path: string, expectedPosition: 0 | 1, diagnostics: ShaderGraphDiagnostic[]): TextureSignatureComponent | undefined {
+function parseTextureSignatureComponent(value: JsonValue | undefined, path: string, diagnostics: ShaderGraphDiagnostic[]): TextureSignatureComponent | undefined {
     if (!isJsonRecord(value)) {
         diagnostics.push(errorAt(path, DiagnosticCode.UnexpectedType, `Expected a component object, got ${jsonKind(value)}.`));
         return undefined;
     }
-    const position = requireInteger(value, "position", path, diagnostics);
-    const meaning = requireString(value, "meaning", path, diagnostics);
-    if (position !== undefined && position !== expectedPosition) {
-        diagnostics.push(errorAt(`${path}.position`, DiagnosticCode.UnexpectedType, `Expected component position ${expectedPosition}, got ${position}.`));
+    const positionRaw = requireInteger(value, "position", path, diagnostics);
+    let position: 0 | 1 | undefined;
+    if (positionRaw === 0 || positionRaw === 1) {
+        position = positionRaw;
+    } else if (positionRaw !== undefined) {
+        diagnostics.push(errorAt(`${path}.position`, DiagnosticCode.UnexpectedType, `Expected a pair slot position of 0 or 1, got ${positionRaw}.`));
+    }
+    const roleRaw = requireString(value, "role", path, diagnostics);
+    let role: TextureComponentRole | undefined;
+    if (roleRaw === "textureBindingIndex" || roleRaw === "samplerBindingIndex") {
+        role = roleRaw;
+    } else if (roleRaw !== undefined) {
+        diagnostics.push(errorAt(`${path}.role`, DiagnosticCode.UnexpectedType, `Expected role "textureBindingIndex" or "samplerBindingIndex", got "${roleRaw}".`));
+    }
+    const description = requireString(value, "description", path, diagnostics);
+    rejectUnknownFields(value, ["position", "role", "description"], path, diagnostics);
+    if (position === undefined || role === undefined || description === undefined) {
         return undefined;
     }
-    rejectUnknownFields(value, ["position", "meaning"], path, diagnostics);
-    if (position === undefined || meaning === undefined) {
-        return undefined;
-    }
-    return { position: expectedPosition, meaning };
+    return { position, role, description };
 }
 
 function parseGeneratedSampleForm(raw: JsonRecord | undefined, path: string, diagnostics: ShaderGraphDiagnostic[]): GeneratedSampleForm | undefined {
@@ -625,20 +630,21 @@ function parseGeneratedSampleForm(raw: JsonRecord | undefined, path: string, dia
     const resourceHeapBuiltin = requireLiteral(raw, "resourceHeapBuiltin", path, "ResourceDescriptorHeap", diagnostics);
     const resourceElementType = requireLiteral(raw, "resourceElementType", path, "Texture2D<float4>", diagnostics);
     const samplerHeapBuiltin = requireLiteral(raw, "samplerHeapBuiltin", path, "SamplerDescriptorHeap", diagnostics);
+    const samplerElementType = requireLiteral(raw, "samplerElementType", path, "SamplerState", diagnostics);
     const indexScope = requireLiteral(raw, "indexScope", path, "NonUniformResourceIndex", diagnostics);
     const operation = requireLiteral(raw, "operation", path, "Sample", diagnostics);
     const coordinateType = requireLiteral(raw, "coordinateType", path, "float2", diagnostics);
     const resultType = requireLiteral(raw, "resultType", path, "float4", diagnostics);
     rejectUnknownFields(
         raw,
-        ["resourceHeapBuiltin", "resourceElementType", "samplerHeapBuiltin", "indexScope", "operation", "coordinateType", "resultType"],
+        ["resourceHeapBuiltin", "resourceElementType", "samplerHeapBuiltin", "samplerElementType", "indexScope", "operation", "coordinateType", "resultType"],
         path,
         diagnostics,
     );
-    if (resourceHeapBuiltin === undefined || resourceElementType === undefined || samplerHeapBuiltin === undefined || indexScope === undefined || operation === undefined || coordinateType === undefined || resultType === undefined) {
+    if (resourceHeapBuiltin === undefined || resourceElementType === undefined || samplerHeapBuiltin === undefined || samplerElementType === undefined || indexScope === undefined || operation === undefined || coordinateType === undefined || resultType === undefined) {
         return undefined;
     }
-    return { resourceHeapBuiltin, resourceElementType, samplerHeapBuiltin, indexScope, operation, coordinateType, resultType };
+    return { resourceHeapBuiltin, resourceElementType, samplerHeapBuiltin, samplerElementType, indexScope, operation, coordinateType, resultType };
 }
 
 function parseProcessContract(raw: JsonRecord | undefined, path: string, diagnostics: ShaderGraphDiagnostic[]): ProcessContract | undefined {
