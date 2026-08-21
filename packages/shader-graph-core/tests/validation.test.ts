@@ -253,8 +253,10 @@ describe("validateShaderGraph", () => {
     });
 
     it("rejects a profile version this core does not implement", () => {
+        // Versions 1 and 2 are implemented; 3 is the next unimplemented
+        // step, and stays a structured diagnostic either way.
         const report = validateVariant((document) => {
-            document["profileVersion"] = 2;
+            document["profileVersion"] = 3;
         });
         expect(report.ok).toBe(false);
         expect(report.diagnostics).toEqual([

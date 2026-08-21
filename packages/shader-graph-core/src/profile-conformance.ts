@@ -24,8 +24,11 @@
  * - Resource classes (a descriptor entry with a single `valueType`, for
  *   example Texture2D) report `resourceClass: true`: the pairing is checked
  *   exactly like any other, but the caller decides what the contract does
- *   with the resource (v1 defers the generated sampler spelling, so the
- *   emitter contributes no signature line and refuses the node's lowering).
+ *   with the resource. Emission's decision is descriptor-driven: under
+ *   descriptorVersion 1 the generated resource spelling is unfrozen, so the
+ *   emitter contributes no signature line and refuses the node's lowering;
+ *   under descriptorVersion 2 the generated texture signature is frozen, so
+ *   the emitter contributes it per the contract.
  *
  * Entries are in canonical (stable-id sorted) order, so diagnostic and
  * entry order never follows incidental `parameters[]` serialization order.
@@ -51,8 +54,9 @@ export interface ProfileConformanceEntry {
     /**
      * True when the descriptor declares this class as a resource class
      * (single `valueType`): the pairing is checked as usual, but consumers
-     * such as emission decide per contract what the resource contributes
-     * (v1 defers the generated resource spelling).
+     * such as emission decide per the descriptor's contract what the
+     * resource contributes to generated code (the spelling and signature
+     * are descriptorVersion-dependent).
      */
     readonly resourceClass: boolean;
 }
@@ -98,8 +102,10 @@ export function checkProfileConformance(document: ShaderGraphDocument, descripto
         if (classEntry.valueType !== undefined) {
             // Resource class (for example Texture2D): conformance still
             // applies — the authored type must be the class's declared
-            // resource type. What the contract does with the resource (v1:
-            // no signature line, node lowering refused) is the consumer's
+            // resource type. What the contract does with the resource
+            // (descriptorVersion 1: no signature line and the node's
+            // lowering refused; descriptorVersion 2: the generated
+            // signature per the frozen contract) is the consumer's
             // decision; this verdict only reports the pairing.
             if (classEntry.valueType !== parameter.valueType) {
                 diagnostics.push(

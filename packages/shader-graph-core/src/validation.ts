@@ -60,6 +60,10 @@ export interface ProfileKnowledge {
 /** The profiles this core's node definitions implement (architecture §12). */
 export const SUPPORTED_PROFILES: readonly ProfileKnowledge[] = [
     { profileId: "gglab.surface", profileVersion: 1, outputNodeType: "SurfaceOutput" },
+    // Version 2 adds the texture-sampling surface (Texture2DParameter /
+    // SampleTexture2D), which emission lowers per the descriptor's frozen
+    // generated texture-signature contract (descriptorVersion 2 files).
+    { profileId: "gglab.surface", profileVersion: 2, outputNodeType: "SurfaceOutput" },
 ];
 
 export interface ValidationReport {

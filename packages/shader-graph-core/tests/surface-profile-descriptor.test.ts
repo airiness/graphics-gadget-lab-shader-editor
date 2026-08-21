@@ -5,11 +5,13 @@ import {
 } from "../src/index.js";
 import type { ParseResult, SurfaceProfileDescriptor } from "../src/index.js";
 import { canonicalV1Fixture } from "./fixtures/descriptor-v1.js";
+import { canonicalV2Fixture } from "./fixtures/descriptor-v2.js";
 
 const canonicalV1Json = JSON.stringify(canonicalV1Fixture);
+const canonicalV2Json = JSON.stringify(canonicalV2Fixture);
 
-function parseVariant(mutate: (fixture: Record<string, unknown>) => void): ParseResult<SurfaceProfileDescriptor> {
-    const fixture: Record<string, unknown> = JSON.parse(canonicalV1Json);
+function parseVariant(mutate: (fixture: Record<string, unknown>) => void, canonicalJson: string = canonicalV1Json): ParseResult<SurfaceProfileDescriptor> {
+    const fixture: Record<string, unknown> = JSON.parse(canonicalJson);
     mutate(fixture);
     return parseSurfaceProfileDescriptor(JSON.stringify(fixture));
 }
@@ -68,10 +70,44 @@ describe("parseSurfaceProfileDescriptor", () => {
         expect(texture).toEqual({ class: "Texture2DParameter", valueType: "Texture2D" });
     });
 
-    it("rejects an out-of-range descriptor version before interpreting any field", () => {
-        const result = parseVariant((fixture) => {
-            fixture["descriptorVersion"] = 2;
+    it("parses a v2 descriptor with the texture-signature contract", () => {
+        const result = parseSurfaceProfileDescriptor(canonicalV2Json);
+        expect(result.ok).toBe(true);
+        expect(result.diagnostics).toEqual([]);
+        const descriptor = expectParsed(result.value);
+        expect(descriptor.descriptorVersion).toBe(2);
+        expect(descriptor.profileVersion).toBe(2);
+        const sampling = descriptor.samplingContract;
+        if (!("generatedTextureSignature" in sampling)) {
+            throw new Error("expected the v2 sampling contract shape");
+        }
+        expect(sampling.policy).toBe("reuseRuntimeTextureSamplerBinding");
+        expect(sampling.generatedTextureSignature).toEqual({
+            cardinality: "oneParameterPerTexture2DParameter",
+            parameterType: "uint2",
+            componentOrder: [
+                { position: 0, meaning: "texture binding index into the shared texture resource heap" },
+                { position: 1, meaning: "sampler binding index into the shared sampler heap" },
+            ],
         });
+        expect(sampling.generatedSampleForm).toEqual({
+            resourceHeapBuiltin: "ResourceDescriptorHeap",
+            resourceElementType: "Texture2D<float4>",
+            samplerHeapBuiltin: "SamplerDescriptorHeap",
+            indexScope: "NonUniformResourceIndex",
+            operation: "Sample",
+            coordinateType: "float2",
+            resultType: "float4",
+        });
+    });
+
+    it("rejects an out-of-range descriptor version before interpreting any field", () => {
+        const result = parseVariant(
+            (fixture) => {
+                fixture["descriptorVersion"] = 3;
+            },
+            canonicalV2Json,
+        );
         expect(result.ok).toBe(false);
         expect(result.value).toBeNull();
         expect(result.diagnostics).toEqual([
@@ -151,6 +187,134 @@ describe("parseSurfaceProfileDescriptor", () => {
                 dataPath: "$.samplingContract.samplerResolution.cardinality",
             }),
         );
+    });
+
+    it("rejects a descriptorVersion 2 file that declares profileVersion 1", () => {
+        const result = parseVariant(
+            (fixture) => {
+                fixture["profileVersion"] = 1;
+            },
+            canonicalV2Json,
+        );
+        expect(result.ok).toBe(false);
+        expect(result.value).toBeNull();
+        expect(result.diagnostics).toEqual([
+            expect.objectContaining({
+                code: DiagnosticCode.ProfileMismatch,
+                severity: "error",
+                dataPath: "$.profileVersion",
+            }),
+        ]);
+    });
+
+    it("rejects a descriptorVersion 1 file that declares profileVersion 2", () => {
+        const result = parseVariant((fixture) => {
+            fixture["profileVersion"] = 2;
+        });
+        expect(result.ok).toBe(false);
+        expect(result.value).toBeNull();
+        expect(result.diagnostics).toEqual([
+            expect.objectContaining({
+                code: DiagnosticCode.ProfileMismatch,
+                severity: "error",
+                dataPath: "$.descriptorVersion",
+            }),
+        ]);
+    });
+
+    it("rejects a descriptorVersion 2 file missing the texture-signature fields", () => {
+        const result = parseVariant(
+            (fixture) => {
+                const sampling = fixture["samplingContract"] as Record<string, unknown>;
+                delete sampling["generatedTextureSignature"];
+                delete sampling["generatedSampleForm"];
+            },
+            canonicalV2Json,
+        );
+        expect(result.ok).toBe(false);
+        expect(result.value).toBeNull();
+        expect(result.diagnostics).toEqual([
+            expect.objectContaining({ code: DiagnosticCode.MissingRequiredField, severity: "error", dataPath: "$.samplingContract.generatedTextureSignature" }),
+            expect.objectContaining({ code: DiagnosticCode.MissingRequiredField, severity: "error", dataPath: "$.samplingContract.generatedSampleForm" }),
+        ]);
+    });
+
+    it("rejects a generated sample-form literal the reader does not support", () => {
+        const result = parseVariant(
+            (fixture) => {
+                const sampling = fixture["samplingContract"] as Record<string, unknown>;
+                (sampling["generatedSampleForm"] as Record<string, unknown>)["resourceHeapBuiltin"] = "ResourceHeap";
+            },
+            canonicalV2Json,
+        );
+        expect(result.ok).toBe(false);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({
+                code: DiagnosticCode.UnexpectedType,
+                severity: "error",
+                dataPath: "$.samplingContract.generatedSampleForm.resourceHeapBuiltin",
+                message: 'Expected "ResourceDescriptorHeap", got "ResourceHeap".',
+            }),
+        );
+    });
+
+    it("rejects a texture-signature component whose position is out of place", () => {
+        const result = parseVariant(
+            (fixture) => {
+                const sampling = fixture["samplingContract"] as Record<string, unknown>;
+                const order = (sampling["generatedTextureSignature"] as Record<string, unknown>)["componentOrder"] as Record<string, unknown>[];
+                expectElement(order, 1)["position"] = 5;
+            },
+            canonicalV2Json,
+        );
+        expect(result.ok).toBe(false);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({ code: DiagnosticCode.UnexpectedType, severity: "error", dataPath: "$.samplingContract.generatedTextureSignature.componentOrder[1].position" }),
+        );
+    });
+
+    it("rejects a texture-signature componentOrder that is not exactly two components", () => {
+        const result = parseVariant(
+            (fixture) => {
+                const sampling = fixture["samplingContract"] as Record<string, unknown>;
+                (sampling["generatedTextureSignature"] as Record<string, unknown>)["componentOrder"] = [{ position: 0, meaning: "texture binding index" }];
+            },
+            canonicalV2Json,
+        );
+        expect(result.ok).toBe(false);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({ code: DiagnosticCode.UnexpectedType, severity: "error", dataPath: "$.samplingContract.generatedTextureSignature.componentOrder" }),
+        );
+    });
+
+    it("rejects unknown fields inside the generated texture-signature objects", () => {
+        const result = parseVariant(
+            (fixture) => {
+                const sampling = fixture["samplingContract"] as Record<string, unknown>;
+                (sampling["generatedSampleForm"] as Record<string, unknown>)["experimental"] = true;
+            },
+            canonicalV2Json,
+        );
+        expect(result.ok).toBe(false);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({ code: DiagnosticCode.UnexpectedField, severity: "error", dataPath: "$.samplingContract.generatedSampleForm.experimental" }),
+        );
+    });
+
+    it("rejects the texture-signature fields on a descriptorVersion 1 file as unknown fields", () => {
+        const result = parseVariant((fixture) => {
+            const sampling = fixture["samplingContract"] as Record<string, unknown>;
+            sampling["generatedTextureSignature"] = {
+                cardinality: "oneParameterPerTexture2DParameter",
+                parameterType: "uint2",
+                componentOrder: [{ position: 0, meaning: "texture binding index" }, { position: 1, meaning: "sampler binding index" }],
+            };
+        });
+        expect(result.ok).toBe(false);
+        expect(result.value).toBeNull();
+        expect(result.diagnostics).toEqual([
+            expect.objectContaining({ code: DiagnosticCode.UnexpectedField, severity: "error", dataPath: "$.samplingContract.generatedTextureSignature" }),
+        ]);
     });
 
     it("rejects a parameter class that declares neither valueType nor valueTypes", () => {

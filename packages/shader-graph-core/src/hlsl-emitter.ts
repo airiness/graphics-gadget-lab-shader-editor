@@ -11,18 +11,21 @@
  * list order, and the `graphParameters then graphVisibleInputs` parameter
  * ordering — never any runtime struct shape such as `MaterialData`.
  *
- * V1 scope and deferred contract points (recorded so they cannot be read
- * as accidental):
+ * Scope and contract-driven texture sampling (recorded so they cannot be
+ * read as accidental):
  * - The full numeric surface is emitted: float constants, scalar/vector
  *   graph parameters, math nodes, UV0, and the SurfaceOutput assembly.
- * - Texture sampling is refused with a structured UNSUPPORTED_NODE_EMISSION
- *   diagnostic for `Texture2DParameter`/`SampleTexture2D`. The frozen v1
- *   contract captures the sampling policy structurally
- *   (reuseRuntimeTextureSamplerBinding; one sampler per Texture2D binding,
- *   resolved by the material binding layer; sampler authoring deferred) but
- *   does not specify the generated-code spelling of the sampler input. That
- *   spelling is a cross-repository contract decision, not an implementation
- *   detail, and is not invented here.
+ * - Texture sampling is governed entirely by the descriptor's sampling
+ *   contract. A descriptorVersion 1 file serializes no generated texture
+ *   signature, so `Texture2DParameter`/`SampleTexture2D` are refused with
+ *   a structured UNSUPPORTED_NODE_EMISSION diagnostic and the spelling is
+ *   never invented. A descriptorVersion 2 file freezes the generated
+ *   signature (one uint2 (texture binding index, sampler binding index)
+ *   parameter per texture parameter) and the sample expression (the
+ *   compiler-provided bindless heap builtins under NonUniformResourceIndex,
+ *   Sample over a float2 coordinate, yielding float4); emission lowers both
+ *   kinds per that serialized contract and emits the sampling helper once,
+ *   derived from the descriptor's fields rather than re-spelled here.
  * - Port-aware type resolution is not done here: the core's
  *   `resolveGraphTypes` service (graph-type-resolution.ts) is the single
  *   type authority, and emission only *consumes* its resolved
@@ -38,11 +41,13 @@
  *   authoring surface — one implementation, two domains.
  * - The value model is per node (one value statement per lowered node).
  *   Any live node whose definition declares more than one output port is
- *   refused with an explicit UNSUPPORTED_NODE_EMISSION diagnostic rather than
- *   silently lowered through the single-value path; multi-output lowering
- *   (one shared physical statement feeding several ports, for example
- *   SampleTexture2D's single sample feeding RGBA/RGB/R/G/B/A) arrives with
- *   the texture-sampling contract, after the descriptor freeze.
+ *   refused with an explicit UNSUPPORTED_NODE_EMISSION diagnostic rather
+ *   than silently lowered through the single-value path — except the
+ *   texture sampler under a descriptorVersion 2 contract: one shared
+ *   physical float4 statement per SampleTexture2D feeds RGBA/RGB/R/G/B/A
+ *   through channel access at every consuming input, and that channel
+ *   decomposition is core node semantics (the descriptor never defines
+ *   channel outputs).
  * - Graph parameter types are authored, not inferred: every parameter entry
  *   declares a concrete `valueType` (core value vocabulary, enforced at
  *   parse time). The (class, valueType) pairing is checked by the shared
@@ -55,9 +60,11 @@
  *   profile's class does not permit is a structured
  *   UNSUPPORTED_PARAMETER_TYPE error; neither is ever substituted or
  *   re-derived from how the parameter is used. Emission consumes the
- *   verdicts and adds one v1 contract decision: resource classes (texture
- *   bindings) contribute no signature line while the generated resource
- *   spelling stays unfrozen.
+ *   verdicts and adds the contract decision: resource classes (texture
+ *   bindings) contribute no signature line under descriptorVersion 1 (the
+ *   generated resource spelling is unfrozen there), and one generated
+ *   signature parameter per the frozen `generatedTextureSignature` under
+ *   descriptorVersion 2.
  * - Binary math operations follow the documented conservative result rule
  *   (§11.2), applied by the type resolution service: identical vectors
  *   keep the type, a scalar widens to the vector operand, and distinct
@@ -106,6 +113,7 @@ export type ShaderGraphSourceMapRole =
     | "generatedFunctionDeclaration"
     | "graphParameterDeclaration"
     | "graphVisibleInputDeclaration"
+    | "textureSampleHelperDeclaration"
     | "nodeValueStatement"
     | "requiredOutputAssignment";
 
@@ -156,6 +164,29 @@ function fail(diagnostics: readonly ShaderGraphDiagnostic[]): HlslEmission {
     return { ok: false, diagnostics, source: "", sourceMap: null };
 }
 
+/**
+ * The core-generated name of the texture sampling helper (emitted once when
+ * the live graph samples a texture). It shares the `gglab_` signature
+ * namespace, so a parameter id that sanitizes to the same base collides
+ * into `..._2` through the ordinary claim rule (the base is pre-reserved).
+ */
+const TEXTURE_SAMPLE_HELPER_IDENTIFIER = "sampleTexture2D";
+const TEXTURE_SAMPLE_HELPER_NAME = `gglab_${TEXTURE_SAMPLE_HELPER_IDENTIFIER}`;
+
+/**
+ * Channel decomposition of the SampleTexture2D float4 sample. This is
+ * ShaderGraphCore node semantics (which HLSL component access each channel
+ * port stands for); the descriptor never defines channel outputs.
+ */
+const SAMPLE_CHANNEL_ACCESS: Readonly<Record<string, string>> = {
+    RGBA: "",
+    RGB: ".rgb",
+    R: ".r",
+    G: ".g",
+    B: ".b",
+    A: ".a",
+};
+
 function sanitizeIdentifier(id: string): string {
     let out = "";
     for (const ch of id) {
@@ -176,9 +207,12 @@ function sanitizeIdentifier(id: string): string {
  * later colliding ids take base_2, base_3, ... — deterministic for any
  * input multiset, independent of document order.
  */
-function buildSymbols(ids: readonly string[], prefix: string): Map<string, string> {
+function buildSymbols(ids: readonly string[], prefix: string, reservedBases: readonly string[] = []): Map<string, string> {
     const uniqueSorted = [...new Set(ids)].sort();
     const claimCount = new Map<string, number>();
+    for (const reserved of new Set(reservedBases)) {
+        claimCount.set(reserved, (claimCount.get(reserved) ?? 0) + 1);
+    }
     const symbols = new Map<string, string>();
     for (const id of uniqueSorted) {
         const base = prefix + sanitizeIdentifier(id);
@@ -273,6 +307,17 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
     }
     const conformanceById = new Map(conformance.parameters.map((entry) => [entry.parameterId, entry]));
 
+    // The generated texture-signature contract, when this descriptor
+    // serializes one (descriptorVersion 2). descriptorVersion 1 files
+    // express no generated spelling, so emission keeps the frozen v1
+    // refusal instead of inventing a spelling; the fields consumed here are
+    // descriptor-owned literals (validated by the reader), not re-spelled
+    // contract text.
+    const textureContract =
+        "generatedTextureSignature" in descriptor.samplingContract
+            ? { signature: descriptor.samplingContract.generatedTextureSignature, form: descriptor.samplingContract.generatedSampleForm }
+            : undefined;
+
     // Port-aware type resolution: the core's single type authority — it
     // owns the concrete input constraints, including the output node's
     // required outputs, so emission no longer carries its own half of the
@@ -288,20 +333,28 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
 
     // Symbol namespaces: the contract parameter space (graph parameters and
     // graph-visible inputs share one namespace) and node values.
-    const signatureSymbols = buildSymbols([...document.parameters.map((parameter) => parameter.id), ...descriptor.graphVisibleInputs.map((input) => input.id)], "gglab_");
+    const signatureSymbols = buildSymbols(
+        [...document.parameters.map((parameter) => parameter.id), ...descriptor.graphVisibleInputs.map((input) => input.id)],
+        "gglab_",
+        [TEXTURE_SAMPLE_HELPER_NAME],
+    );
     const valueSymbols = buildSymbols(liveIds, "v_");
 
-    // Input resolution: the single connection feeding (node, port).
-    const inputSourceOf = (node: GraphNode, portId: string): GraphNode | undefined => {
+    // Input resolution: the single connection feeding (node, port), and the
+    // value expression it carries. The expression is the source node's value
+    // symbol plus, for multi-output sources, the channel access of the
+    // consumed port (SampleTexture2D's one float4 sample decomposes per
+    // channel — core node semantics; the descriptor never defines channel
+    // outputs).
+    const inputAccess = (node: GraphNode, portId: string): { readonly expression: string; readonly nodeId: string | undefined; readonly nodePortId: string | undefined } => {
         const connection = connections.find((candidate) => candidate.to.nodeId === node.id && candidate.to.portId === portId);
-        return connection === undefined ? undefined : nodeById.get(connection.from.nodeId);
-    };
-
-    const symbolOf = (nodeId: string | undefined): string => {
-        if (nodeId === undefined) {
-            return "?";
+        if (connection === undefined) {
+            return { expression: "?", nodeId: undefined, nodePortId: undefined };
         }
-        return valueSymbols.get(nodeId) ?? "?";
+        const base = valueSymbols.get(connection.from.nodeId) ?? "?";
+        const source = nodeById.get(connection.from.nodeId);
+        const channel = source?.type === "SampleTexture2D" ? (SAMPLE_CHANNEL_ACCESS[connection.from.portId] ?? "") : "";
+        return { expression: `${base}${channel}`, nodeId: connection.from.nodeId, nodePortId: connection.from.portId };
     };
 
     const lowerNode = (node: GraphNode): string | undefined => {
@@ -382,43 +435,44 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
                     );
                     return undefined;
                 }
-                const aSource = inputSourceOf(node, "a");
-                const bSource = inputSourceOf(node, "b");
-                const tSource = inputSourceOf(node, "t");
+                const aInput = inputAccess(node, "a");
+                const bInput = inputAccess(node, "b");
+                const tInput = inputAccess(node, "t");
+                const vInput = inputAccess(node, "value");
                 let expression: string;
                 switch (node.type) {
                     case "Add":
-                        expression = `${symbolOf(aSource?.id)} + ${symbolOf(bSource?.id)}`;
+                        expression = `${aInput.expression} + ${bInput.expression}`;
                         break;
                     case "Subtract":
-                        expression = `${symbolOf(aSource?.id)} - ${symbolOf(bSource?.id)}`;
+                        expression = `${aInput.expression} - ${bInput.expression}`;
                         break;
                     case "Multiply":
-                        expression = `${symbolOf(aSource?.id)} * ${symbolOf(bSource?.id)}`;
+                        expression = `${aInput.expression} * ${bInput.expression}`;
                         break;
                     case "Divide":
-                        expression = `${symbolOf(aSource?.id)} / ${symbolOf(bSource?.id)}`;
+                        expression = `${aInput.expression} / ${bInput.expression}`;
                         break;
                     case "Min":
-                        expression = `min(${symbolOf(aSource?.id)}, ${symbolOf(bSource?.id)})`;
+                        expression = `min(${aInput.expression}, ${bInput.expression})`;
                         break;
                     case "Max":
-                        expression = `max(${symbolOf(aSource?.id)}, ${symbolOf(bSource?.id)})`;
+                        expression = `max(${aInput.expression}, ${bInput.expression})`;
                         break;
                     case "Lerp":
-                        expression = `lerp(${symbolOf(aSource?.id)}, ${symbolOf(bSource?.id)}, ${symbolOf(tSource?.id)})`;
+                        expression = `lerp(${aInput.expression}, ${bInput.expression}, ${tInput.expression})`;
                         break;
                     case "Saturate":
-                        expression = `saturate(${symbolOf(tSourceInput(node))})`;
+                        expression = `saturate(${vInput.expression})`;
                         break;
                     case "OneMinus":
-                        expression = `1.0 - ${symbolOf(tSourceInput(node))}`;
+                        expression = `1.0 - ${vInput.expression}`;
                         break;
                     case "Dot":
-                        expression = `dot(${symbolOf(aSource?.id)}, ${symbolOf(bSource?.id)})`;
+                        expression = `dot(${aInput.expression}, ${bInput.expression})`;
                         break;
                     case "Normalize":
-                        expression = `normalize(${symbolOf(tSourceInput(node))})`;
+                        expression = `normalize(${vInput.expression})`;
                         break;
                     default:
                         expression = "?";
@@ -426,17 +480,41 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
                 }
                 return `${outType} ${temp} = ${expression};`;
             }
+            case "Texture2DParameter": {
+                // descriptorVersion 2 lowers the texture parameter with the
+                // frozen generated signature (the uint2 binding pair); the
+                // gate below the statement loop already refused this kind on
+                // descriptorVersion 1 descriptors.
+                const contract = textureContract;
+                const referenceId = node.properties["parameterId"];
+                const signatureSymbol = typeof referenceId === "string" ? (signatureSymbols.get(referenceId) ?? undefined) : undefined;
+                if (contract === undefined || signatureSymbol === undefined) {
+                    diagnostics.push(
+                        errorAt(path, DiagnosticCode.UnresolvedParameterReference, `Node "${node.id}" (${node.type}) cannot be lowered: its graph parameter has no resolved signature symbol.`),
+                    );
+                    return undefined;
+                }
+                return `${contract.signature.parameterType} ${temp} = ${signatureSymbol};`;
+            }
+            case "SampleTexture2D": {
+                // descriptorVersion 2: one shared float4 statement via the
+                // generated sampling helper; channel ports decompose at the
+                // consuming inputs (SAMPLE_CHANNEL_ACCESS).
+                const contract = textureContract;
+                const textureInput = inputAccess(node, "texture");
+                const uvInput = inputAccess(node, "uv");
+                if (contract === undefined || textureInput.nodeId === undefined || uvInput.nodeId === undefined) {
+                    diagnostics.push(
+                        errorAt(path, DiagnosticCode.TypeMismatch, `Node "${node.id}" (${node.type}) requires a resolved texture binding (Texture2D) and a float2 coordinate; one or both could not be resolved.`),
+                    );
+                    return undefined;
+                }
+                return `${contract.form.resultType} ${temp} = ${TEXTURE_SAMPLE_HELPER_NAME}(${textureInput.expression}, ${uvInput.expression});`;
+            }
             default:
                 return undefined; // impossible here: diagnosed before lowering
         }
     };
-
-    // Unary ops take their operand from "value" (declared here to keep the
-    // switch above flat).
-    function tSourceInput(node: GraphNode): string | undefined {
-        const input = inputSourceOf(node, "value");
-        return input?.id;
-    }
 
     const statements: { readonly text: string; readonly nodeId: string; readonly portId: string }[] = [];
     for (const nodeId of liveIds) {
@@ -467,21 +545,27 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
             );
             continue;
         }
-        // Texture sampling: the v1 contract gap (generation-side sampler
-        // spelling) is the operative refusal reason for these node kinds.
-        if (node.type === "Texture2DParameter" || node.type === "SampleTexture2D") {
+        // Texture sampling is contract-driven: descriptorVersion 1 files
+        // serialize no generated texture signature, so these node kinds are
+        // refused (structured; the spelling is a cross-repository contract
+        // decision, never invented). descriptorVersion 2 files freeze the
+        // signature and sample form, and the kinds lower per that contract.
+        if ((node.type === "Texture2DParameter" || node.type === "SampleTexture2D") && textureContract === undefined) {
             diagnostics.push(
                 errorAt(
                     nodePath(nodeId),
                     DiagnosticCode.UnsupportedNodeEmission,
-                    `Node "${nodeId}" (${node.type}) requires the texture-sampling signature spelling, which the frozen v1 contract does not specify (samplerAuthoring is deferred and sampler resolution is owned by the material binding layer).`,
+                    `Node "${nodeId}" (${node.type}) requires the texture-sampling signature spelling, which this descriptor does not serialize (the profile's sampling contract defers the generated spelling).`,
                 ),
             );
             continue;
         }
-        // The value model is per node; any other multi-output node needs
-        // the per-(nodeId, portId) model and is refused explicitly.
-        if (definition.outputs.length > 1) {
+        // The value model is per node; the texture sampler's six channel
+        // ports are the sanctioned multi-output case (one shared float4
+        // statement, decomposed per channel at the consumers). Any OTHER
+        // multi-output node needs the per-(nodeId, portId) model and is
+        // refused explicitly.
+        if (definition.outputs.length > 1 && node.type !== "SampleTexture2D") {
             diagnostics.push(
                 errorAt(
                     nodePath(nodeId),
@@ -495,7 +579,9 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
         if (text === undefined) {
             continue; // diagnosed
         }
-        statements.push({ text, nodeId, portId: "value" });
+        // The texture sampler's physical value is its RGBA (float4) port;
+        // channel ports decompose from it at the consuming inputs.
+        statements.push({ text, nodeId, portId: node.type === "SampleTexture2D" ? "RGBA" : "value" });
     }
 
     // The single output root assembles the descriptor's required outputs in
@@ -518,11 +604,21 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
             if (resolved.typeAt(connection.from.nodeId, connection.from.portId) === undefined) {
                 continue;
             }
-            const sourceSymbol = valueSymbols.get(connection.from.nodeId);
-            if (sourceSymbol === undefined) {
+            const source = nodeById.get(connection.from.nodeId);
+            const base = valueSymbols.get(connection.from.nodeId);
+            if (base === undefined || source === undefined) {
                 continue;
             }
-            assignments.push({ text: `    surface.${requiredOutput.name} = ${sourceSymbol};`, nodeId: connection.from.nodeId, portId: "value", name: requiredOutput.name });
+            // Channel decomposition at the consumer (the sampler's one float4
+            // statement feeds each channel port through its component
+            // access).
+            const channel = source.type === "SampleTexture2D" ? (SAMPLE_CHANNEL_ACCESS[connection.from.portId] ?? "") : "";
+            assignments.push({
+                text: `    surface.${requiredOutput.name} = ${base}${channel};`,
+                nodeId: connection.from.nodeId,
+                portId: connection.from.portId,
+                name: requiredOutput.name,
+            });
         }
     }
 
@@ -535,14 +631,20 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
     const functionName = descriptor.generatedFunction.name;
     const signatureEntries: { readonly text: string; readonly range: Omit<ShaderGraphSourceMapRange, "startLine" | "startColumn" | "endLine" | "endColumn"> }[] = [];
     for (const parameter of canonicalParameters) {
-        // The verdict comes from the shared conformance service; v1 adds
-        // one contract decision: resource classes contribute no signature
-        // line while the generated resource spelling stays unfrozen.
+        // The verdict comes from the shared conformance service; the
+        // contract decides what a resource class contributes: no line under
+        // descriptorVersion 1 (the generated resource spelling is unfrozen
+        // there and the node refuses to lower), or the frozen generated
+        // signature under descriptorVersion 2.
         const verdict = conformanceById.get(parameter.id);
-        if (verdict === undefined || verdict.resourceClass) {
+        if (verdict === undefined) {
             continue;
         }
-        signatureEntries.push({ text: `    ${verdict.valueType} ${signatureSymbols.get(parameter.id) ?? "?"}`, range: { role: "graphParameterDeclaration", parameterId: parameter.id } });
+        const parameterType = verdict.resourceClass ? textureContract?.signature.parameterType : verdict.valueType;
+        if (parameterType === undefined) {
+            continue;
+        }
+        signatureEntries.push({ text: `    ${parameterType} ${signatureSymbols.get(parameter.id) ?? "?"}`, range: { role: "graphParameterDeclaration", parameterId: parameter.id } });
     }
     descriptor.graphVisibleInputs.forEach((input) => {
         signatureEntries.push({
@@ -562,6 +664,27 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
         /** Present when the line stands for a navigable graph/profile identity. */
         readonly range?: Omit<ShaderGraphSourceMapRange, "startLine" | "startColumn" | "endLine" | "endColumn">;
     }
+    // The generated sampling helper: emitted exactly once when the live
+    // graph samples a texture, spelled entirely from the descriptor's
+    // generatedSampleForm — the descriptor is the single contract
+    // statement, and emission never re-invents the spelling.
+    const textureSampled = statements.some((statement) => nodeById.get(statement.nodeId)?.type === "SampleTexture2D");
+    const helperLines: EmittedLine[] = [];
+    if (textureSampled && textureContract !== undefined) {
+        const { signature, form } = textureContract;
+        helperLines.push(
+            { text: "" },
+            {
+                text: `${form.resultType} ${TEXTURE_SAMPLE_HELPER_NAME}(${signature.parameterType} textureSamplerBinding, ${form.coordinateType} uv0)`,
+                range: { role: "textureSampleHelperDeclaration", name: TEXTURE_SAMPLE_HELPER_NAME },
+            },
+            { text: "{" },
+            { text: `    ${form.resourceElementType} texture = ${form.resourceHeapBuiltin}[${form.indexScope}(textureSamplerBinding.x)];` },
+            { text: `    SamplerState sampler = ${form.samplerHeapBuiltin}[${form.indexScope}(textureSamplerBinding.y)];` },
+            { text: `    return texture.${form.operation}(sampler, uv0);` },
+            { text: "}" },
+        );
+    }
     const lines: EmittedLine[] = [
         { text: "// Generated by GGLab ShaderGraphCore. Do not edit; regenerate from the source .shadergraph document." },
         ...descriptor.requiredIncludes.map((include) => ({ text: `#include "${include}"`, range: { role: "include" as const, name: include } })),
@@ -570,6 +693,7 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
         { text: "{" },
         ...descriptor.requiredOutputs.map((output) => ({ text: `    ${output.type} ${output.name};`, range: { role: "requiredOutputField" as const, name: output.name } })),
         { text: "};" },
+        ...helperLines,
         { text: "" },
         { text: `${objectName} ${functionName}(`, range: { role: "generatedFunctionDeclaration" } },
         ...signatureLines,

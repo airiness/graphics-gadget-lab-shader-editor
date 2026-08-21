@@ -756,9 +756,12 @@ applies to profile conformance: the `(class, valueType)` pairing of
 declared parameters is checked by one shared descriptor-aware service
 consumed by the emitter and the GUI, not embedded in emission. Type
 resolution is not emittability: a port can resolve to a type even when a
-later emission gate refuses to lower the node (v1 defers texture sampling,
-while `SampleTexture2D`'s `RGBA`/`RGB`/`R`/`G`/`B`/`A` ports still resolve
-per port).
+later emission gate refuses to lower the node (a descriptorVersion 1 file
+serializes no generated texture signature, so `Texture2DParameter` and
+`SampleTexture2D` refuse to lower there, while their ports —
+`SampleTexture2D`'s `RGBA`/`RGB`/`R`/`G`/`B`/`A` included — still resolve
+per port; a descriptorVersion 2 file freezes the signature and emission
+lowers both per that contract).
 
 ## 11.3 Port cardinality
 

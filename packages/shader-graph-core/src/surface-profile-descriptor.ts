@@ -2,19 +2,30 @@
  * Strict reader for the Surface Profile Descriptor.
  *
  * The descriptor is a serialized data document owned by the main GGLab
- * repository (the canonical v1 instance is `Shaders/Profiles/GGLab.Surface/1
- * /descriptor.json`). The core consumes it as parsed JSON only — never as a
- * C++ ABI, header import, or native linkage. This module is the v1 reader:
- * it projects exactly the v1 vocabulary and rejects everything it does not
- * support explicitly.
+ * repository (the canonical v1 instance is
+ * `Shaders/Profiles/GGLab.Surface/1/descriptor.json`; the canonical v2
+ * instance, which serializes the profileVersion 2 texture-signature
+ * contract, is `Shaders/Profiles/GGLab.Surface/2/descriptor.json`). The
+ * core consumes it as parsed JSON only — never as a C++ ABI, header import,
+ * or native linkage. This module reads exactly descriptorVersion 1 and 2:
+ * each version projects its own field vocabulary and rejects everything it
+ * does not support explicitly.
  *
  * Strictness rules for the descriptor:
  * - `descriptorVersion` outside {@link SUPPORTED_DESCRIPTOR_VERSION_RANGE} is
  *   rejected before any other field is interpreted. A reader must never
  *   reinterpret descriptors it does not support.
- * - Every v1 field is required and type-checked, and unknown fields at any
- *   level are an explicit failure. The descriptor is a cross-boundary
- *   contract; a half-understood contract is a broken contract.
+ * - Every field of the file's own descriptorVersion is required and
+ *   type-checked, and unknown fields at any level are an explicit failure
+ *   — including a field of a newer version on an older-version file, which
+ *   must be rejected rather than half-consumed. The descriptor is a
+ *   cross-boundary contract; a half-understood contract is a broken
+ *   contract.
+ * - The version axes stay independent (serialization vs profile semantics),
+ *   but their combination is checked: descriptorVersion 2 is the
+ *   serialization of the profileVersion 2 texture-signature contract, so a
+ *   file mixing descriptorVersion 2 with profileVersion 1 (or the reverse)
+ *   is a self-contradictory contract and is rejected explicitly.
  */
 import type { ParseResult, ShaderGraphDiagnostic } from "./diagnostics.js";
 import { DiagnosticCode } from "./diagnostics.js";
@@ -30,7 +41,7 @@ export interface DescriptorVersionRange {
 /** The range of `descriptorVersion` values this reader supports. */
 export const SUPPORTED_DESCRIPTOR_VERSION_RANGE: DescriptorVersionRange = {
     minimum: 1,
-    maximum: 1,
+    maximum: 2,
 };
 
 export interface SurfaceProfileDescriptor {
@@ -44,7 +55,7 @@ export interface SurfaceProfileDescriptor {
     readonly outputFieldOrdering: "descriptorListOrder";
     readonly parameterClasses: readonly ProfileParameterClass[];
     readonly resourceClasses: readonly ProfileResourceClass[];
-    readonly samplingContract: SamplingContract;
+    readonly samplingContract: SamplingContract | SamplingContractTexture;
     readonly requiredIncludes: readonly string[];
     readonly processContract: ProcessContract;
     readonly deferred: DeferredFeatures;
@@ -104,6 +115,46 @@ export interface SamplingContract {
     readonly authorableFilterModes: readonly string[];
     readonly authorableAddressModes: readonly string[];
     readonly comparisonSamplerAuthoring: "deferred";
+}
+
+/**
+ * The profileVersion 2 addition: how a `Texture2DParameter` appears in the
+ * generated signature. One `uint2` parameter per texture parameter whose
+ * components are (texture binding index, sampler binding index), in that
+ * order — the same pair representation the runtime binding layer uses.
+ */
+export interface GeneratedTextureSignature {
+    readonly cardinality: "oneParameterPerTexture2DParameter";
+    readonly parameterType: "uint2";
+    readonly componentOrder: readonly TextureSignatureComponent[];
+}
+
+/** One component of the generated texture parameter pair. */
+export interface TextureSignatureComponent {
+    readonly position: 0 | 1;
+    readonly meaning: string;
+}
+
+/**
+ * The profileVersion 2 addition: the exact generated sampling expression —
+ * the compiler-provided bindless heap builtins, the NonUniformResourceIndex
+ * wrapping, and the Sample operation over a float2 coordinate yielding the
+ * resource class' float4 type.
+ */
+export interface GeneratedSampleForm {
+    readonly resourceHeapBuiltin: "ResourceDescriptorHeap";
+    readonly resourceElementType: "Texture2D<float4>";
+    readonly samplerHeapBuiltin: "SamplerDescriptorHeap";
+    readonly indexScope: "NonUniformResourceIndex";
+    readonly operation: "Sample";
+    readonly coordinateType: "float2";
+    readonly resultType: "float4";
+}
+
+/** `SamplingContract` plus the profileVersion 2 texture-signature fields. */
+export interface SamplingContractTexture extends SamplingContract {
+    readonly generatedTextureSignature: GeneratedTextureSignature;
+    readonly generatedSampleForm: GeneratedSampleForm;
 }
 
 export interface ProcessContract {
@@ -189,7 +240,7 @@ export function parseSurfaceProfileDescriptor(
     const outputFieldOrdering = requireLiteral(root, "outputFieldOrdering", "$", "descriptorListOrder", diagnostics);
     const parameterClasses = parseParameterClasses(takeArray(root, "parameterClasses", "$", diagnostics), "$.parameterClasses", diagnostics);
     const resourceClasses = parseResourceClasses(takeArray(root, "resourceClasses", "$", diagnostics), "$.resourceClasses", diagnostics);
-    const samplingContract = parseSamplingContract(takeObject(root, "samplingContract", "$", diagnostics), "$.samplingContract", diagnostics);
+    const samplingContract = parseSamplingContract(takeObject(root, "samplingContract", "$", diagnostics), "$.samplingContract", diagnostics, version);
     const requiredIncludes = requireStringArray(root, "requiredIncludes", "$", diagnostics);
     const processContract = parseProcessContract(takeObject(root, "processContract", "$", diagnostics), "$.processContract", diagnostics);
     const deferred = parseDeferred(takeObject(root, "deferred", "$", diagnostics), "$.deferred", diagnostics);
@@ -214,6 +265,32 @@ export function parseSurfaceProfileDescriptor(
         processContract === undefined ||
         deferred === undefined
     ) {
+        return { ok: false, value: null, diagnostics };
+    }
+
+    // The version axes stay independent, but their combination is checked:
+    // descriptorVersion 2 is the serialization of the profileVersion 2
+    // texture-signature contract. A file mixing the two is a
+    // self-contradictory contract, rejected explicitly (never reinterpreted).
+    if (version === 2 && profileVersion !== 2) {
+        diagnostics.push(
+            errorAt(
+                "$.profileVersion",
+                DiagnosticCode.ProfileMismatch,
+                `descriptorVersion 2 serializes the profileVersion 2 texture-signature contract; this file declares profileVersion ${profileVersion}.`,
+            ),
+        );
+    }
+    if (version === 1 && profileVersion !== 1) {
+        diagnostics.push(
+            errorAt(
+                "$.descriptorVersion",
+                DiagnosticCode.ProfileMismatch,
+                `profileVersion ${profileVersion} includes the generated texture-signature contract, which the descriptorVersion 1 serialization cannot express.`,
+            ),
+        );
+    }
+    if (diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
         return { ok: false, value: null, diagnostics };
     }
 
@@ -441,10 +518,13 @@ function parseResourceClasses(raw: readonly JsonValue[] | undefined, path: strin
     return failed ? undefined : result;
 }
 
-function parseSamplingContract(raw: JsonRecord | undefined, path: string, diagnostics: ShaderGraphDiagnostic[]): SamplingContract | undefined {
+function parseSamplingContract(raw: JsonRecord | undefined, path: string, diagnostics: ShaderGraphDiagnostic[], descriptorVersion: number): SamplingContract | SamplingContractTexture | undefined {
     if (raw === undefined) {
         return undefined;
     }
+    const baseFields = ["policy", "appliesToResourceClass", "samplerAuthoring", "samplerResolution", "authorableFilterModes", "authorableAddressModes", "comparisonSamplerAuthoring"];
+    const isTextureVersion = descriptorVersion === 2;
+
     const policy = requireLiteral(raw, "policy", path, "reuseRuntimeTextureSamplerBinding", diagnostics);
     const appliesToResourceClass = requireString(raw, "appliesToResourceClass", path, diagnostics);
     const samplerAuthoring = requireLiteral(raw, "samplerAuthoring", path, "deferred", diagnostics);
@@ -461,17 +541,23 @@ function parseSamplingContract(raw: JsonRecord | undefined, path: string, diagno
     const authorableAddressModes = requireStringArray(raw, "authorableAddressModes", path, diagnostics);
     const comparisonSamplerAuthoring = requireLiteral(raw, "comparisonSamplerAuthoring", path, "deferred", diagnostics);
 
-    rejectUnknownFields(
-        raw,
-        ["policy", "appliesToResourceClass", "samplerAuthoring", "samplerResolution", "authorableFilterModes", "authorableAddressModes", "comparisonSamplerAuthoring"],
-        path,
-        diagnostics,
-    );
+    // descriptorVersion 2 adds the generated texture signature. The two
+    // fields are REQUIRED at that serialization (a texture-signature contract
+    // without its signature is a broken contract), and they do not exist on
+    // descriptorVersion 1 files at all — a v1 file that carries them is an
+    // unknown field, not a half-upgrade.
+    let generatedTextureSignature: GeneratedTextureSignature | undefined;
+    let generatedSampleForm: GeneratedSampleForm | undefined;
+    if (isTextureVersion) {
+        generatedTextureSignature = parseGeneratedTextureSignature(takeObject(raw, "generatedTextureSignature", path, diagnostics), `${path}.generatedTextureSignature`, diagnostics);
+        generatedSampleForm = parseGeneratedSampleForm(takeObject(raw, "generatedSampleForm", path, diagnostics), `${path}.generatedSampleForm`, diagnostics);
+    }
+    rejectUnknownFields(raw, isTextureVersion ? [...baseFields, "generatedTextureSignature", "generatedSampleForm"] : baseFields, path, diagnostics);
 
     if (policy === undefined || appliesToResourceClass === undefined || samplerAuthoring === undefined || owner === undefined || cardinality === undefined || authorableFilterModes === undefined || authorableAddressModes === undefined || comparisonSamplerAuthoring === undefined) {
         return undefined;
     }
-    return {
+    const sampling: SamplingContract = {
         policy,
         appliesToResourceClass,
         samplerAuthoring,
@@ -480,6 +566,79 @@ function parseSamplingContract(raw: JsonRecord | undefined, path: string, diagno
         authorableAddressModes,
         comparisonSamplerAuthoring,
     };
+    if (!isTextureVersion) {
+        return sampling;
+    }
+    if (generatedTextureSignature === undefined || generatedSampleForm === undefined) {
+        return undefined;
+    }
+    return { ...sampling, generatedTextureSignature, generatedSampleForm };
+}
+
+function parseGeneratedTextureSignature(raw: JsonRecord | undefined, path: string, diagnostics: ShaderGraphDiagnostic[]): GeneratedTextureSignature | undefined {
+    if (raw === undefined) {
+        return undefined;
+    }
+    const cardinality = requireLiteral(raw, "cardinality", path, "oneParameterPerTexture2DParameter", diagnostics);
+    const parameterType = requireLiteral(raw, "parameterType", path, "uint2", diagnostics);
+    const componentOrderRaw = takeArray(raw, "componentOrder", path, diagnostics);
+    if (componentOrderRaw !== undefined && componentOrderRaw.length !== 2) {
+        diagnostics.push(errorAt(`${path}.componentOrder`, DiagnosticCode.UnexpectedType, `Expected exactly 2 pair components, got ${componentOrderRaw.length}.`));
+    }
+    let componentOrder: readonly TextureSignatureComponent[] | undefined;
+    if (componentOrderRaw !== undefined && componentOrderRaw.length === 2) {
+        const first = parseTextureSignatureComponent(componentOrderRaw[0], `${path}.componentOrder[0]`, 0, diagnostics);
+        const second = parseTextureSignatureComponent(componentOrderRaw[1], `${path}.componentOrder[1]`, 1, diagnostics);
+        if (first !== undefined && second !== undefined) {
+            componentOrder = [first, second];
+        }
+    }
+    rejectUnknownFields(raw, ["cardinality", "parameterType", "componentOrder"], path, diagnostics);
+    if (cardinality === undefined || parameterType === undefined || componentOrder === undefined) {
+        return undefined;
+    }
+    return { cardinality, parameterType, componentOrder };
+}
+
+function parseTextureSignatureComponent(value: JsonValue | undefined, path: string, expectedPosition: 0 | 1, diagnostics: ShaderGraphDiagnostic[]): TextureSignatureComponent | undefined {
+    if (!isJsonRecord(value)) {
+        diagnostics.push(errorAt(path, DiagnosticCode.UnexpectedType, `Expected a component object, got ${jsonKind(value)}.`));
+        return undefined;
+    }
+    const position = requireInteger(value, "position", path, diagnostics);
+    const meaning = requireString(value, "meaning", path, diagnostics);
+    if (position !== undefined && position !== expectedPosition) {
+        diagnostics.push(errorAt(`${path}.position`, DiagnosticCode.UnexpectedType, `Expected component position ${expectedPosition}, got ${position}.`));
+        return undefined;
+    }
+    rejectUnknownFields(value, ["position", "meaning"], path, diagnostics);
+    if (position === undefined || meaning === undefined) {
+        return undefined;
+    }
+    return { position: expectedPosition, meaning };
+}
+
+function parseGeneratedSampleForm(raw: JsonRecord | undefined, path: string, diagnostics: ShaderGraphDiagnostic[]): GeneratedSampleForm | undefined {
+    if (raw === undefined) {
+        return undefined;
+    }
+    const resourceHeapBuiltin = requireLiteral(raw, "resourceHeapBuiltin", path, "ResourceDescriptorHeap", diagnostics);
+    const resourceElementType = requireLiteral(raw, "resourceElementType", path, "Texture2D<float4>", diagnostics);
+    const samplerHeapBuiltin = requireLiteral(raw, "samplerHeapBuiltin", path, "SamplerDescriptorHeap", diagnostics);
+    const indexScope = requireLiteral(raw, "indexScope", path, "NonUniformResourceIndex", diagnostics);
+    const operation = requireLiteral(raw, "operation", path, "Sample", diagnostics);
+    const coordinateType = requireLiteral(raw, "coordinateType", path, "float2", diagnostics);
+    const resultType = requireLiteral(raw, "resultType", path, "float4", diagnostics);
+    rejectUnknownFields(
+        raw,
+        ["resourceHeapBuiltin", "resourceElementType", "samplerHeapBuiltin", "indexScope", "operation", "coordinateType", "resultType"],
+        path,
+        diagnostics,
+    );
+    if (resourceHeapBuiltin === undefined || resourceElementType === undefined || samplerHeapBuiltin === undefined || indexScope === undefined || operation === undefined || coordinateType === undefined || resultType === undefined) {
+        return undefined;
+    }
+    return { resourceHeapBuiltin, resourceElementType, samplerHeapBuiltin, indexScope, operation, coordinateType, resultType };
 }
 
 function parseProcessContract(raw: JsonRecord | undefined, path: string, diagnostics: ShaderGraphDiagnostic[]): ProcessContract | undefined {
