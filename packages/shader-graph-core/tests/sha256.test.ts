@@ -36,6 +36,17 @@ describe("utf8Encode", () => {
         expect([...utf8Encode(String.fromCodePoint(0x1d306))]).toEqual([0xf0, 0x9d, 0x8c, 0x86]);
     });
 
+    it("replaces lone surrogates with U+FFFD like a standard UTF-8 encoder", () => {
+        // Unpaired high/low surrogates are invalid code points and must not
+        // be encoded as surrogate-range bytes.
+        expect([...utf8Encode("\ud800")]).toEqual([0xef, 0xbf, 0xbd]);
+        expect([...utf8Encode("\udc00")]).toEqual([0xef, 0xbf, 0xbd]);
+        // Neighboring characters are unaffected.
+        expect([...utf8Encode("a\ud800b")]).toEqual([0x61, 0xef, 0xbf, 0xbd, 0x62]);
+        // Valid pairs still encode to their code point, not U+FFFD.
+        expect([...utf8Encode("\u2713")]).toEqual([0xe2, 0x9c, 0x93]);
+    });
+
     it("round-trips mixed text through the same bytes twice", () => {
         const text = `x\u00e9\u2713${String.fromCodePoint(0x1d306)} 42`;
         expect([...utf8Encode(text)]).toEqual([...utf8Encode(text)]);

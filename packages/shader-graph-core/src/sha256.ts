@@ -51,6 +51,12 @@ export function utf8Encode(text: string): Uint8Array {
                 i++;
             }
         }
+        // A lone surrogate is an invalid code point: standard UTF-8 encoders
+        // replace it with U+FFFD rather than emit surrogate-range bytes.
+        if (code >= 0xd800 && code <= 0xdfff) {
+            bytes.push(0xef, 0xbf, 0xbd);
+            continue;
+        }
         if (code < 0x80) {
             bytes.push(code);
         } else if (code < 0x800) {
@@ -88,8 +94,11 @@ export function sha256Hex(input: Uint8Array): string {
     const data = new Uint8Array(total);
     data.set(input);
     data[byteLength] = 0x80;
-    const bitLengthHigh = byteLength >>> 29;
-    const bitLengthLow = (byteLength << 3) >>> 0;
+    // The 64-bit bit length is split with floating-point math on purpose:
+    // `byteLength >>> 29` would first be ToUint32'd (mod 2^32) and corrupt
+    // the high word for inputs of 2^32 bytes or more, within the 2^41 cap.
+    const bitLengthHigh = Math.floor(byteLength / 0x20000000) >>> 0;
+    const bitLengthLow = (byteLength * 8) >>> 0;
     const view = new DataView(data.buffer);
     view.setUint32(total - 8, bitLengthHigh, false);
     view.setUint32(total - 4, bitLengthLow, false);
