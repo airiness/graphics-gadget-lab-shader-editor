@@ -50,20 +50,40 @@ import { getNodeDefinition } from "./node-definitions.js";
 import type { NodeDefinition, NodePortDefinition } from "./node-definitions.js";
 import { isImplicitlyConvertible } from "./graph-types.js";
 
+/**
+ * A frozen point of a profile line. Beyond the structural facts (output
+ * node), each line records the *semantic capabilities* its descriptor
+ * authority must carry — and the ones it must not. Capability admission is
+ * a frozen semantic fact of the line (decided by the freeze records), not
+ * something a consumer infers from version numbers: the gglab.surface v1
+ * line forbids the generated texture-signature contract (its texture
+ * emission is a structured refusal; a descriptor carrying it would change
+ * the frozen v1 semantics), while the v2 line requires it.
+ */
 export interface ProfileKnowledge {
     readonly profileId: string;
     readonly profileVersion: number;
     /** The node type that delivers the profile's required outputs. */
     readonly outputNodeType: string;
+    /**
+     * Whether the line's descriptor may/will serialize the generated
+     * texture-signature contract: `forbidden` = the line's frozen semantics
+     * do not admit it; `required` = the line's frozen semantics require it.
+     */
+    readonly textureSignature: "forbidden" | "required";
 }
 
 /** The profiles this core's node definitions implement (architecture §12). */
 export const SUPPORTED_PROFILES: readonly ProfileKnowledge[] = [
-    { profileId: "gglab.surface", profileVersion: 1, outputNodeType: "SurfaceOutput" },
+    // v1 froze the logical surface contract with the generation-side
+    // texture spelling intentionally unfrozen — texture emission on this
+    // line is a structured refusal, so a descriptor MUST NOT serialize the
+    // texture-signature contract for it.
+    { profileId: "gglab.surface", profileVersion: 1, outputNodeType: "SurfaceOutput", textureSignature: "forbidden" },
     // Version 2 adds the texture-sampling surface (Texture2DParameter /
     // SampleTexture2D), which emission lowers per the descriptor's frozen
     // generated texture-signature contract (descriptorVersion 2 files).
-    { profileId: "gglab.surface", profileVersion: 2, outputNodeType: "SurfaceOutput" },
+    { profileId: "gglab.surface", profileVersion: 2, outputNodeType: "SurfaceOutput", textureSignature: "required" },
 ];
 
 export interface ValidationReport {

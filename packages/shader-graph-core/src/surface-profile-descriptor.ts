@@ -25,12 +25,15 @@
  *   this reader answers only "can I understand this descriptorVersion's
  *   serialization?". It does not couple the two version numbers. Whether a
  *   parsed descriptor is a compatible authority for a given profile line is
- *   a capability question decided where the document and the descriptor
- *   meet (emission): a profile line that requires capability X is rejected
- *   against a descriptor that does not serialize X — never against one
- *   whose version number simply differs. A future serialization that still
- *   expresses the texture-signature fields legitimately works for the same
- *   profile line.
+ *   a capability question decided by the shared profile × descriptor
+ *   compatibility service (profile-descriptor-compatibility.ts), consumed
+ *   by the emitter (and GUI/CLI when they select descriptors) rather than
+ *   inferred anywhere: a line that requires capability X is rejected
+ *   against a descriptor that does not serialize X, and a line that does
+ *   not admit X (v1 — texture emission is a structured refusal) is
+ *   rejected against one that does. Never by version-number comparison; a
+ *   future serialization that still expresses (or stops expressing) X
+ *   behaves exactly as its capabilities dictate.
  */
 import type { ParseResult, ShaderGraphDiagnostic } from "./diagnostics.js";
 import { DiagnosticCode } from "./diagnostics.js";

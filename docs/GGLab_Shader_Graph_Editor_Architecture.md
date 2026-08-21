@@ -761,7 +761,11 @@ serializes no generated texture signature, so `Texture2DParameter` and
 `SampleTexture2D` refuse to lower there, while their ports —
 `SampleTexture2D`'s `RGBA`/`RGB`/`R`/`G`/`B`/`A` included — still resolve
 per port; a descriptorVersion 2 file freezes the signature and emission
-lowers both per that contract).
+lowers both per that contract). And whether a descriptor may serve a
+profile line at all is a single shared compatibility verdict — the line's
+required capabilities present, forbidden capabilities absent — judged on
+capability, never on version numbers, and consumed by the emitter rather
+than inferred inside it.
 
 ## 11.3 Port cardinality
 

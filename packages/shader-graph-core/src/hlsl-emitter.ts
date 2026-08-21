@@ -27,10 +27,15 @@
  *   Sample over a float2 coordinate, yielding float4); emission lowers both
  *   kinds per that serialized contract and emits the sampling helper once,
  *   derived from the descriptor's fields — including which slot index each
- *   heap reads — rather than re-spelled or re-invented here. Compatibility
- *   with a profile line is judged on capability, never on version numbers:
- *   a profile line whose semantics require the texture-signature contract
- *   is refused against a descriptor that does not serialize it.
+ *   heap reads — rather than re-spelled or re-invented here.
+ * - Compatibility between the document's profile line and the descriptor
+ *   is the shared profile-descriptor compatibility verdict
+ *   (profile-descriptor-compatibility.ts), consumed as-is: the exact
+ *   profile line, then the line's frozen capability admission — required
+ *   capabilities present, forbidden capabilities absent — never a
+ *   version-number comparison. The v1 line's texture emission stays the
+ *   structured refusal it was frozen as; only the line that requires the
+ *   contract admits it.
  * - Port-aware type resolution is not done here: the core's
  *   `resolveGraphTypes` service (graph-type-resolution.ts) is the single
  *   type authority, and emission only *consumes* its resolved
@@ -109,6 +114,7 @@ import { sha256Hex, utf8Encode } from "./sha256.js";
 import { resolveGraphTopology } from "./topology.js";
 import { resolveGraphTypes } from "./graph-type-resolution.js";
 import { checkProfileConformance } from "./profile-conformance.js";
+import { checkProfileDescriptorCompatibility } from "./profile-descriptor-compatibility.js";
 import { validateShaderGraph } from "./validation.js";
 
 /** What a generated-source range stands for (architecture §24 "semantic role"). */
@@ -256,15 +262,14 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
         return index === undefined ? "$" : `$.nodes[${index}]`;
     };
 
-    // The descriptor must describe the document's profile line.
-    if (descriptor.profileId !== document.profile || descriptor.profileVersion !== document.profileVersion) {
-        diagnostics.push(
-            errorAt(
-                "$",
-                DiagnosticCode.ProfileMismatch,
-                `The document requests profile "${document.profile}" version ${document.profileVersion}; the supplied descriptor is for "${descriptor.profileId}" version ${descriptor.profileVersion}.`,
-            ),
-        );
+    // Profile × descriptor compatibility: the shared capability verdict
+    // (exact profile line, then the line's required/forbidden capabilities
+    // against the descriptor's serialized capabilities). Emission consumes
+    // the verdict; it does not re-derive capability semantics from version
+    // numbers, and the version axes stay independent.
+    const compatibility = checkProfileDescriptorCompatibility(document, descriptor);
+    if (compatibility.diagnostics.length > 0) {
+        diagnostics.push(...compatibility.diagnostics);
         return fail(diagnostics);
     }
 
@@ -322,25 +327,6 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
         "generatedTextureSignature" in descriptor.samplingContract
             ? { signature: descriptor.samplingContract.generatedTextureSignature, form: descriptor.samplingContract.generatedSampleForm }
             : undefined;
-
-    // Profile contract compatibility is a capability question, not a
-    // version-number comparison: the gglab.surface v2 line includes the
-    // texture-sampling semantics, so its descriptor must serialize the
-    // generated texture-signature contract (the descriptorVersion 2
-    // addition). A descriptor that cannot express it is incompatible with
-    // that profile line whatever its serialization number is — and a
-    // future serialization that still expresses it keeps working. The
-    // version axes stay independent (AGENTS.md).
-    if (document.profile === "gglab.surface" && document.profileVersion >= 2 && textureContract === undefined) {
-        diagnostics.push(
-            errorAt(
-                "$",
-                DiagnosticCode.ProfileMismatch,
-                `Profile "gglab.surface" version ${document.profileVersion} requires the generated texture-signature contract, which this descriptor does not serialize.`,
-            ),
-        );
-        return fail(diagnostics);
-    }
 
     // Port-aware type resolution: the core's single type authority — it
     // owns the concrete input constraints, including the output node's

@@ -593,7 +593,7 @@ describe("emitHlsl", () => {
         expect(result.source).toBe("");
         expect(result.diagnostics).toEqual([
             expect.objectContaining({
-                code: DiagnosticCode.ProfileMismatch,
+                code: DiagnosticCode.MissingProfileCapability,
                 severity: "error",
                 dataPath: "$",
                 message: expect.stringContaining("requires the generated texture-signature contract"),
@@ -601,25 +601,35 @@ describe("emitHlsl", () => {
         ]);
     });
 
-    it("emits texture sampling for a profileVersion 1 document served by a v2-serialization descriptor", () => {
-        // Independent axes in one direction: the descriptor declares the
-        // v1 profile line (matching the document) while serializing its
-        // contract with descriptorVersion 2. Emission is contract-driven:
-        // the requested line does not demand the texture contract, nothing
-        // forbids it, and the descriptor supplies it — so it works.
+    it("refuses a profileVersion 1 document against a descriptor that serializes the texture-signature contract", () => {
+        // Independent axes do not mean an arbitrary product is legal: this
+        // descriptor parses fine (the reader understands the serialization)
+        // and declares the v1 line (matching the document), but the v1
+        // line's frozen semantics do NOT admit the generated
+        // texture-signature contract — its texture emission is the
+        // structured refusal it was frozen as. A descriptor that serializes
+        // the contract for that line would change the frozen v1 semantics,
+        // so compatibility is refused on capability, not on version numbers.
         const raw = JSON.parse(JSON.stringify(canonicalV2Fixture));
         raw["profileVersion"] = 1;
         const served = parseSurfaceProfileDescriptor(JSON.stringify(raw));
-        expect(served.ok).toBe(true);
+        expect(served.ok).toBe(true); // the parser understands the serialization
         if (served.value === null) {
             throw new Error("expected the descriptor to parse");
         }
         const document = textureDocument();
         document["profileVersion"] = 1;
         const result = emitParsedAgainst(document, served.value);
-        expect(result.ok).toBe(true);
-        expect(result.source).toContain("float4 v_n_smp = gglab_sampleTexture2D(v_n_tp, v_n_uv);");
-        expect(result.source).toContain("SamplerState sampler = SamplerDescriptorHeap[NonUniformResourceIndex(textureSamplerBinding.y)];");
+        expect(result.ok).toBe(false);
+        expect(result.source).toBe("");
+        expect(result.diagnostics).toEqual([
+            expect.objectContaining({
+                code: DiagnosticCode.ForbiddenProfileCapability,
+                severity: "error",
+                dataPath: "$",
+                message: expect.stringContaining("does not admit the generated texture-signature contract"),
+            }),
+        ]);
     });
 
     function emitParsedAgainst(document: Record<string, unknown>, descriptor: SurfaceProfileDescriptor): HlslEmission {
