@@ -13,9 +13,9 @@
  */
 import type { ShaderGraphDiagnostic } from "@gglab/shader-graph-core";
 import { emitHlsl } from "@gglab/shader-graph-core";
-import type { ParsedArgs } from "../args.js";
+import type { ParsedArgs } from "../command-grammar.js";
 import { CliCode, buildEnvelope, cliDiagnosticAt } from "../envelope.js";
-import { checkDescriptorPairing, loadDocument, resolveDescriptorInput, type DescriptorInput } from "../shared.js";
+import { checkDescriptorPairing, descriptorResolutionView, loadDocument, resolveDescriptorInput, type DescriptorInput } from "../shared.js";
 
 export function runEmit(args: ParsedArgs) {
     const diagnostics: ShaderGraphDiagnostic[] = [...args.diagnostics];
@@ -61,6 +61,7 @@ export function runEmit(args: ParsedArgs) {
     const payload = {
         document: documentPath,
         descriptor: input.instancePath,
+        descriptorResolution: descriptorResolutionView(input),
         descriptorVersion: input.descriptor.descriptorVersion,
         profile: document.profile,
         profileVersion: document.profileVersion,

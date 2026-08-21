@@ -5,9 +5,13 @@
  * stdout: `ok`, the `command` name, structured `diagnostics` (the core's
  * diagnostic shape, extended with CLI-level stable codes for failures the
  * core does not own: bad arguments, missing files, unresolvable
- * descriptors), and a command-specific `payload` (null unless the command
- * succeeded). Keys are built in a fixed order so the serialized bytes of
- * an identical request are identical across runs and platforms.
+ * descriptors), and a command-specific `payload`. Keys are built in a
+ * fixed order so the serialized bytes of an identical request are
+ * identical across runs and platforms.
+ *
+ * Machine protocol invariant (enforced centrally in `buildEnvelope`, so
+ * no command can violate it): a failure envelope NEVER carries a payload —
+ * `payload` is only present when `ok` is true.
  *
  * Stable CLI codes (never free-form, never reusing core code values):
  *
@@ -52,7 +56,7 @@ export function buildEnvelope(
     payload: unknown | null,
 ): CliEnvelope {
     const ok = !diagnostics.some((diagnostic) => diagnostic.severity === "error");
-    return { ok, command, diagnostics, payload };
+    return { ok, command, diagnostics, payload: ok ? payload : null };
 }
 
 /** Serializes an envelope deterministically (fixed key order; 2-space indent with pretty). */

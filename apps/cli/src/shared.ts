@@ -12,7 +12,7 @@ import {
     parseShaderGraphDocument,
     type ShaderGraphDocument,
 } from "@gglab/shader-graph-core";
-import type { ParsedArgs } from "./args.js";
+import type { ParsedArgs } from "./command-grammar.js";
 import { CliCode, cliDiagnosticAt } from "./envelope.js";
 import { resolveDescriptorFromDirectory, resolveDescriptorInstance, type DescriptorResolution } from "./resolve-descriptor.js";
 import { readTextFile } from "./io.js";
@@ -42,6 +42,23 @@ export interface DescriptorInput {
 }
 
 /**
+ * The machine-readable view of how the descriptor was resolved: which
+ * instance served the request, and every candidate that was considered —
+ * including ones the reader did not support (e.g. a newer
+ * descriptorVersion), which stays explicit instead of silently ignored.
+ */
+export function descriptorResolutionView(input: DescriptorInput) {
+    return {
+        selected: input.instancePath,
+        considered: input.considered.map((candidate) => ({
+            instancePath: candidate.instancePath,
+            supported: candidate.descriptor !== undefined,
+            failure: candidate.diagnostics.length > 0 ? (candidate.diagnostics[0]?.code ?? undefined) : undefined,
+        })),
+    };
+}
+
+/**
  * Resolves the descriptor for a command from its options. Exactly one of
  * --descriptor / --descriptors-dir is valid; `required` controls whether
  * the absence is a failure (emit) or a documented no-descriptor mode
@@ -53,7 +70,7 @@ export function resolveDescriptorInput(
     required: boolean,
 ): { resolved: DescriptorInput | undefined; diagnostics: readonly ShaderGraphDiagnostic[] } {
     const hasFile = args.options.has("descriptor");
-    const hasDir = args.options.has("descriptors-dir") || args.flags.has("descriptors-dir");
+    const hasDir = args.options.has("descriptors-dir");
     if (hasFile && hasDir) {
         return {
             resolved: undefined,
@@ -103,8 +120,11 @@ function asDescriptorInput(resolution: DescriptorResolution): DescriptorInput {
 }
 
 /**
- * Runs the shared descriptor pairing checks (compatibility, then
- * conformance) and appends their structured diagnostics.
+ * Runs the shared descriptor pairing checks (compatibility verdict, then
+ * class/type conformance) and appends their structured diagnostics.
+ * Returns false as soon as either verdict fails, so neither authority is
+ * consumed twice (for example by the emitter re-running its own conformance
+ * check on an already-failed pairing).
  */
 export function checkDescriptorPairing(
     document: ShaderGraphDocument,
@@ -118,5 +138,5 @@ export function checkDescriptorPairing(
     }
     const conformance = checkProfileConformance(document, descriptor);
     diagnostics.push(...conformance.diagnostics);
-    return true;
+    return conformance.ok;
 }

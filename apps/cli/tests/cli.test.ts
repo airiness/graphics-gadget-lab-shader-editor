@@ -1,22 +1,25 @@
 /**
  * CLI command tests — the commands are serializations of core services, so
- * these tests pin the machine contract: envelope shape/order, stable codes,
- * exit codes, the profile-line selection rule, the capability-based
- * compatibility verdict both directions, and byte-deterministic emission.
- * Fixtures are embedded (small, deterministic) — the CLI tests stay
- * self-contained and mirror the core test fixtures' proven shapes.
+ * these tests pin the machine contract: strict per-command grammars (no
+ * silently ignored tokens), the failure-envelope invariant (payload is
+ * null on failure), stable codes, the central exit-code classification
+ * (0/1/2), the profile-line selection rule with explicit considered
+ * surfacing, the capability-based compatibility verdict both directions,
+ * and byte-deterministic emission. Fixtures are embedded (small,
+ * deterministic) and mirror the core test fixtures' proven shapes.
  */
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { DiagnosticCode, sha256Hex, utf8Encode } from "@gglab/shader-graph-core";
+import { COMMAND_GRAMMARS, parseCommandArgs, type KnownCommand } from "../src/command-grammar.js";
 import { CliCode } from "../src/envelope.js";
-import { parseArgs } from "../src/args.js";
 import { runDescriptor } from "../src/commands/descriptor.js";
 import { runEmit } from "../src/commands/emit.js";
 import { runValidate } from "../src/commands/validate.js";
-import { main, usageText } from "../src/index.js";
+import { classifyExitCode, main, usageText } from "../src/index.js";
+import { buildEnvelope } from "../src/envelope.js";
 import { serializeEnvelope } from "../src/envelope.js";
 
 // --- proven fixture shapes (mirror the core test fixtures) ---------------
@@ -185,30 +188,51 @@ afterAll(() => {
     rmSync(stageRoot, { recursive: true, force: true });
 });
 
-const args = (argv: string[]) => parseArgs(argv);
+function parse(command: KnownCommand, argv: string[]) {
+    return parseCommandArgs(COMMAND_GRAMMARS[command], command, argv);
+}
 
-// --- parseArgs -------------------------------------------------------------
+// --- strict grammars ---------------------------------------------------------
 
-describe("parseArgs", () => {
-    it("splits positionals, --option values, and --flags in order", () => {
-        const parsed = args(["doc.json", "--descriptor", "d1.json", "--pretty"]);
+describe("command grammars (no silently ignored tokens)", () => {
+    it("accepts exactly the declared positionals, value options, and flags", () => {
+        const parsed = parse("emit", ["doc.json", "--descriptor", "d1.json", "--pretty"]);
         expect(parsed.positionals).toEqual(["doc.json"]);
         expect(parsed.options.get("descriptor")).toBe("d1.json");
         expect(parsed.flags.has("pretty")).toBe(true);
         expect(parsed.diagnostics).toEqual([]);
     });
 
-    it("reports an option with no value as INVALID_ARGUMENT (structured)", () => {
-        const parsed = args(["doc.json", "--descriptor"]);
+    it("rejects an unknown option — a typo is never a silent no-op", () => {
+        const parsed = parse("validate", ["doc.json", "--descripter", "d1.json"]);
+        expect(parsed.diagnostics).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ code: CliCode.InvalidArgument, severity: "error", dataPath: "$.args[1]" }),
+            ]),
+        );
+        expect(parsed.options.has("descripter")).toBe(false);
+    });
+
+    it("rejects a value-option whose value would swallow another option", () => {
+        const parsed = parse("validate", ["doc.json", "--descriptor", "--pretty"]);
         expect(parsed.diagnostics).toEqual(
             expect.arrayContaining([expect.objectContaining({ code: CliCode.InvalidArgument, severity: "error" })]),
         );
+        expect(parsed.options.has("descriptor")).toBe(false);
     });
 
-    it("reports a duplicated option as INVALID_ARGUMENT (structured)", () => {
-        const parsed = args(["--descriptor", "a.json", "--descriptor", "b.json"]);
-        expect(parsed.diagnostics).toEqual(
+    it("rejects a missing value, a duplicated option, and extra positionals", () => {
+        expect(parse("emit", ["doc.json", "--descriptor"]).diagnostics).toEqual(
             expect.arrayContaining([expect.objectContaining({ code: CliCode.InvalidArgument })]),
+        );
+        expect(parse("validate", ["doc.json", "--descriptor", "a.json", "--descriptor", "b.json"]).diagnostics).toEqual(
+            expect.arrayContaining([expect.objectContaining({ code: CliCode.InvalidArgument })]),
+        );
+        expect(parse("descriptor", ["foo.json", "WTF.json"]).diagnostics).toEqual(
+            expect.arrayContaining([expect.objectContaining({ code: CliCode.InvalidArgument })]),
+        );
+        expect(parse("emit", []).diagnostics).toEqual(
+            expect.arrayContaining([expect.objectContaining({ code: CliCode.MissingArgument })]),
         );
     });
 });
@@ -218,7 +242,7 @@ describe("parseArgs", () => {
 describe("validate", () => {
     it("runs the core authoring checks on a v1 numeric document without a descriptor", () => {
         const documentPath = stage("validate/numeric-v1.json", numericV1Document());
-        const envelope = runValidate(args([documentPath]));
+        const envelope = runValidate(parse("validate", [documentPath]));
         expect(envelope.ok).toBe(true);
         expect(envelope.command).toBe("validate");
         expect(envelope.diagnostics).toEqual([]);
@@ -234,15 +258,17 @@ describe("validate", () => {
     it("adds the descriptor pairing (compatibility + conformance) when a descriptor is supplied", () => {
         const documentPath = stage("validate/numeric-v1b.json", numericV1Document());
         const descriptorPath = stage("validate/desc-v1.json", canonicalV1Fixture);
-        const envelope = runValidate(args([documentPath, "--descriptor", descriptorPath]));
+        const envelope = runValidate(parse("validate", [documentPath, "--descriptor", descriptorPath]));
         expect(envelope.ok).toBe(true);
-        expect((envelope.payload as { descriptor: string }).descriptor).toBe(descriptorPath);
+        const payload = envelope.payload as { descriptor: string; descriptorResolution: { selected: string } };
+        expect(payload.descriptor).toBe(descriptorPath);
+        expect(payload.descriptorResolution.selected).toBe(descriptorPath);
     });
 
-    it("refuses a descriptor on a different profile line (PROFILE_MISMATCH, structured)", () => {
+    it("refuses a descriptor on a different profile line (PROFILE_MISMATCH; failure envelope has no payload)", () => {
         const documentPath = stage("validate/numeric-v1c.json", numericV1Document());
         const descriptorPath = stage("validate/desc-v2.json", canonicalV2Fixture); // line pV2
-        const envelope = runValidate(args([documentPath, "--descriptor", descriptorPath]));
+        const envelope = runValidate(parse("validate", [documentPath, "--descriptor", descriptorPath]));
         expect(envelope.ok).toBe(false);
         expect(envelope.payload).toBeNull();
         expect(envelope.diagnostics).toEqual([
@@ -250,19 +276,12 @@ describe("validate", () => {
         ]);
     });
 
-    it("reports a cyclic document with CYCLE_DETECTED (structured, core code)", () => {
+    it("reports a cyclic document as a semantic failure with CYCLE_DETECTED and no payload", () => {
         const documentPath = stage("validate/cycle.json", cycleV1Document());
-        const envelope = runValidate(args([documentPath]));
+        const envelope = runValidate(parse("validate", [documentPath]));
         expect(envelope.ok).toBe(false);
+        expect(envelope.payload).toBeNull();
         expect(envelope.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: DiagnosticCode.CycleDetected })]));
-    });
-
-    it("reports a missing document path as MISSING_ARGUMENT", () => {
-        const envelope = runValidate(args([]));
-        expect(envelope.ok).toBe(false);
-        expect(envelope.diagnostics).toEqual(
-            expect.arrayContaining([expect.objectContaining({ code: CliCode.MissingArgument })]),
-        );
     });
 });
 
@@ -272,7 +291,7 @@ describe("emit", () => {
     it("emits a v1 numeric document deterministically with identity = SHA-256(exact bytes)", () => {
         const documentPath = stage("emit/numeric-v1.json", numericV1Document());
         const descriptorPath = stage("emit/desc-v1.json", canonicalV1Fixture);
-        const envelope = runEmit(args([documentPath, "--descriptor", descriptorPath]));
+        const envelope = runEmit(parse("emit", [documentPath, "--descriptor", descriptorPath]));
         expect(envelope.ok).toBe(true);
         const payload = envelope.payload as { source: string; generatedSourceIdentity: string; sourceMap: readonly unknown[] };
         expect(payload.source).toContain("EvaluateSurface");
@@ -284,15 +303,15 @@ describe("emit", () => {
     it("produces byte-identical envelopes for identical requests (determinism)", () => {
         const documentPath = stage("emit/numeric-v1-determinism.json", numericV1Document());
         const descriptorPath = stage("emit/desc-v1-determinism.json", canonicalV1Fixture);
-        const first = serializeEnvelope(runEmit(args([documentPath, "--descriptor", descriptorPath])), true);
-        const second = serializeEnvelope(runEmit(args([documentPath, "--descriptor", descriptorPath])), true);
+        const first = serializeEnvelope(runEmit(parse("emit", [documentPath, "--descriptor", descriptorPath])), true);
+        const second = serializeEnvelope(runEmit(parse("emit", [documentPath, "--descriptor", descriptorPath])), true);
         expect(first).toBe(second);
     });
 
     it("emits the v2 texture document with the contract-driven spelling", () => {
         const documentPath = stage("emit/texture-v2.json", textureV2Document());
         const descriptorPath = stage("emit/desc-v2.json", canonicalV2Fixture);
-        const envelope = runEmit(args([documentPath, "--descriptor", descriptorPath]));
+        const envelope = runEmit(parse("emit", [documentPath, "--descriptor", descriptorPath]));
         expect(envelope.ok).toBe(true);
         const payload = envelope.payload as { source: string };
         expect(payload.source).toContain("float4 v_n_smp = gglab_sampleTexture2D(v_n_tp, v_n_uv);");
@@ -307,8 +326,9 @@ describe("emit", () => {
         const descriptor = { ...canonicalV1Fixture, profileVersion: 2 };
         const documentPath = stage("emit/texture-v2-missing.json", textureV2Document());
         const descriptorPath = stage("emit/desc-missing.json", descriptor);
-        const envelope = runEmit(args([documentPath, "--descriptor", descriptorPath]));
+        const envelope = runEmit(parse("emit", [documentPath, "--descriptor", descriptorPath]));
         expect(envelope.ok).toBe(false);
+        expect(envelope.payload).toBeNull();
         expect(envelope.diagnostics).toEqual([
             expect.objectContaining({
                 code: DiagnosticCode.MissingProfileCapability,
@@ -326,8 +346,9 @@ describe("emit", () => {
         const descriptor = { ...canonicalV2Fixture, profileVersion: 1 };
         const documentPath = stage("emit/numeric-v1-forbidden.json", numericV1Document());
         const descriptorPath = stage("emit/desc-forbidden.json", descriptor);
-        const envelope = runEmit(args([documentPath, "--descriptor", descriptorPath]));
+        const envelope = runEmit(parse("emit", [documentPath, "--descriptor", descriptorPath]));
         expect(envelope.ok).toBe(false);
+        expect(envelope.payload).toBeNull();
         expect(envelope.diagnostics).toEqual([
             expect.objectContaining({
                 code: DiagnosticCode.ForbiddenProfileCapability,
@@ -337,21 +358,24 @@ describe("emit", () => {
         ]);
     });
 
-    it("requires exactly one descriptor source (MISSING_OPTION when none, INVALID_ARGUMENT when both)", () => {
+    it("requires exactly one descriptor source (MISSING_OPTION / INVALID_ARGUMENT; failure envelopes have no payload)", () => {
         const documentPath = stage("emit/numeric-v1-opts.json", numericV1Document());
-        const none = runEmit(args([documentPath]));
+        const none = runEmit(parse("emit", [documentPath]));
         expect(none.ok).toBe(false);
+        expect(none.payload).toBeNull();
         expect(none.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: CliCode.MissingOption })]));
 
-        const both = runEmit(args([documentPath, "--descriptor", "a.json", "--descriptors-dir", "b/"]));
+        const both = runEmit(parse("emit", [documentPath, "--descriptor", "a.json", "--descriptors-dir", "b/"]));
         expect(both.ok).toBe(false);
+        expect(both.payload).toBeNull();
         expect(both.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: CliCode.InvalidArgument })]));
     });
 
-    it("reports an unreadable descriptor file as FILE_NOT_FOUND (structured)", () => {
+    it("reports an unreadable descriptor file as FILE_NOT_FOUND (semantic failure class, no payload)", () => {
         const documentPath = stage("emit/numeric-v1-io.json", numericV1Document());
-        const envelope = runEmit(args([documentPath, "--descriptor", join(stageRoot, "does-not-exist.json")]));
+        const envelope = runEmit(parse("emit", [documentPath, "--descriptor", join(stageRoot, "does-not-exist.json")]));
         expect(envelope.ok).toBe(false);
+        expect(envelope.payload).toBeNull();
         expect(envelope.diagnostics).toEqual(
             expect.arrayContaining([expect.objectContaining({ code: CliCode.FileNotFound, dataPath: "$.descriptor" })]),
         );
@@ -363,7 +387,7 @@ describe("emit", () => {
 describe("descriptor", () => {
     it("inspects a v1 instance: texture-signature contract not serialized", () => {
         const descriptorPath = stage("descriptor/desc-v1.json", canonicalV1Fixture);
-        const envelope = runDescriptor(args([descriptorPath]));
+        const envelope = runDescriptor(parse("descriptor", [descriptorPath]));
         expect(envelope.ok).toBe(true);
         const payload = envelope.payload as Record<string, unknown> & {
             descriptorVersion: number;
@@ -383,7 +407,7 @@ describe("descriptor", () => {
 
     it("inspects a v2 instance: texture-signature contract serialized", () => {
         const descriptorPath = stage("descriptor/desc-v2.json", canonicalV2Fixture);
-        const envelope = runDescriptor(args([descriptorPath]));
+        const envelope = runDescriptor(parse("descriptor", [descriptorPath]));
         expect(envelope.ok).toBe(true);
         const payload = envelope.payload as { descriptorVersion: number; textureSignatureSerialized: boolean };
         expect(payload.descriptorVersion).toBe(2);
@@ -391,7 +415,7 @@ describe("descriptor", () => {
     });
 });
 
-// --- discovery (selection rule) ---------------------------------------------
+// --- discovery (selection rule + explicit considered surfacing) ---------------
 
 describe("descriptor discovery", () => {
     function buildTree(): string {
@@ -408,32 +432,90 @@ describe("descriptor discovery", () => {
         return base;
     }
 
-    it("selects the highest supported descriptorVersion within the requested profile line", () => {
+    it("selects the highest supported descriptorVersion within the requested profile line, and surfaces every considered candidate", () => {
         const base = buildTree();
         const documentPath = stage("discovery/doc-v2.json", textureV2Document());
-        const envelope = runEmit(args([documentPath, "--descriptors-dir", base]));
+        const envelope = runEmit(parse("emit", [documentPath, "--descriptors-dir", base]));
         expect(envelope.ok).toBe(true);
-        const payload = envelope.payload as { descriptor: string };
+        const payload = envelope.payload as { descriptor: string; descriptorResolution: { selected: string; considered: readonly { instancePath: string; supported: boolean; failure: string | undefined }[] } };
         expect(payload.descriptor).toBe(join(base, "GGLab.Surface", "2", "descriptor.json"));
+        expect(payload.descriptorResolution.selected).toBe(join(base, "GGLab.Surface", "2", "descriptor.json"));
+        const considered = payload.descriptorResolution.considered;
+        expect(considered).toHaveLength(4);
+        const v3 = considered.find((candidate) => candidate.instancePath.endsWith(join("3", "descriptor.json")));
+        expect(v3 !== undefined).toBe(true);
+        if (v3 !== undefined) {
+            expect(v3.supported).toBe(false);
+            expect(v3.failure).toBe(DiagnosticCode.UnsupportedDescriptorVersion);
+        }
     });
 
     it("never crosses profile lines: the v1 line resolves to the descriptorVersion-1 instance only", () => {
         const base = buildTree();
         const documentPath = stage("discovery/doc-v1.json", numericV1Document());
-        const envelope = runValidate(args([documentPath, "--descriptors-dir", base]));
+        const envelope = runValidate(parse("validate", [documentPath, "--descriptors-dir", base]));
         expect(envelope.ok).toBe(true);
-        expect((envelope.payload as { descriptor: string }).descriptor).toBe(join(base, "GGLab.Surface", "1", "descriptor.json"));
+        const payload = envelope.payload as { descriptor: string; descriptorResolution: { selected: string } };
+        expect(payload.descriptor).toBe(join(base, "GGLab.Surface", "1", "descriptor.json"));
+        expect(payload.descriptorResolution.selected).toBe(join(base, "GGLab.Surface", "1", "descriptor.json"));
     });
 
-    it("fails explicitly (DESCRIPTOR_NOT_RESOLVED) when the requested line has no supported instance", () => {
+    it("fails explicitly (DESCRIPTOR_NOT_RESOLVED, no payload) when the requested line has no supported instance", () => {
         const base = buildTree();
         const document = { ...textureV2Document(), profileVersion: 3 } as Record<string, unknown>;
         const documentPath = stage("discovery/doc-v3.json", document);
-        const envelope = runValidate(args([documentPath, "--descriptors-dir", base]));
+        const envelope = runValidate(parse("validate", [documentPath, "--descriptors-dir", base]));
         expect(envelope.ok).toBe(false);
+        expect(envelope.payload).toBeNull();
         expect(envelope.diagnostics).toEqual(
             expect.arrayContaining([expect.objectContaining({ code: CliCode.DescriptorNotResolved })]),
         );
+        expect(classifyExitCode(envelope)).toBe(1); // well-formed request, unsatisfied environment
+    });
+});
+
+// --- envelope invariant + exit-code classification ----------------------------
+
+describe("machine protocol invariants", () => {
+    it("buildEnvelope centrally nulls the payload on failure", () => {
+        const success = buildEnvelope("emit", [], { source: "x" });
+        expect(success.ok).toBe(true);
+        expect(success.payload).toEqual({ source: "x" });
+        const failure = buildEnvelope("emit", [{ code: DiagnosticCode.CycleDetected, severity: "error", message: "cycle", dataPath: "$" }], { source: "x" });
+        expect(failure.ok).toBe(false);
+        expect(failure.payload).toBeNull();
+    });
+
+    it("classifies exit codes: usage only => 2, semantic/environment => 1, success => 0", () => {
+        expect(classifyExitCode(buildEnvelope("emit", [], {}))).toBe(0);
+        expect(
+            classifyExitCode(
+                buildEnvelope("emit", [{ code: CliCode.InvalidArgument, severity: "error", message: "x", dataPath: "$" }], null),
+            ),
+        ).toBe(2);
+        expect(
+            classifyExitCode(
+                buildEnvelope("emit", [{ code: CliCode.MissingOption, severity: "error", message: "x", dataPath: "$" }], null),
+            ),
+        ).toBe(2);
+        expect(
+            classifyExitCode(
+                buildEnvelope("emit", [{ code: CliCode.FileNotFound, severity: "error", message: "x", dataPath: "$" }], null),
+            ),
+        ).toBe(1);
+        expect(
+            classifyExitCode(
+                buildEnvelope("emit", [{ code: DiagnosticCode.MissingProfileCapability, severity: "error", message: "x", dataPath: "$" }], null),
+            ),
+        ).toBe(1);
+        expect(
+            classifyExitCode(
+                buildEnvelope("emit", [
+                    { code: CliCode.InvalidArgument, severity: "error", message: "x", dataPath: "$" },
+                    { code: DiagnosticCode.TypeMismatch, severity: "error", message: "y", dataPath: "$" },
+                ], null),
+            ),
+        ).toBe(1); // a real failure in the mix is never masked as usage
     });
 });
 
@@ -471,9 +553,29 @@ describe("main", () => {
         expect(envelope.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: "INVALID_ARGUMENT" })]));
     });
 
-    it("returns code 0 with a JSON envelope on success", () => {
+    it("returns code 2 when the invocation is malformed (missing positional)", () => {
+        const result = runMain(["emit"]);
+        expect(result.code).toBe(2);
+        const envelope = JSON.parse(result.text) as { ok: boolean; payload: unknown; diagnostics: readonly { code: string }[] };
+        expect(envelope.ok).toBe(false);
+        expect(envelope.payload).toBeNull();
+        expect(envelope.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: "MISSING_ARGUMENT" })]));
+    });
+
+    it("returns code 2 for a typo'd option — and never a green result", () => {
         const documentPath = stage("main/numeric-v1.json", numericV1Document());
         const descriptorPath = stage("main/desc-v1.json", canonicalV1Fixture);
+        const result = runMain(["validate", documentPath, "--descripter", descriptorPath]);
+        expect(result.code).toBe(2);
+        const envelope = JSON.parse(result.text) as { ok: boolean; payload: unknown; diagnostics: readonly { code: string }[] };
+        expect(envelope.ok).toBe(false);
+        expect(envelope.payload).toBeNull();
+        expect(envelope.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: "INVALID_ARGUMENT" })]));
+    });
+
+    it("returns code 0 with a JSON envelope on success", () => {
+        const documentPath = stage("main/numeric-v1-ok.json", numericV1Document());
+        const descriptorPath = stage("main/desc-v1-ok.json", canonicalV1Fixture);
         const result = runMain(["emit", documentPath, "--descriptor", descriptorPath]);
         expect(result.code).toBe(0);
         const envelope = JSON.parse(result.text) as { ok: boolean; command: string; payload: { source: string } };
@@ -482,12 +584,13 @@ describe("main", () => {
         expect(envelope.payload.source).toContain("EvaluateSurface");
     });
 
-    it("returns code 1 with diagnostic payloads on command failure", () => {
+    it("returns code 1 with semantic diagnostics and no payload on command failure", () => {
         const documentPath = stage("main/cycle.json", cycleV1Document());
         const result = runMain(["validate", documentPath]);
         expect(result.code).toBe(1);
-        const envelope = JSON.parse(result.text) as { ok: boolean; diagnostics: readonly { code: string }[] };
+        const envelope = JSON.parse(result.text) as { ok: boolean; payload: unknown; diagnostics: readonly { code: string }[] };
         expect(envelope.ok).toBe(false);
+        expect(envelope.payload).toBeNull();
         expect(envelope.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: DiagnosticCode.CycleDetected })]));
     });
 });
