@@ -27,5 +27,6 @@ export * from "./graph-document.js";
 export * from "./validation.js";
 export * from "./topology.js";
 export * from "./graph-type-resolution.js";
+export * from "./profile-conformance.js";
 export * from "./hlsl-emitter.js";
 export * from "./sha256.js";

@@ -614,9 +614,11 @@ inference result**: the document declares it, and the core, the emitter, and
 any future Material Program binding consume the same declared value. A
 parameter's type must not change because a wire is reconnected, re-typed, or
 removed. The `(class, valueType)` pairing is checked for profile conformance
-against the descriptor's `parameterClasses` on the descriptor-aware path
-(emission); that vocabulary is descriptor data and is not hardcoded into
-ordinary graph validation.
+against the descriptor's `parameterClasses` by one shared core service
+consumed by emission, the GUI, and the CLI — the GUI must be able to report
+"the profile does not permit this pair" without pretending to compile HLSL.
+That vocabulary is descriptor data and is not hardcoded into ordinary graph
+validation.
 
 Generated HLSL symbols must not depend on a mutable display label. The v1 emitter derives parameter symbols from stable semantic identity using a deterministic ASCII-safe encoding or deterministic emission key. The exact spelling scheme is implementation detail, but renaming a display label alone must not silently change generated symbol identity or Shader semantics.
 
@@ -742,7 +744,10 @@ There is exactly one type-resolution authority in the core: a single forward
 service resolves every node's output ports to concrete value types on a
 port-level basis `(node, port)`, and the emitter and the UI both ask that
 same service — neither re-derives types, so the coercion table stays in one
-core place. Type resolution is not emittability: a port can resolve to a
+core place. The same one-authority rule applies to profile conformance: the
+`(class, valueType)` pairing of declared parameters is checked by one shared
+descriptor-aware service consumed by the emitter and the GUI, not embedded
+in emission. Type resolution is not emittability: a port can resolve to a
 type even when a later emission gate refuses to lower the node (v1 defers
 texture sampling, while `SampleTexture2D`'s `RGBA`/`RGB`/`R`/`G`/`B`/`A`
 ports still resolve per port).

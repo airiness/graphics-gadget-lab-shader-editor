@@ -38,13 +38,19 @@
  *   the texture-sampling contract, after the descriptor freeze.
  * - Graph parameter types are authored, not inferred: every parameter entry
  *   declares a concrete `valueType` (core value vocabulary, enforced at
- *   parse time). Emission checks that (class, valueType) pairing against the
- *   descriptor's `parameterClasses` — profile conformance, not dataflow
- *   guessing. A class the descriptor defers or does not define is a
- *   structured UNSUPPORTED_PARAMETER_CLASS error, and a valueType the
+ *   parse time). The (class, valueType) pairing is checked by the shared
+ *   `checkProfileConformance` service (profile-conformance.ts) against the
+ *   descriptor's `parameterClasses` — the same authority the GUI and CLI
+ *   consume, so "the profile does not permit this pair" is never
+ *   something emission alone can report, and the GUI never has to fake a
+ *   compile to hear it. A class the descriptor defers or does not define
+ *   is a structured UNSUPPORTED_PARAMETER_CLASS error, and a valueType the
  *   profile's class does not permit is a structured
  *   UNSUPPORTED_PARAMETER_TYPE error; neither is ever substituted or
- *   re-derived from how the parameter is used.
+ *   re-derived from how the parameter is used. Emission consumes the
+ *   verdicts and adds one v1 contract decision: resource classes (texture
+ *   bindings) contribute no signature line while the generated resource
+ *   spelling stays unfrozen.
  * - Binary math operations follow the documented conservative result rule
  *   (§11.2), applied by the type resolution service: identical vectors
  *   keep the type, a scalar widens to the vector operand, and distinct
@@ -83,6 +89,7 @@ import type { SurfaceProfileDescriptor } from "./surface-profile-descriptor.js";
 import { sha256Hex, utf8Encode } from "./sha256.js";
 import { resolveGraphTopology } from "./topology.js";
 import { resolveGraphTypes } from "./graph-type-resolution.js";
+import { checkProfileConformance } from "./profile-conformance.js";
 import { validateShaderGraph } from "./validation.js";
 
 /** What a generated-source range stands for (architecture §24 "semantic role"). */
@@ -244,65 +251,20 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
     // Canonical parameter order: stable-id sorted. The persisted
     // parameters[] array order is incidental serialization, so emission
     // (signature lines, diagnostics) must not follow it.
-    const parameterIndexById = new Map<string, number>(document.parameters.map((parameter, index) => [parameter.id, index]));
     const canonicalParameters = [...new Set(document.parameters.map((parameter) => parameter.id))].sort().flatMap((id) => {
         const parameter = document.parameters.find((entry) => entry.id === id);
         return parameter === undefined ? [] : [parameter];
     });
 
-    // Graph parameter signature types: the authored concrete type on the
-    // parameter entry (vocabulary enforced at parse time), conformance-checked
-    // against the descriptor's `parameterClasses`. The pairing check is
-    // profile conformance; no type is ever derived from usage.
-    const parameterTypeById = new Map<string, string>();
-    for (const parameter of canonicalParameters) {
-        const index = parameterIndexById.get(parameter.id) ?? 0;
-        const classEntry = descriptor.parameterClasses.find((entry) => entry.class === parameter.class);
-        if (classEntry === undefined) {
-            const deferred = descriptor.deferred.parameterClasses.includes(parameter.class);
-            diagnostics.push(
-                errorAt(
-                    `$.parameters[${index}]`,
-                    DiagnosticCode.UnsupportedParameterClass,
-                    `Graph parameter "${parameter.id}" uses class "${parameter.class}"${deferred ? " that is in the descriptor's deferred set" : " that the descriptor does not define"}; the emission cannot type it.`,
-                ),
-            );
-            continue;
-        }
-        if (classEntry.valueType !== undefined) {
-            // Resource class (for example Texture2D): conformance still
-            // applies — the authored type must be the class's declared
-            // resource type — but v1 contributes no signature line, because
-            // the generated spelling for a texture+sampler binding is not
-            // frozen; its nodes are refused explicitly during lowering.
-            if (classEntry.valueType !== parameter.valueType) {
-                diagnostics.push(
-                    errorAt(
-                        `$.parameters[${index}]`,
-                        DiagnosticCode.UnsupportedParameterType,
-                        `Graph parameter "${parameter.id}" declares valueType "${parameter.valueType}", but class "${parameter.class}" in this profile is typed "${classEntry.valueType}".`,
-                    ),
-                );
-            }
-            continue;
-        }
-        const allowed = classEntry.valueTypes ?? [];
-        if (!allowed.includes(parameter.valueType)) {
-            diagnostics.push(
-                errorAt(
-                    `$.parameters[${index}]`,
-                    DiagnosticCode.UnsupportedParameterType,
-                    `Graph parameter "${parameter.id}" declares valueType "${parameter.valueType}", but class "${parameter.class}" in this profile permits only ${allowed.map((type) => `"${type}"`).join(", ")}.`,
-                ),
-            );
-            continue;
-        }
-        parameterTypeById.set(parameter.id, parameter.valueType);
-    }
-
-    if (diagnostics.length > 0) {
+    // Profile conformance: the (class, valueType) pairing authority shared
+    // with the GUI/CLI. Emission consumes the verdicts; it does not
+    // re-derive them.
+    const conformance = checkProfileConformance(document, descriptor);
+    if (conformance.diagnostics.length > 0) {
+        diagnostics.push(...conformance.diagnostics);
         return fail(diagnostics);
     }
+    const conformanceById = new Map(conformance.parameters.map((entry) => [entry.parameterId, entry]));
 
     // Port-aware type resolution: the core's single type authority. Emission
     // only consumes the resolved (node, port) → type results; it does not
@@ -568,11 +530,14 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
     const functionName = descriptor.generatedFunction.name;
     const signatureEntries: { readonly text: string; readonly range: Omit<ShaderGraphSourceMapRange, "startLine" | "startColumn" | "endLine" | "endColumn"> }[] = [];
     for (const parameter of canonicalParameters) {
-        const type = parameterTypeById.get(parameter.id);
-        if (type === undefined) {
-            continue; // resource parameter (no v1 spelling)
+        // The verdict comes from the shared conformance service; v1 adds
+        // one contract decision: resource classes contribute no signature
+        // line while the generated resource spelling stays unfrozen.
+        const verdict = conformanceById.get(parameter.id);
+        if (verdict === undefined || verdict.resourceClass) {
+            continue;
         }
-        signatureEntries.push({ text: `    ${type} ${signatureSymbols.get(parameter.id) ?? "?"}`, range: { role: "graphParameterDeclaration", parameterId: parameter.id } });
+        signatureEntries.push({ text: `    ${verdict.valueType} ${signatureSymbols.get(parameter.id) ?? "?"}`, range: { role: "graphParameterDeclaration", parameterId: parameter.id } });
     }
     descriptor.graphVisibleInputs.forEach((input) => {
         signatureEntries.push({
