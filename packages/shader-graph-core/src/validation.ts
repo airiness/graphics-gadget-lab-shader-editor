@@ -177,6 +177,22 @@ export function validateShaderGraph(document: ShaderGraphDocument): ValidationRe
                         `Node "${node.id}" (${node.type}) references unknown graph parameter "${value}".`,
                     ),
                 );
+                continue;
+            }
+            if (reference.target === "parameter") {
+                // v1 invariant: a parameter-declaring node's type name is
+                // the parameter class it declares; a mismatch means the
+                // node and the document entry cannot both be correct.
+                const parameter = document.parameters.find((entry) => entry.id === value);
+                if (parameter !== undefined && parameter.class !== node.type) {
+                    diagnostics.push(
+                        errorAt(
+                            `$.nodes[${nodeIndex}]`,
+                            DiagnosticCode.ParameterClassMismatch,
+                            `Node "${node.id}" (${node.type}) references graph parameter "${value}", which is declared with class "${parameter.class}".`,
+                        ),
+                    );
+                }
             }
         }
     });

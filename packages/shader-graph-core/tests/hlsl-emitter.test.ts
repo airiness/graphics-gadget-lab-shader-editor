@@ -4,6 +4,8 @@ import {
     emitHlsl,
     parseShaderGraphDocument,
     parseSurfaceProfileDescriptor,
+    sha256Hex,
+    utf8Encode,
 } from "../src/index.js";
 import type { HlslEmission, SurfaceProfileDescriptor } from "../src/index.js";
 import { canonicalV1Fixture } from "./fixtures/descriptor-v1.js";
@@ -86,8 +88,9 @@ describe("emitHlsl", () => {
                 "};",
                 "",
                 "SurfaceData EvaluateSurface(",
-                "    float3 gglab_p_tint,",
+                // Canonical stable-id order: "p.metal" < "p.tint".
                 "    float gglab_p_metal,",
+                "    float3 gglab_p_tint,",
                 "    float2 gglab_uv0",
                 ")",
                 "{",
@@ -107,12 +110,23 @@ describe("emitHlsl", () => {
                 "",
             ].join("\n"),
         );
+        const map = result.sourceMap;
+        expect(map).not.toBeNull();
+        if (map !== null) {
+            // The durable generated-source identity is the exact-byte SHA-256.
+            expect(map.generatedSourceIdentity).toMatch(/^[0-9a-f]{64}$/);
+            expect(map.generatedSourceIdentity).toBe(sha256Hex(utf8Encode(result.source)));
+        }
     });
 
     it("is byte-stable under incidental array order", () => {
         const reference = emitParsed(baseJson);
         expect(reference.ok).toBe(true);
-        const variant = (nodeOrder: "keep" | "reverse", connectionOrder: "keep" | "reverse"): HlslEmission => {
+        const variant = (
+            nodeOrder: "keep" | "reverse",
+            connectionOrder: "keep" | "reverse",
+            parameterOrder: "keep" | "reverse",
+        ): HlslEmission => {
             const raw = JSON.parse(baseJson) as Record<string, unknown>;
             if (nodeOrder === "reverse") {
                 raw["nodes"] = [...(raw["nodes"] as unknown[])].reverse();
@@ -120,9 +134,17 @@ describe("emitHlsl", () => {
             if (connectionOrder === "reverse") {
                 raw["connections"] = [...(raw["connections"] as unknown[])].reverse();
             }
+            if (parameterOrder === "reverse") {
+                raw["parameters"] = [...(raw["parameters"] as unknown[])].reverse();
+            }
             return emitParsed(JSON.stringify(raw));
         };
-        for (const check of [variant("reverse", "keep"), variant("keep", "reverse"), variant("reverse", "reverse")]) {
+        for (const check of [
+            variant("reverse", "keep", "keep"),
+            variant("keep", "reverse", "keep"),
+            variant("keep", "keep", "reverse"),
+            variant("reverse", "reverse", "reverse"),
+        ]) {
             expect(check.ok).toBe(true);
             // Byte identity is the strongest form of the deterministic-
             // emission invariant; the SHA-256 durable identity (AGENTS.md)
@@ -147,38 +169,82 @@ describe("emitHlsl", () => {
         expect(renamed.source).toBe(reference.source);
     });
 
-    it("reports an exact source map: spans with a single identity each", () => {
+    it("reports the §24 source map: roles, line/column spans, and coherent identities", () => {
         const result = emitParsed(baseJson);
-        const entries = result.sourceMap;
+        const map = result.sourceMap;
+        expect(map).not.toBeNull();
         const source = result.source;
-        // 5 node statements + 5 output assignments + 3 signature lines.
-        expect(entries).toHaveLength(13);
-        let previousEnd = 0;
-        for (const entry of entries) {
-            expect(entry.start).toBeGreaterThanOrEqual(previousEnd);
-            expect(entry.end).toBeGreaterThan(entry.start);
-            expect(entry.end).toBeLessThanOrEqual(source.length);
-            previousEnd = entry.end;
-            let identities = 0;
-            if (entry.nodeId !== undefined) {
-                identities += 1;
-                expect(entry.portId).toBe("value");
-            }
-            if (entry.parameterId !== undefined) {
-                identities += 1;
-            }
-            if (entry.graphVisibleInputId !== undefined) {
-                identities += 1;
-            }
-            expect(identities).toBe(1);
+        const sourceLines = source.split("\n");
+        if (map === null) {
+            throw new Error("unreachable");
         }
-        const parameterEntry = entries.find((entry) => entry.parameterId === "p.tint");
-        expect(parameterEntry).toBeDefined();
-        if (parameterEntry !== undefined) {
-            expect(source.slice(parameterEntry.start, parameterEntry.end)).toContain("gglab_p_tint");
+        const ranges = map.ranges;
+        // 5 profile fields + function declaration + 2 parameter declarations
+        // + 1 visible-input declaration + 5 node statements + 5 assignments.
+        expect(ranges).toHaveLength(19);
+        let previousLine = 0;
+        for (const range of ranges) {
+            // Ranges follow source order; each spans its single generated line.
+            expect(range.startLine).toBeGreaterThan(previousLine);
+            previousLine = range.startLine;
+            expect(range.endLine).toBe(range.startLine);
+            expect(range.startColumn).toBe(1);
+            const lineText = sourceLines[range.startLine - 1];
+            if (lineText === undefined) {
+                throw new Error("unreachable");
+            }
+            expect(range.endColumn).toBe(lineText.length + 1);
+            // Role/identity coherence.
+            switch (range.role) {
+                case "nodeValueStatement":
+                case "requiredOutputAssignment":
+                    expect(range.nodeId).toBeDefined();
+                    expect(range.portId).toBe("value");
+                    expect(range.parameterId).toBeUndefined();
+                    expect(range.graphVisibleInputId).toBeUndefined();
+                    break;
+                case "graphParameterDeclaration":
+                    expect(range.parameterId).toBeDefined();
+                    expect(range.nodeId).toBeUndefined();
+                    break;
+                case "graphVisibleInputDeclaration":
+                    expect(range.graphVisibleInputId).toBeDefined();
+                    expect(range.nodeId).toBeUndefined();
+                    break;
+                case "requiredOutputField":
+                case "include":
+                    expect(range.name).toBeDefined();
+                    expect(range.nodeId).toBeUndefined();
+                    break;
+                case "generatedFunctionDeclaration":
+                    expect(range.nodeId).toBeUndefined();
+                    expect(range.parameterId).toBeUndefined();
+                    break;
+            }
         }
-        const nodeEntry = entries.find((entry) => entry.nodeId === "n.m");
-        expect(nodeEntry).toBeUndefined();
+        const lineAt = (line: number): string => {
+            const text = sourceLines[line - 1];
+            if (text === undefined) {
+                throw new Error("unreachable");
+            }
+            return text;
+        };
+        // Spans land on their symbols.
+        const parameterRange = ranges.find((range) => range.parameterId === "p.tint");
+        expect(parameterRange).toBeDefined();
+        if (parameterRange !== undefined) {
+            expect(lineAt(parameterRange.startLine)).toContain("gglab_p_tint");
+        }
+        const statementRange = ranges.find((range) => range.nodeId === "n.c");
+        expect(statementRange).toBeDefined();
+        if (statementRange !== undefined) {
+            expect(lineAt(statementRange.startLine)).toContain("v_n_c");
+        }
+        const assignmentRange = ranges.find((range) => range.role === "requiredOutputAssignment" && range.name === "Metallic");
+        expect(assignmentRange).toBeDefined();
+        if (assignmentRange !== undefined) {
+            expect(lineAt(assignmentRange.startLine)).toContain("surface.Metallic");
+        }
     });
 
     it("sanitizes parameter ids to ASCII-safe, collision-free symbols", () => {
@@ -238,16 +304,18 @@ describe("emitHlsl", () => {
 
     it("refuses a parameter class in the descriptor's deferred set", () => {
         const result = emitVariant((document) => {
-            const parameters = document["parameters"] as Record<string, unknown>[];
-            expectElement(parameters, 1)["class"] = "BoolParameter";
+            // A parameter entry nobody declares: exercises the class gate
+            // without tripping the parameter-node class-mismatch check.
+            (document["parameters"] as Record<string, unknown>[]).push({ id: "p.flag", name: "Flag", class: "BoolParameter" });
         });
         expect(result.ok).toBe(false);
         expect(result.source).toBe("");
+        expect(result.sourceMap).toBeNull();
         expect(result.diagnostics).toEqual([
             expect.objectContaining({
                 code: DiagnosticCode.UnsupportedParameterClass,
                 severity: "error",
-                dataPath: "$.parameters[1]",
+                dataPath: "$.parameters[2]",
                 message: expect.stringContaining("deferred"),
             }),
         ]);
@@ -414,6 +482,57 @@ describe("emitHlsl", () => {
         expect(result.diagnostics).toHaveLength(5);
         expect(result.diagnostics).toContainEqual(
             expect.objectContaining({ code: DiagnosticCode.CycleDetected, severity: "error" }),
+        );
+    });
+
+    it("refuses a live node whose version is outside its definition's supported range", () => {
+        const result = emitVariant((document) => {
+            const nodes = document["nodes"] as Record<string, unknown>[];
+            const float = nodes.find((node) => node["id"] === "n.c");
+            if (float !== undefined) {
+                float["version"] = 2; // v1 supports 1..1 only
+            }
+        });
+        expect(result.ok).toBe(false);
+        expect(result.source).toBe("");
+        expect(result.sourceMap).toBeNull();
+        expect(result.diagnostics).toEqual([
+            expect.objectContaining({
+                code: DiagnosticCode.UnknownNodeVersion,
+                severity: "error",
+                dataPath: "$.nodes[2]",
+            }),
+        ]);
+    });
+
+    it("refuses a parameter node whose class does not match the referenced parameter entry", () => {
+        const result = emitVariant((document) => {
+            const parameters = document["parameters"] as Record<string, unknown>[];
+            // n.sf is a ScalarParameter node referencing "p.metal";
+            // redeclare that entry as a VectorParameter.
+            expectElement(parameters, 1)["class"] = "VectorParameter";
+        });
+        expect(result.ok).toBe(false);
+        expect(result.sourceMap).toBeNull();
+        expect(result.diagnostics).toEqual([
+            expect.objectContaining({
+                code: DiagnosticCode.ParameterClassMismatch,
+                severity: "error",
+                dataPath: "$.nodes[1]",
+            }),
+        ]);
+    });
+
+    it("carries structural validation warnings through on successful emission", () => {
+        const result = emitVariant((document) => {
+            // A dead node of unknown type: warning, never on the live path.
+            (document["nodes"] as Record<string, unknown>[]).push({ id: "n.ghost", type: "MysteryNode", version: 1, properties: {} });
+        });
+        expect(result.ok).toBe(true);
+        expect(result.sourceMap).not.toBeNull();
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({ code: DiagnosticCode.UnknownNodeType, severity: "warning" }),
         );
     });
 });

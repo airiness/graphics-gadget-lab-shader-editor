@@ -68,6 +68,7 @@ export const DiagnosticCode = {
     AmbiguousParameterType: "AMBIGUOUS_PARAMETER_TYPE",
     UnsupportedNodeEmission: "UNSUPPORTED_NODE_EMISSION",
     AmbiguousOutputRoot: "AMBIGUOUS_OUTPUT_ROOT",
+    ParameterClassMismatch: "PARAMETER_CLASS_MISMATCH",
 } as const;
 
 export type DiagnosticCodeValue = (typeof DiagnosticCode)[keyof typeof DiagnosticCode];

@@ -22,21 +22,46 @@
  *   does not specify the generated-code spelling of the sampler input. That
  *   spelling is a cross-repository contract decision, not an implementation
  *   detail, and is not invented here.
- * - Vector graph parameter types are fixed by single-typed usage only.
- *   Conservative v1 typing does not perform dataflow inference (the deferred
- *   type-inference stage); an under-constrained parameter is a structured
- *   AMBIGUOUS_PARAMETER_TYPE error, never a silent type choice.
+ * - The value model is per node (one value symbol per lowered node). Any
+ *   live node whose definition declares more than one output port is
+ *   refused with an explicit UNSUPPORTED_NODE_EMISSION diagnostic rather than
+ *   silently lowered through the single-value path; multi-output nodes
+ *   (for example SampleTexture2D's RGBA/RGB/R/G/B/A) require the
+ *   per-(nodeId, portId) value model that the core type-model refactor
+ *   introduces before texture emission.
+ * - Vector graph parameter types are fixed by single-typed usage only
+ *   (INTERIM): conservative v1 typing does not perform dataflow inference,
+ *   and an under-constrained parameter is a structured
+ *   AMBIGUOUS_PARAMETER_TYPE error, never a silent type choice. This
+ *   inference is an interim mechanism until the document declares a
+ *   concrete value type on the graph parameter; it must be replaced, not
+ *   extended.
  * - Binary math operations follow the documented conservative result rule
  *   (§11.2): identical vectors keep the type, a scalar widens to the vector
  *   operand, and distinct vector sizes are a TYPE_MISMATCH.
+ * - Nodes whose version is outside their definition's supported range are
+ *   refused for emission (error) even though structural validation reports
+ *   them only as warnings: validation stays forward-compatible for
+ *   documents, emission must never silently reinterpret semantics it does
+ *   not implement.
+ *
+ * Source map (architecture §24, `ShaderGraphSourceMap`): `ranges[]` carry
+ * generated line/column ranges (1-based lines, 1-based columns, end
+ * column exclusive) plus the semantic role and the graph/profile
+ * identities the range stands for; `generatedSourceIdentity` is the SHA-256
+ * of the exact bytes (computed here by the core's dependency-free sha256
+ * implementation, keeping the core headless and runtime-dependency-free).
+ * Lines without a navigable identity (header comment, braces, the local
+ * surface object, the return) carry no range.
  *
  * Determinism (AGENTS.md invariants): identical semantic input yields
- * byte-identical HLSL; symbols derive from stable semantic ids (never
- * display labels), sanitized to ASCII identifiers and made collision-free
- * by a deterministic per-namespace rule; editor/presentation state never
- * reaches the output. The SHA-256 identity of the exact bytes is computed
- * by the consumer that persists the source, keeping the core headless and
- * dependency-free.
+ * byte-identical HLSL and source map; symbols derive from stable semantic
+ * ids (never display labels), sanitized to ASCII identifiers and made
+ * collision-free by a deterministic per-namespace rule; graph parameters
+ * appear in canonical stable-id order; editor/presentation state never
+ * reaches the output. On success, non-error diagnostics from structural
+ * validation (warnings for unknown nodes/versions outside the live path)
+ * are carried through to the emission result.
  */
 import type { ShaderGraphDiagnostic } from "./diagnostics.js";
 import { DiagnosticCode } from "./diagnostics.js";
@@ -47,32 +72,65 @@ import { isGraphType } from "./graph-types.js";
 import type { GraphType } from "./graph-types.js";
 import { getNodeDefinition } from "./node-definitions.js";
 import type { SurfaceProfileDescriptor } from "./surface-profile-descriptor.js";
+import { sha256Hex, utf8Encode } from "./sha256.js";
 import { resolveGraphTopology } from "./topology.js";
 import { validateShaderGraph } from "./validation.js";
 
-export interface HlslSourceMapEntry {
-    readonly start: number;
-    /** Exclusive end offset within the source text. */
-    readonly end: number;
-    /** A node statement: the node and the output port it produces. */
+/** What a generated-source range stands for (architecture §24 "semantic role"). */
+export type ShaderGraphSourceMapRole =
+    | "include"
+    | "requiredOutputField"
+    | "generatedFunctionDeclaration"
+    | "graphParameterDeclaration"
+    | "graphVisibleInputDeclaration"
+    | "nodeValueStatement"
+    | "requiredOutputAssignment";
+
+export interface ShaderGraphSourceMapRange {
+    /** 1-based. */
+    readonly startLine: number;
+    /** 1-based column of the first character of the range. */
+    readonly startColumn: number;
+    /** 1-based; ranges span a single generated line. */
+    readonly endLine: number;
+    /** Exclusive column just past the last character of the range. */
+    readonly endColumn: number;
+    readonly role: ShaderGraphSourceMapRole;
+    /** Graph-local node identity (roles that stand for a node). */
     readonly nodeId?: string;
+    /** Graph-local output port the range is tied to, when meaningful. */
     readonly portId?: string;
-    /** A graph-parameter function-parameter line. */
+    /** Graph parameter id (graphParameterDeclaration). */
     readonly parameterId?: string;
-    /** A graph-visible-input function-parameter line. */
+    /** Graph-visible input id (graphVisibleInputDeclaration). */
     readonly graphVisibleInputId?: string;
+    /** Profile-member name the range stands for (field name, include path). */
+    readonly name?: string;
+}
+
+/** Architecture §24: the frozen shape of the emitted source map. */
+export interface ShaderGraphSourceMap {
+    /** SHA-256 (lowercase hex) of the exact generated HLSL bytes. */
+    readonly generatedSourceIdentity: string;
+    readonly ranges: readonly ShaderGraphSourceMapRange[];
 }
 
 export interface HlslEmission {
     readonly ok: boolean;
+    /**
+     * Emission diagnostics: always the errors that blocked emission; on
+     * success, the non-error diagnostics carried from structural
+     * validation.
+     */
     readonly diagnostics: readonly ShaderGraphDiagnostic[];
     /** Exact generated HLSL text; empty unless `ok`. */
     readonly source: string;
-    readonly sourceMap: readonly HlslSourceMapEntry[];
+    /** Present with the source; null on failed emission. */
+    readonly sourceMap: ShaderGraphSourceMap | null;
 }
 
 function fail(diagnostics: readonly ShaderGraphDiagnostic[]): HlslEmission {
-    return { ok: false, diagnostics, source: "", sourceMap: [] };
+    return { ok: false, diagnostics, source: "", sourceMap: null };
 }
 
 function sanitizeIdentifier(id: string): string {
@@ -175,10 +233,20 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
     const liveSet = new Set<string>(liveIds);
     const rootId = topology.outputRootIds[0] as string;
 
+    // Canonical parameter order: stable-id sorted. The persisted
+    // parameters[] array order is incidental serialization, so emission
+    // (signature lines, diagnostics) must not follow it.
+    const parameterIndexById = new Map<string, number>(document.parameters.map((parameter, index) => [parameter.id, index]));
+    const canonicalParameters = [...new Set(document.parameters.map((parameter) => parameter.id))].sort().flatMap((id) => {
+        const parameter = document.parameters.find((entry) => entry.id === id);
+        return parameter === undefined ? [] : [parameter];
+    });
+
     // Graph parameter signature types: fixed by a single-type class, inferred
     // from single-typed usage for multi-type classes, refused otherwise.
     const parameterTypeById = new Map<string, string>();
-    document.parameters.forEach((parameter, index) => {
+    for (const parameter of canonicalParameters) {
+        const index = parameterIndexById.get(parameter.id) ?? 0;
         const classEntry = descriptor.parameterClasses.find((entry) => entry.class === parameter.class);
         if (classEntry === undefined) {
             const deferred = descriptor.deferred.parameterClasses.includes(parameter.class);
@@ -189,13 +257,13 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
                     `Graph parameter "${parameter.id}" uses class "${parameter.class}"${deferred ? " that is in the descriptor's deferred set" : " that the descriptor does not define"}; the emission cannot type it.`,
                 ),
             );
-            return;
+            continue;
         }
         if (classEntry.valueType !== undefined) {
             // Resource parameter (Texture2D): the v1 signature spelling for a
             // texture+sampler binding is not frozen; its nodes are refused
             // explicitly during lowering.
-            return;
+            continue;
         }
         const allowed = classEntry.valueTypes ?? [];
         if (allowed.length === 1) {
@@ -203,18 +271,19 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
             if (single !== undefined) {
                 parameterTypeById.set(parameter.id, single);
             }
-            return;
+            continue;
         }
         // Multi-type class: infer below.
-    });
+    }
 
-    document.parameters.forEach((parameter, index) => {
+    for (const parameter of canonicalParameters) {
+        const index = parameterIndexById.get(parameter.id) ?? 0;
         if (parameterTypeById.has(parameter.id)) {
-            return;
+            continue;
         }
         const classEntry = descriptor.parameterClasses.find((entry) => entry.class === parameter.class);
         if (classEntry === undefined || classEntry.valueType !== undefined) {
-            return; // resource or already diagnosed
+            continue; // resource or already diagnosed
         }
         const concrete = new Set<string>();
         let unconstrained = false;
@@ -255,12 +324,12 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
                     `Graph parameter "${parameter.id}" (${parameter.class}) has no single concrete type from its usage; v1 conservative typing does not infer dataflow types, so the parameter must feed exactly one single-typed port and no other ports.`,
                 ),
             );
-            return;
+            continue;
         }
         for (const type of concrete) {
             parameterTypeById.set(parameter.id, type);
         }
-    });
+    }
 
     if (diagnostics.length > 0) {
         return fail(diagnostics);
@@ -565,12 +634,39 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
             );
             continue;
         }
+        // Emission refuses node versions it does not implement, even though
+        // structural validation reports them only as warnings.
+        const versionRange = definition.versionRange;
+        if (node.version < versionRange.minimumVersion || node.version > versionRange.maximumVersion) {
+            diagnostics.push(
+                errorAt(
+                    nodePath(nodeId),
+                    DiagnosticCode.UnknownNodeVersion,
+                    `Node "${nodeId}" (${node.type}) has version ${node.version}, outside the supported range ${versionRange.minimumVersion}..${versionRange.maximumVersion}; emission cannot lower it.`,
+                ),
+            );
+            continue;
+        }
+        // Texture sampling: the v1 contract gap (generation-side sampler
+        // spelling) is the operative refusal reason for these node kinds.
         if (node.type === "Texture2DParameter" || node.type === "SampleTexture2D") {
             diagnostics.push(
                 errorAt(
                     nodePath(nodeId),
                     DiagnosticCode.UnsupportedNodeEmission,
                     `Node "${nodeId}" (${node.type}) requires the texture-sampling signature spelling, which the frozen v1 contract does not specify (samplerAuthoring is deferred and sampler resolution is owned by the material binding layer).`,
+                ),
+            );
+            continue;
+        }
+        // The value model is per node; any other multi-output node needs
+        // the per-(nodeId, portId) model and is refused explicitly.
+        if (definition.outputs.length > 1) {
+            diagnostics.push(
+                errorAt(
+                    nodePath(nodeId),
+                    DiagnosticCode.UnsupportedNodeEmission,
+                    `Node "${nodeId}" (${node.type}) declares ${definition.outputs.length} output ports; this emitter's value model is per node (single output), so multi-output node emission is refused explicitly.`,
                 ),
             );
             continue;
@@ -585,7 +681,7 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
     // The single output root assembles the descriptor's required outputs in
     // descriptor list order.
     const root = nodeById.get(rootId);
-    const assignments: { readonly text: string; readonly nodeId: string; readonly portId: string }[] = [];
+    const assignments: { readonly text: string; readonly nodeId: string; readonly portId: string; readonly name: string }[] = [];
     if (root !== undefined) {
         for (const requiredOutput of descriptor.requiredOutputs) {
             const connection = connections.find((candidate) => candidate.to.nodeId === root.id && candidate.to.portId === requiredOutput.name);
@@ -610,7 +706,7 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
             if (sourceSymbol === undefined) {
                 continue;
             }
-            assignments.push({ text: `    surface.${requiredOutput.name} = ${sourceSymbol};`, nodeId: connection.from.nodeId, portId: "value" });
+            assignments.push({ text: `    surface.${requiredOutput.name} = ${sourceSymbol};`, nodeId: connection.from.nodeId, portId: "value", name: requiredOutput.name });
         }
     }
 
@@ -621,62 +717,77 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
     // Assembly.
     const objectName = descriptor.generatedFunction.returnValue.objectName;
     const functionName = descriptor.generatedFunction.name;
-    const signatureEntries: { readonly text: string; readonly entry: Omit<HlslSourceMapEntry, "start" | "end"> }[] = [];
-    for (const parameter of document.parameters) {
+    const signatureEntries: { readonly text: string; readonly range: Omit<ShaderGraphSourceMapRange, "startLine" | "startColumn" | "endLine" | "endColumn"> }[] = [];
+    for (const parameter of canonicalParameters) {
         const type = parameterTypeById.get(parameter.id);
         if (type === undefined) {
             continue; // resource parameter (no v1 spelling)
         }
-        signatureEntries.push({ text: `    ${type} ${signatureSymbols.get(parameter.id) ?? "?"}`, entry: { parameterId: parameter.id } });
+        signatureEntries.push({ text: `    ${type} ${signatureSymbols.get(parameter.id) ?? "?"}`, range: { role: "graphParameterDeclaration", parameterId: parameter.id } });
     }
     descriptor.graphVisibleInputs.forEach((input) => {
         signatureEntries.push({
             text: `    ${input.type} ${signatureSymbols.get(input.id) ?? "?"}`,
-            entry: { graphVisibleInputId: input.id },
+            range: { role: "graphVisibleInputDeclaration", graphVisibleInputId: input.id },
         });
     });
     // Trailing comma: every entry except the overall last.
     const total = signatureEntries.length;
     const signatureLines = signatureEntries.map((entry, index) => ({
         text: index === total - 1 ? entry.text : `${entry.text},`,
-        entry: entry.entry,
+        range: entry.range,
     }));
 
     interface EmittedLine {
         readonly text: string;
-        readonly entry?: Omit<HlslSourceMapEntry, "start" | "end">;
+        /** Present when the line stands for a navigable graph/profile identity. */
+        readonly range?: Omit<ShaderGraphSourceMapRange, "startLine" | "startColumn" | "endLine" | "endColumn">;
     }
     const lines: EmittedLine[] = [
         { text: "// Generated by GGLab ShaderGraphCore. Do not edit; regenerate from the source .shadergraph document." },
-        ...descriptor.requiredIncludes.map((include) => ({ text: `#include "${include}"` })),
+        ...descriptor.requiredIncludes.map((include) => ({ text: `#include "${include}"`, range: { role: "include" as const, name: include } })),
         { text: "" },
         { text: `struct ${objectName}` },
         { text: "{" },
-        ...descriptor.requiredOutputs.map((output) => ({ text: `    ${output.type} ${output.name};` })),
+        ...descriptor.requiredOutputs.map((output) => ({ text: `    ${output.type} ${output.name};`, range: { role: "requiredOutputField" as const, name: output.name } })),
         { text: "};" },
         { text: "" },
-        { text: `${objectName} ${functionName}(` },
+        { text: `${objectName} ${functionName}(`, range: { role: "generatedFunctionDeclaration" } },
         ...signatureLines,
         { text: ")" },
         { text: "{" },
         { text: `    ${objectName} surface;` },
-        ...statements.map((statement) => ({ text: `    ${statement.text}`, entry: { nodeId: statement.nodeId, portId: statement.portId } })),
-        ...assignments.map((assignment) => ({ text: assignment.text, entry: { nodeId: assignment.nodeId, portId: assignment.portId } })),
+        ...statements.map((statement) => ({ text: `    ${statement.text}`, range: { role: "nodeValueStatement" as const, nodeId: statement.nodeId, portId: statement.portId } })),
+        ...assignments.map((assignment) => ({ text: assignment.text, range: { role: "requiredOutputAssignment" as const, nodeId: assignment.nodeId, portId: assignment.portId, name: assignment.name } })),
         { text: "    return surface;" },
         { text: "}" },
     ];
 
     const source = lines.map((line) => line.text).join("\n") + "\n";
 
-    const sourceMap: HlslSourceMapEntry[] = [];
-    let offset = 0;
-    for (const line of lines) {
-        const end = offset + line.text.length;
-        if (line.entry !== undefined) {
-            sourceMap.push({ start: offset, end, ...line.entry });
+    // §24: line/column ranges, 1-based lines, 1-based columns, end column
+    // exclusive; each range spans its single generated line.
+    const ranges: ShaderGraphSourceMapRange[] = [];
+    lines.forEach((line, index) => {
+        if (line.range === undefined) {
+            return;
         }
-        offset = end + 1;
-    }
+        ranges.push({
+            startLine: index + 1,
+            startColumn: 1,
+            endLine: index + 1,
+            endColumn: line.text.length + 1,
+            ...line.range,
+        });
+    });
+    const sourceMap: ShaderGraphSourceMap = {
+        generatedSourceIdentity: sha256Hex(utf8Encode(source)),
+        ranges,
+    };
 
-    return { ok: true, diagnostics: [], source, sourceMap };
+    // On success, carry the non-error structural-validation diagnostics
+    // (for example unknown nodes/versions outside the live emission path).
+    const carriedDiagnostics = validation.diagnostics.filter((diagnostic) => diagnostic.severity !== "error");
+
+    return { ok: true, diagnostics: carriedDiagnostics, source, sourceMap };
 }
