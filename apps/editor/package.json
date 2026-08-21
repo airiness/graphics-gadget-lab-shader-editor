@@ -5,12 +5,25 @@
   "description": "Shader graph editor application shell and composition root.",
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dev": "vite",
+    "build": "vite build",
+    "test": "vitest run"
   },
   "dependencies": {
-    "@gglab/shader-graph-core": "workspace:*"
+    "@gglab/editor-ui": "workspace:*",
+    "@gglab/shader-graph-core": "workspace:*",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
-    "typescript": "^6.0.3"
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/react": "^16.1.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "jsdom": "^26.1.0",
+    "typescript": "^6.0.3",
+    "vite": "^6.3.0",
+    "vitest": "^4.1.11"
   }
 }

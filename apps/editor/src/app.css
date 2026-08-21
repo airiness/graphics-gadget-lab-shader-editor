@@ -1,0 +1,246 @@
+/* GGLab shader graph editor — plain CSS, no framework. */
+:root {
+    color-scheme: dark;
+    --gglab-bg: #10141a;
+    --gglab-panel: #171d26;
+    --gglab-border: #2b3442;
+    --gglab-text: #dce4ee;
+    --gglab-muted: #8b98a8;
+    --gglab-accent: #5aa9ff;
+    --gglab-error: #ff7a7a;
+    --gglab-warning: #ffc857;
+    --gglab-ok: #6fd39a;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body,
+#gglab-root {
+    height: 100%;
+    margin: 0;
+}
+
+body {
+    background: var(--gglab-bg);
+    color: var(--gglab-text);
+    font-family: "Segoe UI", system-ui, sans-serif;
+    font-size: 14px;
+}
+
+.gglab-app {
+    display: grid;
+    grid-template-columns: 240px 1fr 340px;
+    height: 100%;
+}
+
+.gglab-side {
+    overflow-y: auto;
+    background: var(--gglab-panel);
+    border-color: var(--gglab-border);
+    padding: 12px;
+}
+
+.gglab-side-left {
+    border-right: 1px solid var(--gglab-border);
+}
+
+.gglab-side-right {
+    border-left: 1px solid var(--gglab-border);
+}
+
+.gglab-canvas {
+    position: relative;
+    min-width: 0;
+}
+
+.gglab-viewport {
+    position: absolute;
+    inset: 0;
+}
+
+h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--gglab-muted);
+    margin: 16px 0 8px;
+}
+
+h2:first-child {
+    margin-top: 0;
+}
+
+/* palette */
+.gglab-palette-section {
+    margin-bottom: 8px;
+}
+
+.gglab-palette-entry {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    padding: 6px 8px;
+    margin: 2px 0;
+    background: transparent;
+    color: var(--gglab-text);
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+}
+
+.gglab-palette-entry:hover {
+    border-color: var(--gglab-accent);
+    background: rgba(90, 169, 255, 0.08);
+}
+
+.gglab-palette-name {
+    white-space: nowrap;
+}
+
+.gglab-palette-kind {
+    color: var(--gglab-muted);
+    font-size: 12px;
+}
+
+.gglab-notes p,
+.gglab-descriptor-hint,
+.gglab-descriptor-status {
+    font-size: 13px;
+    color: var(--gglab-text);
+}
+
+/* canvas node cards */
+.gglab-node {
+    position: relative;
+    min-width: 150px;
+    padding: 10px 12px;
+    background: var(--gglab-panel);
+    border: 1px solid var(--gglab-border);
+    border-radius: 6px;
+}
+
+.gglab-node-unknown {
+    border-color: var(--gglab-warning);
+}
+
+.gglab-node-title {
+    font-weight: 600;
+}
+
+.gglab-node-type {
+    color: var(--gglab-muted);
+    font-size: 12px;
+}
+
+.gglab-node-flag {
+    color: var(--gglab-warning);
+    font-size: 12px;
+}
+
+/* diagnostics */
+.gglab-diagnostics {
+    border-top: 1px solid var(--gglab-border);
+    padding-top: 8px;
+    margin-top: 8px;
+}
+
+.gglab-diagnostics-passed {
+    color: var(--gglab-ok);
+}
+
+.gglab-diagnostics-item dt {
+    margin: 0;
+    font-size: 12px;
+}
+
+.gglab-diagnostics-item dd {
+    margin: 2px 0 8px;
+}
+
+.gglab-diagnostics-code {
+    font-family: ui-monospace, monospace;
+    font-weight: 700;
+}
+
+.gglab-diagnostics-severity-error .gglab-diagnostics-code {
+    color: var(--gglab-error);
+}
+
+.gglab-diagnostics-severity-warning .gglab-diagnostics-code {
+    color: var(--gglab-warning);
+}
+
+.gglab-diagnostics-path {
+    color: var(--gglab-muted);
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+}
+
+.gglab-descriptor-rejected {
+    color: var(--gglab-error);
+}
+
+/* document io + emission */
+.gglab-document-text {
+    width: 100%;
+    resize: vertical;
+    background: var(--gglab-bg);
+    color: var(--gglab-text);
+    border: 1px solid var(--gglab-border);
+    border-radius: 4px;
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    padding: 8px;
+}
+
+.gglab-document-buttons,
+.gglab-emission {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+button {
+    background: var(--gglab-accent);
+    color: #0b1220;
+    border: none;
+    border-radius: 4px;
+    padding: 7px 10px;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    align-self: flex-start;
+}
+
+button:hover {
+    filter: brightness(1.1);
+}
+
+.gglab-emission-identity code {
+    font-family: ui-monospace, monospace;
+}
+
+.gglab-emission-source {
+    margin: 0;
+    padding: 10px;
+    background: var(--gglab-bg);
+    border: 1px solid var(--gglab-border);
+    border-radius: 4px;
+    overflow-x: auto;
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    white-space: pre;
+}
+
+.gglab-emission-problem.gglab-emission-severity-error {
+    color: var(--gglab-error);
+}
+
+.gglab-emission-problem.gglab-emission-severity-warning {
+    color: var(--gglab-warning);
+}

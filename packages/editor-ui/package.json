@@ -4,10 +4,22 @@
   "private": true,
   "description": "Presentation components for the GGLab shader graph editor.",
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@gglab/shader-graph-core": "workspace:*",
+    "@reactflow/core": "^11.11.4"
+  },
+  "peerDependencies": {
+    "react": ">=19.0.0"
+  },
   "devDependencies": {
+    "@types/react": "^19.1.0",
+    "react": "^19.1.0",
     "typescript": "^6.0.3"
   }
 }
