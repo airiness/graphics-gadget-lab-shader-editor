@@ -21,5 +21,14 @@ export default tseslint.config(
                 ...globals.browser
             }
         }
+    },
+    {
+        // plain-JS entry shims (CLI bin) run on Node
+        files: ["**/*.js"],
+        languageOptions: {
+            globals: {
+                ...globals.node
+            }
+        }
     }
 );

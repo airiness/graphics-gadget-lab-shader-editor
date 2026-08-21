@@ -2,6 +2,11 @@ packages:
   - "apps/*"
   - "packages/*"
 
+allowBuilds:
+  # esbuild's install script verifies/downloads its platform binary; tsx
+  # (the CLI's runtime) depends on esbuild.
+  esbuild: true
+
 # Pin the pnpm content-addressed store inside this repository root (relative
 # path, resolved from here; run pnpm from the repository root). The store
 # stays on the project volume, which Windows hard-linked node_modules require;
