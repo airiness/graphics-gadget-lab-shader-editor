@@ -1,7 +1,8 @@
 /**
  * Deterministic HLSL emission (architecture §14) — the pipeline's final
- * structural stage: validation → topology → lower the live subgraph →
- * assembly against the descriptor's logical contract.
+ * structural stage: validation → topology → parameter conformance →
+ * port-aware type resolution → lower the live subgraph → assembly against
+ * the descriptor's logical contract.
  *
  * `emitHlsl` is a pure function over two caller-supplied data inputs: a
  * parsed `ShaderGraphDocument` and a parsed `SurfaceProfileDescriptor`.
@@ -22,13 +23,19 @@
  *   does not specify the generated-code spelling of the sampler input. That
  *   spelling is a cross-repository contract decision, not an implementation
  *   detail, and is not invented here.
- * - The value model is per node (one value symbol per lowered node). Any
- *   live node whose definition declares more than one output port is
+ * - Port-aware type resolution is not done here: the core's
+ *   `resolveGraphTypes` service (graph-type-resolution.ts) is the single
+ *   type authority, and emission only *consumes* its resolved
+ *   (node, port) → type results. It resolves per output port — which is
+ *   why SampleTexture2D's RGBA/RGB/R/G/B/A ports resolve even though the
+ *   v1 contract still refuses lowering them.
+ * - The value model is per node (one value statement per lowered node).
+ *   Any live node whose definition declares more than one output port is
  *   refused with an explicit UNSUPPORTED_NODE_EMISSION diagnostic rather than
- *   silently lowered through the single-value path; multi-output nodes
- *   (for example SampleTexture2D's RGBA/RGB/R/G/B/A) require the
- *   per-(nodeId, portId) value model that the core type-model refactor
- *   introduces before texture emission.
+ *   silently lowered through the single-value path; multi-output lowering
+ *   (one shared physical statement feeding several ports, for example
+ *   SampleTexture2D's single sample feeding RGBA/RGB/R/G/B/A) arrives with
+ *   the texture-sampling contract, after the descriptor freeze.
  * - Graph parameter types are authored, not inferred: every parameter entry
  *   declares a concrete `valueType` (core value vocabulary, enforced at
  *   parse time). Emission checks that (class, valueType) pairing against the
@@ -39,8 +46,9 @@
  *   UNSUPPORTED_PARAMETER_TYPE error; neither is ever substituted or
  *   re-derived from how the parameter is used.
  * - Binary math operations follow the documented conservative result rule
- *   (§11.2): identical vectors keep the type, a scalar widens to the vector
- *   operand, and distinct vector sizes are a TYPE_MISMATCH.
+ *   (§11.2), applied by the type resolution service: identical vectors
+ *   keep the type, a scalar widens to the vector operand, and distinct
+ *   vector sizes are a TYPE_MISMATCH.
  * - Nodes whose version is outside their definition's supported range are
  *   refused for emission (error) even though structural validation reports
  *   them only as warnings: validation stays forward-compatible for
@@ -70,12 +78,11 @@ import { DiagnosticCode } from "./diagnostics.js";
 import type { GraphNode, ShaderGraphDocument } from "./graph-document.js";
 import { errorAt } from "./parse-helpers.js";
 import type { JsonValue } from "./json-value.js";
-import { isGraphType } from "./graph-types.js";
-import type { GraphType } from "./graph-types.js";
 import { getNodeDefinition } from "./node-definitions.js";
 import type { SurfaceProfileDescriptor } from "./surface-profile-descriptor.js";
 import { sha256Hex, utf8Encode } from "./sha256.js";
 import { resolveGraphTopology } from "./topology.js";
+import { resolveGraphTypes } from "./graph-type-resolution.js";
 import { validateShaderGraph } from "./validation.js";
 
 /** What a generated-source range stands for (architecture §24 "semantic role"). */
@@ -297,6 +304,15 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
         return fail(diagnostics);
     }
 
+    // Port-aware type resolution: the core's single type authority. Emission
+    // only consumes the resolved (node, port) → type results; it does not
+    // re-derive them.
+    const resolved = resolveGraphTypes(document);
+    if (resolved.diagnostics.length > 0) {
+        diagnostics.push(...resolved.diagnostics);
+        return fail(diagnostics);
+    }
+
     // Symbol namespaces: the contract parameter space (graph parameters and
     // graph-visible inputs share one namespace) and node values.
     const signatureSymbols = buildSymbols([...document.parameters.map((parameter) => parameter.id), ...descriptor.graphVisibleInputs.map((input) => input.id)], "gglab_");
@@ -306,139 +322,6 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
     const inputSourceOf = (node: GraphNode, portId: string): GraphNode | undefined => {
         const connection = connections.find((candidate) => candidate.to.nodeId === node.id && candidate.to.portId === portId);
         return connection === undefined ? undefined : nodeById.get(connection.from.nodeId);
-    };
-
-    // Conservative per-node output typing (§11.2): base kinds, scalar
-    // widening, distinct-vector-size rejection.
-    const typeMemo = new Map<string, GraphType>();
-    const typeFailed = new Set<string>();
-    const typeDiagnosed = new Set<string>();
-    const typeError = (node: GraphNode, message: string): void => {
-        if (typeDiagnosed.has(node.id)) {
-            return;
-        }
-        typeDiagnosed.add(node.id);
-        diagnostics.push(errorAt(nodePath(node.id), DiagnosticCode.TypeMismatch, `Node "${node.id}" (${node.type}): ${message}`));
-    };
-
-    const parameterTypeOf = (node: GraphNode): string | undefined => {
-        const referenceId = node.properties["parameterId"];
-        return typeof referenceId === "string" ? parameterTypeById.get(referenceId) : undefined;
-    };
-
-    const combineBinary = (node: GraphNode, a: GraphType, b: GraphType): GraphType | undefined => {
-        if (a === b) {
-            return a;
-        }
-        if (a === "float") {
-            return b;
-        }
-        if (b === "float") {
-            return a;
-        }
-        typeError(node, `operands of distinct vector sizes (${a} and ${b}) are not implicitly convertible`);
-        return undefined;
-    };
-
-    const baseOutputType = (node: GraphNode): GraphType | undefined => {
-        switch (node.type) {
-            case "Float":
-                return "float";
-            case "Float2":
-                return "float2";
-            case "Float3":
-                return "float3";
-            case "Float4":
-                return "float4";
-            case "UV0":
-                return "float2";
-            case "ScalarParameter":
-            case "VectorParameter": {
-                const type = parameterTypeOf(node);
-                return type !== undefined && isGraphType(type) ? type : undefined;
-            }
-            case "Saturate":
-            case "OneMinus": {
-                const input = inputSourceOf(node, "value");
-                return input === undefined ? undefined : resolveOutputType(input.id);
-            }
-            case "Normalize": {
-                const input = inputSourceOf(node, "value");
-                const type = input === undefined ? undefined : resolveOutputType(input.id);
-                if (type === "float" ) {
-                    typeError(node, "Normalize requires a vector input (float2/float3/float4), not a scalar float");
-                    return undefined;
-                }
-                return type;
-            }
-            case "Add":
-            case "Subtract":
-            case "Multiply":
-            case "Divide":
-            case "Min":
-            case "Max": {
-                const aSource = inputSourceOf(node, "a");
-                const bSource = inputSourceOf(node, "b");
-                const a = aSource === undefined ? undefined : resolveOutputType(aSource.id);
-                const b = bSource === undefined ? undefined : resolveOutputType(bSource.id);
-                if (a === undefined || b === undefined) {
-                    typeError(node, "an input's output type could not be resolved");
-                    return undefined;
-                }
-                return combineBinary(node, a, b);
-            }
-            case "Lerp": {
-                const tSource = inputSourceOf(node, "t");
-                const t = tSource === undefined ? undefined : resolveOutputType(tSource.id);
-                if (t !== "float") {
-                    typeError(node, 'the "t" input must be a float');
-                    return undefined;
-                }
-                const aSource = inputSourceOf(node, "a");
-                const bSource = inputSourceOf(node, "b");
-                const a = aSource === undefined ? undefined : resolveOutputType(aSource.id);
-                const b = bSource === undefined ? undefined : resolveOutputType(bSource.id);
-                if (a === undefined || b === undefined) {
-                    typeError(node, "an input's output type could not be resolved");
-                    return undefined;
-                }
-                return combineBinary(node, a, b);
-            }
-            case "Dot": {
-                const aSource = inputSourceOf(node, "a");
-                const bSource = inputSourceOf(node, "b");
-                const a = aSource === undefined ? undefined : resolveOutputType(aSource.id);
-                const b = bSource === undefined ? undefined : resolveOutputType(bSource.id);
-                if (a === undefined || b === undefined || a !== b || a === "float") {
-                    typeError(node, `Dot requires both inputs to be the same vector size (float2/float3/float4), got ${a ?? "unresolved"} and ${b ?? "unresolved"}`);
-                    return undefined;
-                }
-                return "float";
-            }
-            default:
-                return undefined; // roots, texture nodes, unknown kinds
-        }
-    };
-
-    const resolveOutputType = (nodeId: string): GraphType | undefined => {
-        const memoized = typeMemo.get(nodeId);
-        if (memoized !== undefined) {
-            return memoized;
-        }
-        if (typeFailed.has(nodeId)) {
-            return undefined;
-        }
-        const node = nodeById.get(nodeId);
-        if (node === undefined) {
-            return undefined;
-        }
-        const type = baseOutputType(node);
-        if (type === undefined) {
-            typeFailed.add(nodeId);
-        } else {
-            typeMemo.set(nodeId, type);
-        }
-        return type;
     };
 
     const symbolOf = (nodeId: string | undefined): string => {
@@ -485,7 +368,9 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
             }
             case "ScalarParameter":
             case "VectorParameter": {
-                const type = parameterTypeOf(node);
+                // Consumed from the resolved type (the authored value type),
+                // not re-derived here.
+                const type = resolved.typeAt(node.id, "value");
                 const referenceId = node.properties["parameterId"];
                 const signatureSymbol = typeof referenceId === "string" ? (signatureSymbols.get(referenceId) ?? undefined) : undefined;
                 if (type === undefined || signatureSymbol === undefined) {
@@ -517,11 +402,11 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
             case "OneMinus":
             case "Dot":
             case "Normalize": {
-                const outType = resolveOutputType(node.id);
+                const outType = resolved.typeAt(node.id, "value");
                 if (outType === undefined) {
-                    if (!typeDiagnosed.has(node.id)) {
-                        typeError(node, "the output type could not be resolved");
-                    }
+                    diagnostics.push(
+                        errorAt(nodePath(node.id), DiagnosticCode.TypeMismatch, `Node "${node.id}" (${node.type}): the output type could not be resolved`),
+                    );
                     return undefined;
                 }
                 const aSource = inputSourceOf(node, "a");
@@ -653,7 +538,9 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
                 );
                 continue;
             }
-            const sourceType = resolveOutputType(connection.from.nodeId);
+            // Port-level: the exact output port the connection names, per
+            // the shared type authority (not the node's single-value type).
+            const sourceType = resolved.typeAt(connection.from.nodeId, connection.from.portId);
             if (sourceType === undefined) {
                 // Already diagnosed during lowering/type resolution.
                 continue;

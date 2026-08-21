@@ -738,6 +738,14 @@ float4 → float3  not implicit
 ```
 
 The coercion table belongs in the TypeSystem and must not be duplicated in UI components.
+There is exactly one type-resolution authority in the core: a single forward
+service resolves every node's output ports to concrete value types on a
+port-level basis `(node, port)`, and the emitter and the UI both ask that
+same service — neither re-derives types, so the coercion table stays in one
+core place. Type resolution is not emittability: a port can resolve to a
+type even when a later emission gate refuses to lower the node (v1 defers
+texture sampling, while `SampleTexture2D`'s `RGBA`/`RGB`/`R`/`G`/`B`/`A`
+ports still resolve per port).
 
 ## 11.3 Port cardinality
 
