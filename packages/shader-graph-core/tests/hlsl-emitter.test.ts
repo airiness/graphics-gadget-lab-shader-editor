@@ -23,8 +23,8 @@ function baseDocument(): Record<string, unknown> {
         profile: "gglab.surface",
         profileVersion: 1,
         parameters: [
-            { id: "p.tint", name: "Tint", class: "VectorParameter" },
-            { id: "p.metal", name: "Metal Factor", class: "ScalarParameter" },
+            { id: "p.tint", name: "Tint", class: "VectorParameter", valueType: "float3" },
+            { id: "p.metal", name: "Metal Factor", class: "ScalarParameter", valueType: "float" },
         ],
         nodes: [
             { id: "n.t", type: "VectorParameter", version: 1, properties: { parameterId: "p.tint" } },
@@ -272,7 +272,7 @@ describe("emitHlsl", () => {
             graphId: "graph.mixed",
             profile: "gglab.surface",
             profileVersion: 1,
-            parameters: [{ id: "p.metal", name: "M", class: "ScalarParameter" }],
+            parameters: [{ id: "p.metal", name: "M", class: "ScalarParameter", valueType: "float" }],
             nodes: [
                 { id: "n.f2", type: "Float2", version: 1, properties: { value: [1, 1] } },
                 { id: "n.f3", type: "Float3", version: 1, properties: { value: [1, 1, 1] } },
@@ -306,7 +306,7 @@ describe("emitHlsl", () => {
         const result = emitVariant((document) => {
             // A parameter entry nobody declares: exercises the class gate
             // without tripping the parameter-node class-mismatch check.
-            (document["parameters"] as Record<string, unknown>[]).push({ id: "p.flag", name: "Flag", class: "BoolParameter" });
+            (document["parameters"] as Record<string, unknown>[]).push({ id: "p.flag", name: "Flag", class: "BoolParameter", valueType: "float" });
         });
         expect(result.ok).toBe(false);
         expect(result.source).toBe("");
@@ -327,7 +327,7 @@ describe("emitHlsl", () => {
             graphId: "graph.texture",
             profile: "gglab.surface",
             profileVersion: 1,
-            parameters: [{ id: "p.tex", name: "Texture", class: "Texture2DParameter" }],
+            parameters: [{ id: "p.tex", name: "Texture", class: "Texture2DParameter", valueType: "Texture2D" }],
             nodes: [
                 { id: "n.tp", type: "Texture2DParameter", version: 1, properties: { parameterId: "p.tex" } },
                 { id: "n.uv", type: "UV0", version: 1, properties: {} },
@@ -381,15 +381,59 @@ describe("emitHlsl", () => {
         );
     });
 
-    it("refuses a vector parameter whose usage does not fix a single concrete type", () => {
+    it("refuses a parameter concrete type the profile's class does not permit", () => {
         const document: Record<string, unknown> = {
             schemaVersion: 1,
-            graphId: "graph.ambiguous",
+            graphId: "graph.pair",
             profile: "gglab.surface",
             profileVersion: 1,
             parameters: [
-                { id: "p.tint", name: "Tint", class: "VectorParameter" },
-                { id: "p.metal", name: "M", class: "ScalarParameter" },
+                // Authored "float" on a Vector entry: the gglab.surface v1
+                // Vector class permits float2/float3/float4 only.
+                { id: "p.tint", name: "Tint", class: "VectorParameter", valueType: "float" },
+                { id: "p.metal", name: "M", class: "ScalarParameter", valueType: "float" },
+            ],
+            nodes: [
+                { id: "n.t", type: "VectorParameter", version: 1, properties: { parameterId: "p.tint" } },
+                { id: "n.sf", type: "ScalarParameter", version: 1, properties: { parameterId: "p.metal" } },
+                { id: "n.e", type: "Float3", version: 1, properties: { value: [0, 0, 0] } },
+                { id: "n.r", type: "Float", version: 1, properties: { value: 0.5 } },
+                { id: "n.o", type: "Float", version: 1, properties: { value: 1 } },
+                { id: "n.out", type: "SurfaceOutput", version: 1, properties: {} },
+            ],
+            connections: [
+                { id: "c1", from: { nodeId: "n.t", portId: "value" }, to: { nodeId: "n.out", portId: "BaseColor" } },
+                { id: "c2", from: { nodeId: "n.e", portId: "value" }, to: { nodeId: "n.out", portId: "Emissive" } },
+                { id: "c3", from: { nodeId: "n.sf", portId: "value" }, to: { nodeId: "n.out", portId: "Metallic" } },
+                { id: "c4", from: { nodeId: "n.r", portId: "value" }, to: { nodeId: "n.out", portId: "Roughness" } },
+                { id: "c5", from: { nodeId: "n.o", portId: "value" }, to: { nodeId: "n.out", portId: "Opacity" } },
+            ],
+            editorMetadata: { nodes: {} },
+        };
+        const result = emitParsed(JSON.stringify(document));
+        expect(result.ok).toBe(false);
+        expect(result.source).toBe("");
+        expect(result.diagnostics).toEqual([
+            expect.objectContaining({
+                code: DiagnosticCode.UnsupportedParameterType,
+                severity: "error",
+                dataPath: "$.parameters[0]",
+            }),
+        ]);
+    });
+
+    it("still rejects mixed vector operands once the parameter type is authored", () => {
+        // The former under-constrained scenario with an explicit "float3":
+        // the failure now surfaces where it belongs — the operation's type
+        // rule — not as a parameter guess.
+        const document: Record<string, unknown> = {
+            schemaVersion: 1,
+            graphId: "graph.mixed",
+            profile: "gglab.surface",
+            profileVersion: 1,
+            parameters: [
+                { id: "p.tint", name: "Tint", class: "VectorParameter", valueType: "float3" },
+                { id: "p.metal", name: "M", class: "ScalarParameter", valueType: "float" },
             ],
             nodes: [
                 { id: "n.t", type: "VectorParameter", version: 1, properties: { parameterId: "p.tint" } },
@@ -417,9 +461,85 @@ describe("emitHlsl", () => {
         expect(result.source).toBe("");
         expect(result.diagnostics).toEqual([
             expect.objectContaining({
-                code: DiagnosticCode.AmbiguousParameterType,
+                code: DiagnosticCode.TypeMismatch,
                 severity: "error",
-                dataPath: "$.parameters[0]",
+                dataPath: "$.nodes[1]",
+            }),
+        ]);
+    });
+
+    it("emits an authored float3 vector parameter multiplied by a float scalar into BaseColor", () => {
+        const document: Record<string, unknown> = {
+            schemaVersion: 1,
+            graphId: "graph.vecmul",
+            profile: "gglab.surface",
+            profileVersion: 1,
+            parameters: [{ id: "p.tint", name: "Tint", class: "VectorParameter", valueType: "float3" }],
+            nodes: [
+                { id: "n.t", type: "VectorParameter", version: 1, properties: { parameterId: "p.tint" } },
+                { id: "n.f", type: "Float", version: 1, properties: { value: 0.5 } },
+                { id: "n.m", type: "Multiply", version: 1, properties: {} },
+                { id: "n.c", type: "Float3", version: 1, properties: { value: [0, 0, 1] } },
+                { id: "n.o", type: "Float", version: 1, properties: { value: 1 } },
+                { id: "n.out", type: "SurfaceOutput", version: 1, properties: {} },
+            ],
+            connections: [
+                { id: "c1", from: { nodeId: "n.t", portId: "value" }, to: { nodeId: "n.m", portId: "a" } },
+                { id: "c2", from: { nodeId: "n.f", portId: "value" }, to: { nodeId: "n.m", portId: "b" } },
+                { id: "c3", from: { nodeId: "n.m", portId: "value" }, to: { nodeId: "n.out", portId: "BaseColor" } },
+                { id: "c4", from: { nodeId: "n.c", portId: "value" }, to: { nodeId: "n.out", portId: "Emissive" } },
+                { id: "c5", from: { nodeId: "n.f", portId: "value" }, to: { nodeId: "n.out", portId: "Metallic" } },
+                { id: "c6", from: { nodeId: "n.f", portId: "value" }, to: { nodeId: "n.out", portId: "Roughness" } },
+                { id: "c7", from: { nodeId: "n.o", portId: "value" }, to: { nodeId: "n.out", portId: "Opacity" } },
+            ],
+            editorMetadata: { nodes: {} },
+        };
+        const result = emitParsed(JSON.stringify(document));
+        expect(result.ok).toBe(true);
+        expect(result.diagnostics).toEqual([]);
+        const source = result.source;
+        expect(source).toContain("float3 gglab_p_tint,");
+        // The operation rule: authored float3 operand with a float scalar
+        // widens to float3, which is exactly what BaseColor requires.
+        expect(source).toContain("float3 v_n_m = v_n_t * v_n_f;");
+        expect(source).toContain("surface.BaseColor = v_n_m;");
+        expect(result.sourceMap).not.toBeNull();
+    });
+
+    it("fails explicitly when an authored float2 is wired to a float3 required output", () => {
+        const document: Record<string, unknown> = {
+            schemaVersion: 1,
+            graphId: "graph.f2root",
+            profile: "gglab.surface",
+            profileVersion: 1,
+            parameters: [{ id: "p.tint", name: "Tint", class: "VectorParameter", valueType: "float2" }],
+            nodes: [
+                { id: "n.t", type: "VectorParameter", version: 1, properties: { parameterId: "p.tint" } },
+                { id: "n.e", type: "Float3", version: 1, properties: { value: [0, 0, 0] } },
+                { id: "n.meta", type: "Float", version: 1, properties: { value: 0.5 } },
+                { id: "n.rough", type: "Float", version: 1, properties: { value: 0.25 } },
+                { id: "n.o", type: "Float", version: 1, properties: { value: 1 } },
+                { id: "n.out", type: "SurfaceOutput", version: 1, properties: {} },
+            ],
+            connections: [
+                { id: "c1", from: { nodeId: "n.t", portId: "value" }, to: { nodeId: "n.out", portId: "BaseColor" } },
+                { id: "c2", from: { nodeId: "n.e", portId: "value" }, to: { nodeId: "n.out", portId: "Emissive" } },
+                { id: "c3", from: { nodeId: "n.meta", portId: "value" }, to: { nodeId: "n.out", portId: "Metallic" } },
+                { id: "c4", from: { nodeId: "n.rough", portId: "value" }, to: { nodeId: "n.out", portId: "Roughness" } },
+                { id: "c5", from: { nodeId: "n.o", portId: "value" }, to: { nodeId: "n.out", portId: "Opacity" } },
+            ],
+            editorMetadata: { nodes: {} },
+        };
+        const result = emitParsed(JSON.stringify(document));
+        expect(result.ok).toBe(false);
+        expect(result.source).toBe("");
+        // Location authority is the output node that owns the required
+        // output (n.out, index 5), naming the offending source.
+        expect(result.diagnostics).toEqual([
+            expect.objectContaining({
+                code: DiagnosticCode.TypeMismatch,
+                severity: "error",
+                dataPath: "$.nodes[5]",
             }),
         ]);
     });

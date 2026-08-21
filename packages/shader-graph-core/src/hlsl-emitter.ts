@@ -29,13 +29,15 @@
  *   (for example SampleTexture2D's RGBA/RGB/R/G/B/A) require the
  *   per-(nodeId, portId) value model that the core type-model refactor
  *   introduces before texture emission.
- * - Vector graph parameter types are fixed by single-typed usage only
- *   (INTERIM): conservative v1 typing does not perform dataflow inference,
- *   and an under-constrained parameter is a structured
- *   AMBIGUOUS_PARAMETER_TYPE error, never a silent type choice. This
- *   inference is an interim mechanism until the document declares a
- *   concrete value type on the graph parameter; it must be replaced, not
- *   extended.
+ * - Graph parameter types are authored, not inferred: every parameter entry
+ *   declares a concrete `valueType` (core value vocabulary, enforced at
+ *   parse time). Emission checks that (class, valueType) pairing against the
+ *   descriptor's `parameterClasses` — profile conformance, not dataflow
+ *   guessing. A class the descriptor defers or does not define is a
+ *   structured UNSUPPORTED_PARAMETER_CLASS error, and a valueType the
+ *   profile's class does not permit is a structured
+ *   UNSUPPORTED_PARAMETER_TYPE error; neither is ever substituted or
+ *   re-derived from how the parameter is used.
  * - Binary math operations follow the documented conservative result rule
  *   (§11.2): identical vectors keep the type, a scalar widens to the vector
  *   operand, and distinct vector sizes are a TYPE_MISMATCH.
@@ -230,7 +232,6 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
     }
 
     const liveIds = topology.executionOrder;
-    const liveSet = new Set<string>(liveIds);
     const rootId = topology.outputRootIds[0] as string;
 
     // Canonical parameter order: stable-id sorted. The persisted
@@ -242,8 +243,10 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
         return parameter === undefined ? [] : [parameter];
     });
 
-    // Graph parameter signature types: fixed by a single-type class, inferred
-    // from single-typed usage for multi-type classes, refused otherwise.
+    // Graph parameter signature types: the authored concrete type on the
+    // parameter entry (vocabulary enforced at parse time), conformance-checked
+    // against the descriptor's `parameterClasses`. The pairing check is
+    // profile conformance; no type is ever derived from usage.
     const parameterTypeById = new Map<string, string>();
     for (const parameter of canonicalParameters) {
         const index = parameterIndexById.get(parameter.id) ?? 0;
@@ -260,75 +263,34 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
             continue;
         }
         if (classEntry.valueType !== undefined) {
-            // Resource parameter (Texture2D): the v1 signature spelling for a
-            // texture+sampler binding is not frozen; its nodes are refused
-            // explicitly during lowering.
+            // Resource class (for example Texture2D): conformance still
+            // applies — the authored type must be the class's declared
+            // resource type — but v1 contributes no signature line, because
+            // the generated spelling for a texture+sampler binding is not
+            // frozen; its nodes are refused explicitly during lowering.
+            if (classEntry.valueType !== parameter.valueType) {
+                diagnostics.push(
+                    errorAt(
+                        `$.parameters[${index}]`,
+                        DiagnosticCode.UnsupportedParameterType,
+                        `Graph parameter "${parameter.id}" declares valueType "${parameter.valueType}", but class "${parameter.class}" in this profile is typed "${classEntry.valueType}".`,
+                    ),
+                );
+            }
             continue;
         }
         const allowed = classEntry.valueTypes ?? [];
-        if (allowed.length === 1) {
-            const single = allowed[0];
-            if (single !== undefined) {
-                parameterTypeById.set(parameter.id, single);
-            }
-            continue;
-        }
-        // Multi-type class: infer below.
-    }
-
-    for (const parameter of canonicalParameters) {
-        const index = parameterIndexById.get(parameter.id) ?? 0;
-        if (parameterTypeById.has(parameter.id)) {
-            continue;
-        }
-        const classEntry = descriptor.parameterClasses.find((entry) => entry.class === parameter.class);
-        if (classEntry === undefined || classEntry.valueType !== undefined) {
-            continue; // resource or already diagnosed
-        }
-        const concrete = new Set<string>();
-        let unconstrained = false;
-        for (const node of nodes) {
-            if (!liveSet.has(node.id)) {
-                continue;
-            }
-            const definition = getNodeDefinition(node.type);
-            const reference = definition?.referenceProperties.find((entry) => entry.name === "parameterId");
-            if (definition === undefined || reference === undefined || node.properties["parameterId"] !== parameter.id) {
-                continue;
-            }
-            for (const connection of connections) {
-                if (connection.from.nodeId !== node.id) {
-                    continue;
-                }
-                const targetNode = nodeById.get(connection.to.nodeId);
-                const targetDefinition = targetNode === undefined ? undefined : getNodeDefinition(targetNode.type);
-                const targetPort = targetDefinition?.inputs.find((port) => port.id === connection.to.portId);
-                if (targetPort === undefined) {
-                    continue;
-                }
-                if (targetPort.types.length === 1) {
-                    const single = targetPort.types[0];
-                    if (single !== undefined) {
-                        concrete.add(single);
-                    }
-                } else {
-                    unconstrained = true;
-                }
-            }
-        }
-        if (concrete.size !== 1 || unconstrained) {
+        if (!allowed.includes(parameter.valueType)) {
             diagnostics.push(
                 errorAt(
                     `$.parameters[${index}]`,
-                    DiagnosticCode.AmbiguousParameterType,
-                    `Graph parameter "${parameter.id}" (${parameter.class}) has no single concrete type from its usage; v1 conservative typing does not infer dataflow types, so the parameter must feed exactly one single-typed port and no other ports.`,
+                    DiagnosticCode.UnsupportedParameterType,
+                    `Graph parameter "${parameter.id}" declares valueType "${parameter.valueType}", but class "${parameter.class}" in this profile permits only ${allowed.map((type) => `"${type}"`).join(", ")}.`,
                 ),
             );
             continue;
         }
-        for (const type of concrete) {
-            parameterTypeById.set(parameter.id, type);
-        }
+        parameterTypeById.set(parameter.id, parameter.valueType);
     }
 
     if (diagnostics.length > 0) {

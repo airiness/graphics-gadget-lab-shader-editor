@@ -13,7 +13,7 @@ function baseDocument(): Record<string, unknown> {
         profile: "gglab.surface",
         profileVersion: 1,
         parameters: [
-            { id: "param.baseTint", name: "Base Tint", class: "VectorParameter" },
+            { id: "param.baseTint", name: "Base Tint", class: "VectorParameter", valueType: "float3" },
         ],
         nodes: [
             { id: "node.constant", type: "Float", version: 1, label: "Half", properties: { value: 0.5 } },
@@ -70,6 +70,40 @@ describe("parseShaderGraphDocument", () => {
         // Default catalog: the core's own node definitions; both node types
         // are known, so parsing produces no diagnostics at all.
         expect(result.diagnostics).toEqual([]);
+    });
+
+    it("requires a concrete valueType on every parameter entry", () => {
+        const result = parseVariant((document) => {
+            const parameters = document["parameters"] as Record<string, unknown>[];
+            delete expectElement(parameters, 0)["valueType"];
+        });
+        expect(result.ok).toBe(false);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({
+                code: DiagnosticCode.MissingRequiredField,
+                severity: "error",
+                dataPath: "$.parameters[0].valueType",
+            }),
+        );
+    });
+
+    it("rejects a valueType outside the core value vocabulary", () => {
+        // "float5" is simply not a graph type; "bool" is deferred and is not
+        // part of the v1 value domain either — both are explicit errors.
+        for (const invalid of ["float5", "bool"]) {
+            const result = parseVariant((document) => {
+                const parameters = document["parameters"] as Record<string, unknown>[];
+                expectElement(parameters, 0)["valueType"] = invalid;
+            });
+            expect(result.ok).toBe(false);
+            expect(result.diagnostics).toContainEqual(
+                expect.objectContaining({
+                    code: DiagnosticCode.InvalidParameterValueType,
+                    severity: "error",
+                    dataPath: "$.parameters[0].valueType",
+                }),
+            );
+        }
     });
 
     it("marks every node type explicitly unknown under an explicit empty catalog", () => {
@@ -212,7 +246,7 @@ describe("parseShaderGraphDocument", () => {
             const parameters = document["parameters"] as Record<string, unknown>[];
             const connections = document["connections"] as Record<string, unknown>[];
             expectElement(nodes, 1)["id"] = expectElement(nodes, 0)["id"];
-            parameters["push"]({ id: "param.baseTint", name: "Dup", class: "ScalarParameter" });
+            parameters["push"]({ id: "param.baseTint", name: "Dup", class: "ScalarParameter", valueType: "float" });
             connections["push"]({
                 id: "conn.01",
                 from: { nodeId: "node.constant", portId: "value" },

@@ -603,7 +603,20 @@ parameter.id
 
 parameter.name
     human-facing display label unless a later Material Program contract explicitly promotes another naming field to external binding ABI
+
+parameter.valueType
+    the parameter's concrete graph value type, from the core value vocabulary
+    (for example float/float2/float3/float4/Texture2D)
 ```
+
+A parameter's concrete value type is **authored semantic state, not a dataflow
+inference result**: the document declares it, and the core, the emitter, and
+any future Material Program binding consume the same declared value. A
+parameter's type must not change because a wire is reconnected, re-typed, or
+removed. The `(class, valueType)` pairing is checked for profile conformance
+against the descriptor's `parameterClasses` on the descriptor-aware path
+(emission); that vocabulary is descriptor data and is not hardcoded into
+ordinary graph validation.
 
 Generated HLSL symbols must not depend on a mutable display label. The v1 emitter derives parameter symbols from stable semantic identity using a deterministic ASCII-safe encoding or deterministic emission key. The exact spelling scheme is implementation detail, but renaming a display label alone must not silently change generated symbol identity or Shader semantics.
 

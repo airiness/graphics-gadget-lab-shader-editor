@@ -20,6 +20,8 @@
  */
 import type { ParseResult, ShaderGraphDiagnostic } from "./diagnostics.js";
 import { DiagnosticCode } from "./diagnostics.js";
+import { GRAPH_TYPES, isGraphType } from "./graph-types.js";
+import type { GraphType } from "./graph-types.js";
 import { hasField, isJsonNumber, isJsonRecord, isJsonString, jsonKind } from "./json-value.js";
 import type { JsonRecord, JsonValue } from "./json-value.js";
 import { errorAt, requireInteger, requireString, takeArray, takeField, takeObject, warnAt } from "./parse-helpers.js";
@@ -80,6 +82,14 @@ export interface GraphParameter {
     readonly name: string;
     /** Parameter class name from the surface profile descriptor (for example "ScalarParameter"). */
     readonly class: string;
+    /**
+     * The parameter's concrete graph value type (for example "float3").
+     * Authored semantic state on the document, never a dataflow inference
+     * result; the core enforces the value vocabulary, and the
+     * class/valueType pairing is checked against the profile descriptor at
+     * emission.
+     */
+    readonly valueType: GraphType;
     readonly unknownFields: Readonly<Record<string, JsonValue>>;
 }
 
@@ -307,13 +317,23 @@ function parseParameters(raw: readonly JsonValue[] | undefined, diagnostics: Sha
         const id = requireString(item, "id", path, diagnostics);
         const name = requireString(item, "name", path, diagnostics);
         const cls = requireString(item, "class", path, diagnostics);
+        const valueTypeString = requireString(item, "valueType", path, diagnostics);
+        if (valueTypeString !== undefined && !isGraphType(valueTypeString)) {
+            diagnostics.push(
+                errorAt(
+                    `${path}.valueType`,
+                    DiagnosticCode.InvalidParameterValueType,
+                    `Expected a concrete graph value type (${GRAPH_TYPES.join(" / ")}); "${valueTypeString}" is not part of the core value vocabulary. Deferred types (for example "bool") are not graph value types and are never written into v1 documents.`,
+                ),
+            );
+        }
         assertStableId(id, `${path}.id`, diagnostics);
         const unknown: { [key: string]: JsonValue } = {};
-        collectUnknownFields(item, ["id", "name", "class"], path, diagnostics, unknown);
-        if (id === undefined || name === undefined || cls === undefined) {
+        collectUnknownFields(item, ["id", "name", "class", "valueType"], path, diagnostics, unknown);
+        if (id === undefined || name === undefined || cls === undefined || valueTypeString === undefined || !isGraphType(valueTypeString)) {
             return;
         }
-        result.push({ id, name, class: cls, unknownFields: unknown });
+        result.push({ id, name, class: cls, valueType: valueTypeString, unknownFields: unknown });
     });
     return result;
 }
@@ -515,6 +535,7 @@ export function serializeShaderGraphDocument(document: ShaderGraphDocument): str
         record["id"] = parameter.id;
         record["name"] = parameter.name;
         record["class"] = parameter.class;
+        record["valueType"] = parameter.valueType;
         appendUnknownFields(record, parameter.unknownFields);
         return record;
     });
