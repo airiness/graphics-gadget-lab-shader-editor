@@ -46,6 +46,14 @@ export interface NodePropertyDefinition {
     readonly description?: string;
 }
 
+export interface ReferencePropertyDefinition {
+    readonly name: string;
+    /** The document collection the property value must name (a stable id in it). */
+    readonly target: "parameter";
+    readonly required: boolean;
+    readonly description?: string;
+}
+
 export interface NodeDefinition {
     /** Node type name used by documents (for example "Multiply"). */
     readonly type: string;
@@ -56,6 +64,12 @@ export interface NodeDefinition {
     readonly inputs: readonly NodePortDefinition[];
     readonly outputs: readonly NodePortDefinition[];
     readonly properties: readonly NodePropertyDefinition[];
+    /**
+     * Stable-id reference properties: their values name document entries
+     * (for example the graph parameter a parameter node declares), not
+     * dataflow values.
+     */
+    readonly referenceProperties: readonly ReferencePropertyDefinition[];
 }
 
 const NUMERIC: readonly GraphType[] = NUMERIC_TYPES;
@@ -72,6 +86,15 @@ function property(name: string, type: GraphType, required: boolean, description?
     return { name, type, required, ...(description !== undefined ? { description } : {}) };
 }
 
+const NO_REFERENCE_PROPERTIES: readonly ReferencePropertyDefinition[] = [];
+
+const PARAMETER_ID_REFERENCE: ReferencePropertyDefinition = {
+    name: "parameterId",
+    target: "parameter",
+    required: true,
+    description: "Stable id of the graph parameter this node declares (document parameters entry).",
+};
+
 function definition(
     type: string,
     category: NodeCategory,
@@ -79,6 +102,7 @@ function definition(
     inputs: readonly NodePortDefinition[],
     outputs: readonly NodePortDefinition[],
     properties: readonly NodePropertyDefinition[],
+    referenceProperties: readonly ReferencePropertyDefinition[] = NO_REFERENCE_PROPERTIES,
 ): NodeDefinition {
     return {
         type,
@@ -89,6 +113,7 @@ function definition(
         inputs,
         outputs,
         properties,
+        referenceProperties,
     };
 }
 
@@ -107,6 +132,7 @@ export const NODE_DEFINITIONS: readonly NodeDefinition[] = [
         [],
         [port("value", ["float"], true, "Parameter value.")],
         [],
+        [PARAMETER_ID_REFERENCE],
     ),
     definition(
         "VectorParameter",
@@ -115,6 +141,7 @@ export const NODE_DEFINITIONS: readonly NodeDefinition[] = [
         [],
         [port("value", VECTORS, true, "Parameter value.")],
         [],
+        [PARAMETER_ID_REFERENCE],
     ),
 
     // Math
@@ -162,6 +189,7 @@ export const NODE_DEFINITIONS: readonly NodeDefinition[] = [
         [],
         [port("value", ["Texture2D"], true, "Texture resource.")],
         [],
+        [PARAMETER_ID_REFERENCE],
     ),
     definition(
         "SampleTexture2D",

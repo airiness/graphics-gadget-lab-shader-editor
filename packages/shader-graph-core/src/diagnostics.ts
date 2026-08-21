@@ -61,6 +61,13 @@ export const DiagnosticCode = {
     CycleDetected: "CYCLE_DETECTED",
     MissingOutput: "MISSING_OUTPUT",
     UnknownProfileFeature: "UNKNOWN_PROFILE_FEATURE",
+    UnresolvedParameterReference: "UNRESOLVED_PARAMETER_REFERENCE",
+    InvalidNodeProperty: "INVALID_NODE_PROPERTY",
+    ProfileMismatch: "PROFILE_MISMATCH",
+    UnsupportedParameterClass: "UNSUPPORTED_PARAMETER_CLASS",
+    AmbiguousParameterType: "AMBIGUOUS_PARAMETER_TYPE",
+    UnsupportedNodeEmission: "UNSUPPORTED_NODE_EMISSION",
+    AmbiguousOutputRoot: "AMBIGUOUS_OUTPUT_ROOT",
 } as const;
 
 export type DiagnosticCodeValue = (typeof DiagnosticCode)[keyof typeof DiagnosticCode];

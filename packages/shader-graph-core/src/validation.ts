@@ -148,6 +148,39 @@ export function validateShaderGraph(document: ShaderGraphDocument): ValidationRe
         }
     });
 
+    // Reference properties must name a document entry (graph parameter).
+    const parameterIds = new Set(document.parameters.map((parameter) => parameter.id));
+    nodes.forEach((node, nodeIndex) => {
+        const definition = definitionByNode[nodeIndex];
+        if (definition === undefined) {
+            return;
+        }
+        for (const reference of definition.referenceProperties) {
+            const value = node.properties[reference.name];
+            if (typeof value !== "string" || value.length === 0) {
+                if (reference.required) {
+                    diagnostics.push(
+                        errorAt(
+                            `$.nodes[${nodeIndex}]`,
+                            DiagnosticCode.UnresolvedParameterReference,
+                            `Node "${node.id}" (${node.type}) has no valid "${reference.name}" reference to a graph parameter.`,
+                        ),
+                    );
+                }
+                continue;
+            }
+            if (!parameterIds.has(value)) {
+                diagnostics.push(
+                    errorAt(
+                        `$.nodes[${nodeIndex}]`,
+                        DiagnosticCode.UnresolvedParameterReference,
+                        `Node "${node.id}" (${node.type}) references unknown graph parameter "${value}".`,
+                    ),
+                );
+            }
+        }
+    });
+
     // Connection endpoints (port existence, side) and endpoint type pairing.
     connections.forEach((connection, connectionIndex) => {
         const fromIndex = nodeIndexById.get(connection.from.nodeId);
