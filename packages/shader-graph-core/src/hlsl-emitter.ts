@@ -26,9 +26,16 @@
  * - Port-aware type resolution is not done here: the core's
  *   `resolveGraphTypes` service (graph-type-resolution.ts) is the single
  *   type authority, and emission only *consumes* its resolved
- *   (node, port) → type results. It resolves per output port — which is
- *   why SampleTexture2D's RGBA/RGB/R/G/B/A ports resolve even though the
- *   v1 contract still refuses lowering them.
+ *   (node, port) → type results. It owns the concrete input constraints —
+ *   including the required outputs fed to the output node — so emission
+ *   carries no type check of its own. It resolves per output port (which
+ *   is why SampleTexture2D's RGBA/RGB/R/G/B/A ports resolve even though
+ *   the v1 contract still refuses lowering them), it enforces the
+ *   conservative result rules standalone (a node it does not implement
+ *   semantically carries no resolved types rather than being guessed to
+ *   behave like a supported version), and it can be scoped: emission
+ *   resolves the live slice while whole-document resolution serves the
+ *   authoring surface — one implementation, two domains.
  * - The value model is per node (one value statement per lowered node).
  *   Any live node whose definition declares more than one output port is
  *   refused with an explicit UNSUPPORTED_NODE_EMISSION diagnostic rather than
@@ -266,10 +273,14 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
     }
     const conformanceById = new Map(conformance.parameters.map((entry) => [entry.parameterId, entry]));
 
-    // Port-aware type resolution: the core's single type authority. Emission
-    // only consumes the resolved (node, port) → type results; it does not
-    // re-derive them.
-    const resolved = resolveGraphTypes(document);
+    // Port-aware type resolution: the core's single type authority — it
+    // owns the concrete input constraints, including the output node's
+    // required outputs, so emission no longer carries its own half of the
+    // type check. Emission resolves only the *live* slice: dead authoring
+    // content (trial nodes, disconnected experiments) may carry type
+    // failures without blocking compilation; whole-document resolution
+    // remains the authority's job for authoring consumers.
+    const resolved = resolveGraphTypes(document, { nodeIds: new Set(topology.executionOrder) });
     if (resolved.diagnostics.length > 0) {
         diagnostics.push(...resolved.diagnostics);
         return fail(diagnostics);
@@ -500,17 +511,11 @@ export function emitHlsl(document: ShaderGraphDocument, descriptor: SurfaceProfi
                 );
                 continue;
             }
-            // Port-level: the exact output port the connection names, per
-            // the shared type authority (not the node's single-value type).
-            const sourceType = resolved.typeAt(connection.from.nodeId, connection.from.portId);
-            if (sourceType === undefined) {
-                // Already diagnosed during lowering/type resolution.
-                continue;
-            }
-            if (sourceType !== requiredOutput.type) {
-                diagnostics.push(
-                    errorAt(nodePath(rootId), DiagnosticCode.TypeMismatch, `Output "${requiredOutput.name}" expects ${requiredOutput.type}; the connected source produces ${sourceType ?? "an unresolvable type"}.`),
-                );
+            // The concrete type of this edge is the type authority's ruling
+            // (it checked the required-output input ports before lowering);
+            // emission only emits. An undefined type here means a
+            // structural or resolution gate has already failed the graph.
+            if (resolved.typeAt(connection.from.nodeId, connection.from.portId) === undefined) {
                 continue;
             }
             const sourceSymbol = valueSymbols.get(connection.from.nodeId);

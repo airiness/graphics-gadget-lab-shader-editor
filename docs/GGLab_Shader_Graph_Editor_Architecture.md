@@ -744,13 +744,21 @@ There is exactly one type-resolution authority in the core: a single forward
 service resolves every node's output ports to concrete value types on a
 port-level basis `(node, port)`, and the emitter and the UI both ask that
 same service — neither re-derives types, so the coercion table stays in one
-core place. The same one-authority rule applies to profile conformance: the
-`(class, valueType)` pairing of declared parameters is checked by one shared
-descriptor-aware service consumed by the emitter and the GUI, not embedded
-in emission. Type resolution is not emittability: a port can resolve to a
-type even when a later emission gate refuses to lower the node (v1 defers
-texture sampling, while `SampleTexture2D`'s `RGBA`/`RGB`/`R`/`G`/`B`/`A`
-ports still resolve per port).
+core place. That authority is standalone and owns the concrete constraint
+of every input port (a connected source must bring a type the port
+declares — the output node's required outputs included), grants no
+semantics to a node version the core does not implement (it does not guess
+that a future node behaves like a supported one), and resolves only within
+the scope it is asked to resolve: whole canvas for authoring analysis, the
+live slice for compilation — so dead experiments never block emission,
+while authoring still sees their failures. The same one-authority rule
+applies to profile conformance: the `(class, valueType)` pairing of
+declared parameters is checked by one shared descriptor-aware service
+consumed by the emitter and the GUI, not embedded in emission. Type
+resolution is not emittability: a port can resolve to a type even when a
+later emission gate refuses to lower the node (v1 defers texture sampling,
+while `SampleTexture2D`'s `RGBA`/`RGB`/`R`/`G`/`B`/`A` ports still resolve
+per port).
 
 ## 11.3 Port cardinality
 

@@ -655,4 +655,29 @@ describe("emitHlsl", () => {
             expect.objectContaining({ code: DiagnosticCode.UnknownNodeType, severity: "warning" }),
         );
     });
+
+    it("does not let a dead type failure block emission", () => {
+        const result = emitVariant((document) => {
+            const nodes = document["nodes"] as Record<string, unknown>[];
+            const connections = document["connections"] as Record<string, unknown>[];
+            // A disconnected experiment with mixed vector sizes: visible in
+            // the whole-document domain, but the emitter resolves only the
+            // live slice, so dead authoring content never blocks
+            // compilation.
+            nodes.push(
+                { id: "n.d2", type: "Float2", version: 1, properties: { value: [1, 1] } },
+                { id: "n.d3", type: "Float3", version: 1, properties: { value: [0, 0, 0] } },
+                { id: "n.dm", type: "Multiply", version: 1, properties: {} },
+            );
+            connections.push(
+                { id: "cdead1", from: { nodeId: "n.d2", portId: "value" }, to: { nodeId: "n.dm", portId: "a" } },
+                { id: "cdead2", from: { nodeId: "n.d3", portId: "value" }, to: { nodeId: "n.dm", portId: "b" } },
+            );
+        });
+        expect(result.ok).toBe(true);
+        expect(result.diagnostics).toEqual([]);
+        expect(result.source).toContain("surface.BaseColor = v_n_c;");
+        expect(result.source).toContain("surface.Emissive = v_n_t;");
+        expect(result.sourceMap).not.toBeNull();
+    });
 });

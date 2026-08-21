@@ -266,4 +266,248 @@ describe("resolveGraphTypes", () => {
             expect(signature(permuted)).toBe(signature(reference));
         }
     });
+
+    it("checks the concrete type each input port receives, for every node kind", () => {
+        // (a) A float3 vector parameter cannot feed the sampler's uv input
+        // (float2): the port constraint fails, and the sampler's channels
+        // stay unresolved instead of the edge being silently dropped.
+        const uv = resolvedDocument({
+            schemaVersion: 1,
+            graphId: "graph.baduv",
+            profile: "gglab.surface",
+            profileVersion: 1,
+            parameters: [
+                { id: "p.tint", name: "Tint", class: "VectorParameter", valueType: "float3" },
+                { id: "p.tex", name: "Texture", class: "Texture2DParameter", valueType: "Texture2D" },
+            ],
+            nodes: [
+                { id: "n.t", type: "VectorParameter", version: 1, properties: { parameterId: "p.tint" } },
+                { id: "n.tp", type: "Texture2DParameter", version: 1, properties: { parameterId: "p.tex" } },
+                { id: "n.smp", type: "SampleTexture2D", version: 1, properties: {} },
+            ],
+            connections: [
+                { id: "c1", from: { nodeId: "n.tp", portId: "value" }, to: { nodeId: "n.smp", portId: "texture" } },
+                { id: "c2", from: { nodeId: "n.t", portId: "value" }, to: { nodeId: "n.smp", portId: "uv" } },
+            ],
+            editorMetadata: { nodes: {} },
+        });
+        expect(uv.ok).toBe(false);
+        expect(uv.diagnostics).toEqual([
+            expect.objectContaining({
+                code: DiagnosticCode.TypeMismatch,
+                severity: "error",
+                dataPath: "$.nodes[2]",
+                message: expect.stringContaining('"uv"'),
+            }),
+        ]);
+        for (const portId of ["RGBA", "RGB", "R", "G", "B", "A"]) {
+            expect(uv.typeAt("n.smp", portId)).toBeUndefined();
+        }
+
+        // (b) A resource is not an arithmetic operand: the input domain
+        // fails instead of the result rule silently widening
+        // Texture2D with a scalar.
+        const mix = resolvedDocument({
+            schemaVersion: 1,
+            graphId: "graph.badmix",
+            profile: "gglab.surface",
+            profileVersion: 1,
+            parameters: [
+                { id: "p.tex", name: "Texture", class: "Texture2DParameter", valueType: "Texture2D" },
+                { id: "p.s", name: "S", class: "ScalarParameter", valueType: "float" },
+            ],
+            nodes: [
+                { id: "n.tp", type: "Texture2DParameter", version: 1, properties: { parameterId: "p.tex" } },
+                { id: "n.sf", type: "ScalarParameter", version: 1, properties: { parameterId: "p.s" } },
+                { id: "n.add", type: "Add", version: 1, properties: {} },
+            ],
+            connections: [
+                { id: "c1", from: { nodeId: "n.tp", portId: "value" }, to: { nodeId: "n.add", portId: "a" } },
+                { id: "c2", from: { nodeId: "n.sf", portId: "value" }, to: { nodeId: "n.add", portId: "b" } },
+            ],
+            editorMetadata: { nodes: {} },
+        });
+        expect(mix.ok).toBe(false);
+        expect(mix.diagnostics).toEqual([
+            expect.objectContaining({ code: DiagnosticCode.TypeMismatch, severity: "error", dataPath: "$.nodes[2]" }),
+        ]);
+        expect(mix.typeAt("n.add", "value")).toBeUndefined();
+        // The sources still resolve for themselves.
+        expect(mix.typeAt("n.tp", "value")).toBe("Texture2D");
+        expect(mix.typeAt("n.sf", "value")).toBe("float");
+    });
+
+    it("checks the required outputs as concrete input constraints", () => {
+        // VectorParameter(float2) cannot feed BaseColor(float3) even though
+        // validation's allowed-set intersection ([float2,float3,float4] ∩
+        // [float3]) passes.
+        const doc = resolvedDocument({
+            schemaVersion: 1,
+            graphId: "graph.badsurface",
+            profile: "gglab.surface",
+            profileVersion: 1,
+            parameters: [{ id: "p.tint", name: "Tint", class: "VectorParameter", valueType: "float2" }],
+            nodes: [
+                { id: "n.t", type: "VectorParameter", version: 1, properties: { parameterId: "p.tint" } },
+                { id: "n.e", type: "Float3", version: 1, properties: { value: [0, 0, 0] } },
+                { id: "n.meta", type: "Float", version: 1, properties: { value: 0.5 } },
+                { id: "n.rough", type: "Float", version: 1, properties: { value: 0.25 } },
+                { id: "n.o", type: "Float", version: 1, properties: { value: 1 } },
+                { id: "n.out", type: "SurfaceOutput", version: 1, properties: {} },
+            ],
+            connections: [
+                { id: "c1", from: { nodeId: "n.t", portId: "value" }, to: { nodeId: "n.out", portId: "BaseColor" } },
+                { id: "c2", from: { nodeId: "n.e", portId: "value" }, to: { nodeId: "n.out", portId: "Emissive" } },
+                { id: "c3", from: { nodeId: "n.meta", portId: "value" }, to: { nodeId: "n.out", portId: "Metallic" } },
+                { id: "c4", from: { nodeId: "n.rough", portId: "value" }, to: { nodeId: "n.out", portId: "Roughness" } },
+                { id: "c5", from: { nodeId: "n.o", portId: "value" }, to: { nodeId: "n.out", portId: "Opacity" } },
+            ],
+            editorMetadata: { nodes: {} },
+        });
+        expect(doc.ok).toBe(false);
+        expect(doc.diagnostics).toEqual([
+            expect.objectContaining({
+                code: DiagnosticCode.TypeMismatch,
+                severity: "error",
+                dataPath: "$.nodes[5]",
+                message: expect.stringContaining("BaseColor"),
+            }),
+        ]);
+    });
+
+    it("resolves one sample's channels into different required outputs", () => {
+        // Acceptance: RGB (float3) → BaseColor and R (float) → Metallic of
+        // the same SampleTexture2D both resolve, per port.
+        const doc = resolvedDocument({
+            schemaVersion: 1,
+            graphId: "graph.chan",
+            profile: "gglab.surface",
+            profileVersion: 1,
+            parameters: [{ id: "p.tex", name: "Texture", class: "Texture2DParameter", valueType: "Texture2D" }],
+            nodes: [
+                { id: "n.tp", type: "Texture2DParameter", version: 1, properties: { parameterId: "p.tex" } },
+                { id: "n.uv", type: "UV0", version: 1, properties: {} },
+                { id: "n.smp", type: "SampleTexture2D", version: 1, properties: {} },
+                { id: "n.e", type: "Float3", version: 1, properties: { value: [0, 0, 0] } },
+                { id: "n.r", type: "Float", version: 1, properties: { value: 0.5 } },
+                { id: "n.o", type: "Float", version: 1, properties: { value: 1 } },
+                { id: "n.out", type: "SurfaceOutput", version: 1, properties: {} },
+            ],
+            connections: [
+                { id: "c1", from: { nodeId: "n.tp", portId: "value" }, to: { nodeId: "n.smp", portId: "texture" } },
+                { id: "c2", from: { nodeId: "n.uv", portId: "value" }, to: { nodeId: "n.smp", portId: "uv" } },
+                { id: "c3", from: { nodeId: "n.smp", portId: "RGB" }, to: { nodeId: "n.out", portId: "BaseColor" } },
+                { id: "c4", from: { nodeId: "n.smp", portId: "R" }, to: { nodeId: "n.out", portId: "Metallic" } },
+                { id: "c5", from: { nodeId: "n.e", portId: "value" }, to: { nodeId: "n.out", portId: "Emissive" } },
+                { id: "c6", from: { nodeId: "n.r", portId: "value" }, to: { nodeId: "n.out", portId: "Roughness" } },
+                { id: "c7", from: { nodeId: "n.o", portId: "value" }, to: { nodeId: "n.out", portId: "Opacity" } },
+            ],
+            editorMetadata: { nodes: {} },
+        });
+        expect(doc.ok).toBe(true);
+        expect(doc.diagnostics).toEqual([]);
+        expect(doc.typeAt("n.smp", "RGB")).toBe("float3");
+        expect(doc.typeAt("n.smp", "R")).toBe("float");
+    });
+
+    it("grants no resolved types to a node version it does not implement", () => {
+        // Silent refusal (validation owns the version diagnostic): the
+        // future node simply carries no semantics in this core, and its
+        // consumers see an unresolvable source.
+        const silent = resolvedDocument({
+            schemaVersion: 1,
+            graphId: "graph.future1",
+            profile: "gglab.surface",
+            profileVersion: 1,
+            parameters: [],
+            nodes: [
+                { id: "n.f", type: "Float3", version: 99, properties: { value: [0, 0, 0] } },
+                { id: "n.n", type: "Normalize", version: 1, properties: {} },
+            ],
+            connections: [{ id: "c1", from: { nodeId: "n.f", portId: "value" }, to: { nodeId: "n.n", portId: "value" } }],
+            editorMetadata: { nodes: {} },
+        });
+        expect(silent.diagnostics).toEqual([]);
+        expect(silent.typeAt("n.f", "value")).toBeUndefined();
+        expect(silent.typeAt("n.n", "value")).toBeUndefined();
+
+        const consumed = resolvedDocument({
+            schemaVersion: 1,
+            graphId: "graph.future2",
+            profile: "gglab.surface",
+            profileVersion: 1,
+            parameters: [],
+            nodes: [
+                { id: "n.f", type: "Float3", version: 99, properties: { value: [0, 0, 0] } },
+                { id: "n.g", type: "Float", version: 1, properties: { value: 0.5 } },
+                { id: "n.m", type: "Multiply", version: 1, properties: {} },
+            ],
+            connections: [
+                { id: "c1", from: { nodeId: "n.f", portId: "value" }, to: { nodeId: "n.m", portId: "a" } },
+                { id: "c2", from: { nodeId: "n.g", portId: "value" }, to: { nodeId: "n.m", portId: "b" } },
+            ],
+            editorMetadata: { nodes: {} },
+        });
+        expect(consumed.ok).toBe(false);
+        expect(consumed.diagnostics).toEqual([
+            expect.objectContaining({ code: DiagnosticCode.TypeMismatch, severity: "error", dataPath: "$.nodes[2]" }),
+        ]);
+        expect(consumed.typeAt("n.m", "value")).toBeUndefined();
+    });
+
+    it("resolves only the provided scope when one is given (live slice vs whole graph)", () => {
+        // A fully valid live graph plus a dead experiment with mixed vector
+        // sizes that never feeds the output.
+        const document: Record<string, unknown> = {
+            schemaVersion: 1,
+            graphId: "graph.scope",
+            profile: "gglab.surface",
+            profileVersion: 1,
+            parameters: [
+                { id: "p.tint", name: "Tint", class: "VectorParameter", valueType: "float3" },
+                { id: "p.metal", name: "M", class: "ScalarParameter", valueType: "float" },
+            ],
+            nodes: [
+                { id: "n.t", type: "VectorParameter", version: 1, properties: { parameterId: "p.tint" } },
+                { id: "n.sf", type: "ScalarParameter", version: 1, properties: { parameterId: "p.metal" } },
+                { id: "n.c", type: "Float3", version: 1, properties: { value: [0, 0, 1] } },
+                { id: "n.r", type: "Float", version: 1, properties: { value: 0.5 } },
+                { id: "n.o", type: "Float", version: 1, properties: { value: 1 } },
+                { id: "n.out", type: "SurfaceOutput", version: 1, properties: {} },
+                { id: "n.d2", type: "Float2", version: 1, properties: { value: [1, 1] } },
+                { id: "n.d3", type: "Float3", version: 1, properties: { value: [0, 0, 0] } },
+                { id: "n.dm", type: "Multiply", version: 1, properties: {} },
+            ],
+            connections: [
+                { id: "c1", from: { nodeId: "n.c", portId: "value" }, to: { nodeId: "n.out", portId: "BaseColor" } },
+                { id: "c2", from: { nodeId: "n.t", portId: "value" }, to: { nodeId: "n.out", portId: "Emissive" } },
+                { id: "c3", from: { nodeId: "n.sf", portId: "value" }, to: { nodeId: "n.out", portId: "Metallic" } },
+                { id: "c4", from: { nodeId: "n.r", portId: "value" }, to: { nodeId: "n.out", portId: "Roughness" } },
+                { id: "c5", from: { nodeId: "n.o", portId: "value" }, to: { nodeId: "n.out", portId: "Opacity" } },
+                { id: "c6", from: { nodeId: "n.d2", portId: "value" }, to: { nodeId: "n.dm", portId: "a" } },
+                { id: "c7", from: { nodeId: "n.d3", portId: "value" }, to: { nodeId: "n.dm", portId: "b" } },
+            ],
+            editorMetadata: { nodes: {} },
+        };
+        const parsed = parseShaderGraphDocument(JSON.stringify(document));
+        if (!parsed.ok || parsed.value === null) {
+            throw new Error(`test document did not parse: ${JSON.stringify(parsed.diagnostics)}`);
+        }
+
+        // Whole-document domain (authoring): the dead failure is visible.
+        const whole = resolveGraphTypes(parsed.value);
+        expect(whole.ok).toBe(false);
+        expect(whole.diagnostics).toEqual([
+            expect.objectContaining({ code: DiagnosticCode.TypeMismatch, severity: "error", dataPath: "$.nodes[8]" }),
+        ]);
+
+        // Live-slice domain (compilation): the dead failure stays outside
+        // the domain; the live graph resolves fully and cleanly.
+        const live = resolveGraphTypes(parsed.value, { nodeIds: new Set(["n.t", "n.sf", "n.c", "n.r", "n.o", "n.out"]) });
+        expect(live.ok).toBe(true);
+        expect(live.diagnostics).toEqual([]);
+        expect(live.typeAt("n.dm", "value")).toBeUndefined();
+        expect(live.typeAt("n.c", "value")).toBe("float3");
+        expect(live.typeAt("n.t", "value")).toBe("float3");
+    });
 });
