@@ -1,17 +1,17 @@
 /**
  * Authoring operations on the graph document — presentation-side data
- * construction only. Every operation returns a new document (or a
- * structured refusal); it never pre-judges validity. Semantic authority stays
- * in the headless core: the composition root re-asks the core's services
- * (validation, port-level type resolution, conformance) after each
- * operation, and structured diagnostics are what the user sees. An
- * operation can therefore "do the thing"; whether the thing is legal is
- * always the core's call, reported in the core's stable codes.
+ * construction only, and only where a frontend legitimately owns the answer
+ * (stable-id derivation, document location). Every operation returns a new
+ * document (or a structured refusal) and is atomic: a refusal returns the
+ * unchanged input, never a halfway state.
  *
- * Stable ids are derived deterministically from the document's existing
- * ids (the next free numeric suffix in the node/connection/parameter
- * namespaces), never from pointers, array indices, or time — ids must stay
- * stable across save/load re-serialization (core rule).
+ * What this module does NOT own (each has exactly one authority):
+ *   - node version + creation-time property defaults → the core's
+ *     `createNode` (node catalog). The GUI never says "a new Float is 0";
+ *     the catalog says so, and a future CLI asks the same service.
+ *   - validity of anything produced → the core's services (validation,
+ *     port-level types, conformance). Operations build data; they do not
+ *     pre-judge it.
  */
 import type {
     ConnectionEnd,
@@ -19,21 +19,20 @@ import type {
     GraphNode,
     GraphParameter,
     GraphType,
-    JsonValue,
     ShaderGraphDocument,
 } from "@gglab/shader-graph-core";
-import { getNodeDefinition } from "@gglab/shader-graph-core";
+import { createNode, getNodeDefinition } from "@gglab/shader-graph-core";
 
 export interface AuthoringRefusal {
     readonly reason: string;
 }
 
 export interface AuthoringResult {
-    /** The new document, or the unchanged input on refusal. */
+    /** The new document — or the unchanged input when `applied` is false. */
     readonly document: ShaderGraphDocument;
     readonly applied: boolean;
     readonly refusal: AuthoringRefusal | undefined;
-    /** The id of the entry this operation created (applied only). */
+    /** The id of the entry this operation created (`applied` only). */
     readonly createdId: string | undefined;
 }
 
@@ -56,11 +55,19 @@ function takenParameterIds(document: ShaderGraphDocument): Set<string> {
     return new Set(document.parameters.map((parameter) => parameter.id));
 }
 
+function refusalReason(diagnostics: readonly { message: string }[]): string {
+    const first = diagnostics[0];
+    return first !== undefined ? first.message : "The core's node catalog could not create this node entry.";
+}
+
 /**
- * Add a node of a type from the core's node catalog. For a parameter node
- * (one that names a document parameter), the parameter must already exist —
- * it is created first via `addParameter`; adding a parameter node without
- * `parameterId` is a structured refusal, never a silent placeholder.
+ * Add a node of a type from the core's catalog. Version and creation-time
+ * property values come from the core's `createNode` — the single authority
+ * for node-creation semantics (shared with a future CLI; the GUI owns none).
+ * For a parameter node (one that names a document parameter), the parameter
+ * must already exist — it is created first via `addParameter`; adding a
+ * parameter node without `parameterId` is a structured refusal, never a
+ * silent placeholder.
  */
 export function addNode(
     document: ShaderGraphDocument,
@@ -68,8 +75,9 @@ export function addNode(
     options: { parameterId?: string; position?: { x: number; y: number } } = {},
 ): AuthoringResult {
     const definition = getNodeDefinition(type);
-    if (definition === undefined) {
-        return refused(document, `No node catalog entry for type "${type}".`);
+    const creation = createNode(type);
+    if (definition === undefined || creation.ok === false) {
+        return refused(document, definition === undefined ? `No node catalog entry for type "${type}".` : refusalReason(creation.diagnostics));
     }
     const requiresParameter = definition.referenceProperties.some((reference) => reference.name === "parameterId");
     if (requiresParameter && options.parameterId === undefined) {
@@ -78,10 +86,10 @@ export function addNode(
     const node: GraphNode = {
         id: nextStableId("n", takenNodeIds(document)),
         type,
-        version: definition.versionRange.minimumVersion,
+        version: creation.nodeVersion,
         properties: {
             ...(requiresParameter && options.parameterId !== undefined ? { parameterId: options.parameterId } : {}),
-            ...defaultProperties(definition.properties),
+            ...creation.properties,
         },
         unknownFields: {},
     };
@@ -91,33 +99,11 @@ export function addNode(
             ? { ...document.editorMetadata, nodes: { ...document.editorMetadata.nodes, [node.id]: { position: options.position, unknownFields: {} } } }
             : document.editorMetadata;
     return {
-        document: { ...document, nodes, editorMetadata: { ...editorMetadata } },
+        document: { ...document, nodes, editorMetadata },
         applied: true,
         refusal: undefined,
         createdId: node.id,
     };
-}
-
-/** Numeric property defaults for newly added nodes (0 / [0, 0, ...]). */
-function defaultProperties(properties: readonly { name: string; type: string; required: boolean }[]): { [name: string]: JsonValue } {
-    const propertiesOut: { [name: string]: JsonValue } = {};
-    for (const property of properties) {
-        if (!property.required) {
-            continue;
-        }
-        if (property.type === "float") {
-            propertiesOut[property.name] = 0;
-        } else if (property.type === "float2") {
-            propertiesOut[property.name] = [0, 0];
-        } else if (property.type === "float3") {
-            propertiesOut[property.name] = [0, 0, 0];
-        } else if (property.type === "float4") {
-            propertiesOut[property.name] = [0, 0, 0, 0];
-        }
-        // Non-numeric required properties are left to explicit authoring;
-        // the core's validation will name them if they remain absent.
-    }
-    return propertiesOut;
 }
 
 /** Remove a node and every connection that touches it (data integrity). */
@@ -174,34 +160,57 @@ export interface ParameterRequest {
 
 /**
  * Add a graph parameter (document entry + the parameter node that names
- * it), so the canvas immediately shows what the parameter stands for.
- * The (class, valueType) pairing is not judged here — the core's
+ * it). Atomic: the core's `createNode` for the node type is asked BEFORE
+ * the parameter entry is attached, so a refusal (e.g. a class whose node
+ * type is not in the catalog) returns the unchanged input — never a
+ * parameter entry with no node.
+ *
+ * The (class, valueType) pairing is not judged here either — it is supplied
+ * by the caller from the descriptor's own vocabulary, and the core's
  * conformance service checks it against the loaded descriptor.
  */
 export function addParameter(document: ShaderGraphDocument, request: ParameterRequest): AuthoringResult {
-    const parameterId = nextStableId("p", takenParameterIds(document));
+    const nodeType = nodeTypeForParameterClass(request.class);
+    const creation = createNode(nodeType);
+    if (creation.ok === false) {
+        return refused(
+            document,
+            `Parameter class "${request.class}" cannot be authored: ${refusalReason(creation.diagnostics)}`,
+        );
+    }
     const parameter: GraphParameter = {
-        id: parameterId,
+        id: nextStableId("p", takenParameterIds(document)),
         name: request.name,
         class: request.class,
         valueType: request.valueType,
         unknownFields: {},
     };
-    const parameterDocument: ShaderGraphDocument = { ...document, parameters: [...document.parameters, parameter] };
-    return addNode(parameterDocument, nodeTypeForParameterClass(request.class), { parameterId });
+    const node: GraphNode = {
+        id: nextStableId("n", takenNodeIds(document)),
+        type: nodeType,
+        version: creation.nodeVersion,
+        properties: {
+            parameterId: parameter.id,
+            ...creation.properties,
+        },
+        unknownFields: {},
+    };
+    return {
+        document: { ...document, parameters: [...document.parameters, parameter], nodes: [...document.nodes, node] },
+        applied: true,
+        refusal: undefined,
+        createdId: node.id,
+    };
 }
 
-/** The parameter node type that carries each parameter class. */
+/**
+ * The parameter node type that carries a parameter class. In the surface
+ * profile the node type name matches the class name ("ScalarParameter"
+ * class is authored by the "ScalarParameter" node); `createNode` — the
+ * core's authority — still validates that the type exists and says what a
+ * new entry carries, so a mismatch degrades to a structured refusal.
+ */
 function nodeTypeForParameterClass(parameterClass: string): string {
-    if (parameterClass === "ScalarParameter") {
-        return "ScalarParameter";
-    }
-    if (parameterClass === "VectorParameter") {
-        return "VectorParameter";
-    }
-    if (parameterClass === "Texture2DParameter") {
-        return "Texture2DParameter";
-    }
     return parameterClass;
 }
 

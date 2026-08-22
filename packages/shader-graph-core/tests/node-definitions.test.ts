@@ -5,6 +5,7 @@ import {
     NUMERIC_TYPES,
     NODE_DEFINITIONS,
     getNodeDefinition,
+    createNode,
     supportedNodeTypeCatalog,
     isGraphType,
     isImplicitlyConvertible,
@@ -227,6 +228,35 @@ describe("node definitions versus document parsing", () => {
         expect(result.ok).toBe(true);
         expect(result.diagnostics).toEqual([
             expect.objectContaining({ code: DiagnosticCode.UnknownNodeVersion, severity: "warning", dataPath: "$.nodes[0].version" }),
+        ]);
+    });
+});
+
+describe("createNode — the single authority for node-creation semantics", () => {
+    it("returns the version range minimum and the declared creation defaults for constants", () => {
+        expect(createNode("Float")).toEqual({
+            ok: true,
+            nodeVersion: 1,
+            properties: { value: 0 },
+            diagnostics: [],
+        });
+        expect(createNode("Float2").properties).toEqual({ value: [0, 0] });
+        expect(createNode("Float3").properties).toEqual({ value: [0, 0, 0] });
+        expect(createNode("Float4").properties).toEqual({ value: [0, 0, 0, 0] });
+    });
+
+    it("returns no properties for types that declare none (nothing invented)", () => {
+        expect(createNode("Multiply")).toEqual({ ok: true, nodeVersion: 1, properties: {}, diagnostics: [] });
+        expect(createNode("SurfaceOutput").properties).toEqual({});
+        expect(createNode("UV0").properties).toEqual({});
+    });
+
+    it("refuses a type the catalog does not know (structured, nothing created)", () => {
+        const result = createNode("NoSuchNode");
+        expect(result.ok).toBe(false);
+        expect(result.properties).toEqual({});
+        expect(result.diagnostics).toEqual([
+            expect.objectContaining({ code: DiagnosticCode.UnknownNodeType, severity: "error" }),
         ]);
     });
 });

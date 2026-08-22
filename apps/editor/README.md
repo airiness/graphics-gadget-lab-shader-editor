@@ -12,14 +12,32 @@ shader compilation, or backend target policy.
 
 ## Current surface (authoring loop)
 
-- **Canvas** — the document projected into React Flow (one node/edge per
-  core entry; ports from the core node catalog). Connecting two ports is
-  an interaction intent; the core's validation and port-level type
-  services are what decide whether it holds, and their structured
-  diagnostics are what renders.
-- **Node palette + parameters** — built from the core's node catalog (no
-  UI-side registry). Adding a parameter creates the document parameter
-  entry and the node that names it.
+- **Canvas** — the document projected into React Flow v12
+  (`@xyflow/react`): one node/edge per core entry, and **ports are the
+  UI unit** — each port (name, direction, order from the core node
+  catalog) gets its own labeled row and its own handle position, so a
+  node's six channel outputs are six distinct, individually grabbable
+  points. Connecting two ports is an interaction intent; the core's
+  validation and port-level type services decide whether it holds, and
+  their structured diagnostics are what renders.
+- **Node palette + parameters** — the node section is the core's node
+  catalog (no UI-side registry). The parameter section is a **pure
+  projection of the loaded descriptor instance**: classes and their full
+  value-type lists come from `parameterClasses`, the descriptor's
+  `deferred` set is named but not authorable, and with no descriptor
+  loaded the section says so explicitly instead of offering a vocabulary
+  of its own. Adding a parameter is atomic (document entry + node that
+  names it, or the unchanged input).
+- **Node creation** — node version and creation-time property values come
+  from the core's `createNode` (the single authority for what a new node
+  of a type carries; a future CLI asks the same service). The GUI owns
+  no default values.
+- **Diagnostics → canvas navigation** — each side-panel entry is
+  selectable; the target is resolved from the entry's `dataPath` anchor
+  (`$.nodes[K]`, `$.connections[K]`) against the document, and a port is
+  highlighted only when the message names it verifiably against the
+  catalog. Anchors without a canvas target (profile-level, parameter
+  level) stay in the panel.
 - **Descriptor instance panel** — loads one frozen Surface Profile
   Descriptor through the core's strict reader (serialized data document —
   never a C++ ABI or header import); compatibility and conformance are the
@@ -45,9 +63,19 @@ pnpm build      # production bundle (dist/)
 
 ## Invariants locked by this package's tests
 
-- the palette is the core node catalog itself;
-- authoring operations are data construction — validity is the core's
-  call, rendered in the core's stable codes;
+- the palette is the core node catalog itself, and the parameter
+  vocabulary is the descriptor's own (a descriptor admitting no class
+  offers no such class — no UI-side register can drift);
+- authoring operations are atomic data construction — a refusal returns
+  the unchanged input (never an orphan parameter entry) — and validity
+  is the core's call, rendered in the core's stable codes;
+- node creation defaults are core catalog facts (`createNode`), not UI
+  constants;
+- ports are the UI unit: every port renders on its own row at a distinct
+  position (six channel outputs, six distinguishable points);
+- diagnostic navigation resolves its target from the `dataPath` anchor and
+  names a port only when the catalog confirms it; anchors without a
+  canvas target resolve to an explicit no-target, never a fake one;
 - save → load → compile preserves the generated HLSL bytes and the
   generated-source identity;
 - canvas placement (session state) never changes generated HLSL or its

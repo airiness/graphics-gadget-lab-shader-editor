@@ -18,12 +18,17 @@ import {
     addConnection,
     addNode,
     addParameter,
+    diagnosticFocus,
     documentToFlow,
     nodeCatalogGroups,
+    parameterChoices,
+    portTop,
     readDescriptorText,
     textureSignatureSerialized,
     DiagnosticsPanel,
     NodePalette,
+    ReactFlowProvider,
+    ShaderNode,
 } from "@gglab/editor-ui";
 import {
     checkProfileConformance,
@@ -33,6 +38,7 @@ import {
     parseShaderGraphDocument,
     parseSurfaceProfileDescriptor,
     validateShaderGraph,
+    type ShaderGraphDiagnostic,
     type SurfaceProfileDescriptor,
 } from "@gglab/shader-graph-core";
 
@@ -196,12 +202,116 @@ describe("node palette", () => {
 
     it("renders (server render smoke): palette entries and a passed diagnostics panel", () => {
         const html = renderToString(
-            <NodePalette onAddNode={() => undefined} onAddParameter={() => undefined} />,
+            <NodePalette onAddNode={() => undefined} onAddParameter={() => undefined} descriptor={null} />,
         );
         expect(html).toContain("Multiply");
         expect(html).toContain("SurfaceOutput");
+        // Without a descriptor, parameter authoring is explicitly unavailable —
+        // the UI projects the absence instead of inventing a vocabulary.
+        expect(html).toContain("descriptor-owned");
         const passed = renderToString(<DiagnosticsPanel title="Graph validation" ok={true} diagnostics={[]} passedText="No graph validation problems." />);
         expect(passed).toContain("No graph validation problems.");
+    });
+
+    it("parameter choices are the descriptor's own vocabulary (projection, not a register)", () => {
+        expect(parameterChoices(null)).toEqual([]);
+        const descriptor = parseSurfaceProfileDescriptorFixture(canonicalV1Fixture);
+        const choices = parameterChoices(descriptor);
+        // Every active class + its FULL value-type list from the descriptor
+        // (including float2, which a UI-side list would omit).
+        expect(choices).toContainEqual({ class: "ScalarParameter", valueTypes: ["float"], deferred: false });
+        expect(choices).toContainEqual({ class: "VectorParameter", valueTypes: ["float2", "float3", "float4"], deferred: false });
+        expect(choices).toContainEqual({ class: "Texture2DParameter", valueTypes: ["Texture2D"], deferred: false });
+        // Deferred classes are surfaced, never authorable.
+        expect(choices).toContainEqual({ class: "BoolParameter", valueTypes: [], deferred: true });
+        expect(choices).toContainEqual({ class: "SamplerParameter", valueTypes: [], deferred: true });
+    });
+
+    it("a descriptor that admits no Texture2DParameter offers no Texture2DParameter (no drift)", () => {
+        const descriptor = parseSurfaceProfileDescriptorFixture({ ...canonicalV1Fixture, parameterClasses: [{ class: "ScalarParameter", valueTypes: ["float"] }] });
+        const names = parameterChoices(descriptor).map((choice) => choice.class);
+        expect(names).not.toContain("Texture2DParameter");
+        expect(names).toContain("ScalarParameter");
+    });
+});
+
+// --- ports are the UI unit: distinct rows, distinct handles ------------------
+
+describe("port layout (ShaderNode)", () => {
+    it("gives every port its own row and vertically distinct handle position", () => {
+        // SampleTexture2D's six channel outputs must be six distinguishable points.
+        for (let index = 0; index < 6; index += 1) {
+            for (let other = index + 1; other < 6; other += 1) {
+                expect(portTop(index)).not.toBe(portTop(other));
+            }
+        }
+        expect(portTop(5) - portTop(0)).toBe(5 * 26);
+    });
+
+    it("renders a SampleTexture2D card with six labeled, individually present outputs", () => {
+        const document = loaded(textureV2Document());
+        const projection = documentToFlow(document);
+        const sample = projection.nodes.find((node) => node.data.nodeType === "SampleTexture2D");
+        expect(sample !== undefined).toBe(true);
+        if (sample !== undefined) {
+            expect(sample.data.outputPorts).toEqual(["RGBA", "RGB", "R", "G", "B", "A"]);
+            // Handle (v12) requires the xyflow store context: wrap standalone renders.
+            const html = renderToString(
+                <ReactFlowProvider>
+                    <ShaderNode {...(sample as unknown as Parameters<typeof ShaderNode>[0])} />
+                </ReactFlowProvider>,
+            );
+            for (const portName of ["RGBA", "RGB", "R", "G", "B", "A"]) {
+                expect(html).toContain(portName);
+            }
+            // Six source handles + two target handles (texture, uv), each with its own top.
+            const handleTops = [...html.matchAll(/top:\s*(\d+(?:\.\d+)?)px/g)].map((match) => Number(match[1]));
+            expect(new Set(handleTops).size).toBeGreaterThanOrEqual(6);
+        }
+    });
+});
+
+// --- diagnostic → canvas navigation (dataPath anchor, catalog-checked port) ----
+
+function makeDiagnostic(code: string, message: string, dataPath: string): ShaderGraphDiagnostic {
+    return { code, severity: "error", message, dataPath };
+}
+
+describe("diagnostic → canvas navigation", () => {
+    it("resolves a node anchor (dataPath index) to the document's own stable id, port catalog-verified", () => {
+        const document = loaded(validV1Document());
+        // In this fixture nodes[4] = n.out (SurfaceOutput); "BaseColor" is a real catalog input.
+        const focus = diagnosticFocus(document, makeDiagnostic("MISSING_REQUIRED_INPUT", 'Node "n.out" (SurfaceOutput) has required input "BaseColor" without a connection.', "$.nodes[4]"));
+        expect(focus).toEqual({
+            nodeHighlights: [{ nodeId: "n.out", portIds: ["BaseColor"] }],
+            connectionHighlights: [],
+        });
+    });
+
+    it("resolves a connection anchor to the edge and both endpoint ports", () => {
+        const document = loaded(validV1Document());
+        // connections[0] = c1: n.c.value → n.out.BaseColor.
+        const focus = diagnosticFocus(document, makeDiagnostic("TYPE_MISMATCH", 'Connection "c1" carries an incompatible value to input "BaseColor".', "$.connections[0]"));
+        expect(focus).toEqual({
+            nodeHighlights: [
+                { nodeId: "n.c", portIds: ["value"] },
+                { nodeId: "n.out", portIds: ["BaseColor"] },
+            ],
+            connectionHighlights: ["c1"],
+        });
+    });
+
+    it("names a quoted port only when the catalog confirms it — never fabricates one", () => {
+        const document = loaded(validV1Document());
+        const focus = diagnosticFocus(document, makeDiagnostic("UNKNOWN_PORT", 'Connection "c9" references unknown port "NoSuchPort" on node "n.out".', "$.nodes[4]"));
+        expect(focus).toEqual({ nodeHighlights: [{ nodeId: "n.out", portIds: [] }], connectionHighlights: [] });
+    });
+
+    it("anchors without a canvas target resolve to null (honest absence, not a fake highlight)", () => {
+        const document = loaded(validV1Document());
+        expect(diagnosticFocus(document, makeDiagnostic("PROFILE_MISMATCH", "The profile line of the graph and the descriptor differ.", "$"))).toBeNull();
+        expect(diagnosticFocus(document, makeDiagnostic("DUPLICATE_PARAMETER_ID", 'Parameter id "p.x" is duplicated.', "$.parameters[0]"))).toBeNull();
+        expect(diagnosticFocus(document, makeDiagnostic("MISSING_REQUIRED_FIELD", "Missing a node at this index.", "$.nodes[41]"))).toBeNull();
     });
 });
 
@@ -241,6 +351,25 @@ describe("authoring operations + core verdicts", () => {
         );
         const node = added.document.nodes.find((candidate) => candidate.id === "n1");
         expect(node).toEqual(expect.objectContaining({ type: "ScalarParameter", properties: { parameterId: "p1" } }));
+    });
+
+    it("addParameter is atomic: a class with no catalog-creatable node refuses with the unchanged input (no orphan parameter)", () => {
+        const document = loaded(validV1Document());
+        const before = JSON.stringify(document);
+        const refused = addParameter(document, { name: "Flag", class: "BoolParameter", valueType: "float" });
+        // BoolParameter is in the deferred set and has no catalog node entry.
+        expect(refused.applied).toBe(false);
+        expect(refused.refusal).not.toBeNull();
+        // Contract: refusal returns the unchanged input — deep equality.
+        expect(JSON.stringify(refused.document)).toBe(before);
+        expect(refused.document.parameters.length).toBe(document.parameters.length);
+    });
+
+    it("node creation defaults come from the core's catalog, not from the UI (Float → 0 is a catalog fact)", () => {
+        const document = loaded(validV1Document());
+        const added = addNode(document, "Float2");
+        expect(added.applied).toBe(true);
+        expect(added.document.nodes.at(-1)?.properties).toEqual({ value: [0, 0] });
     });
 
     it("records canvas placement as session state without touching semantics", () => {

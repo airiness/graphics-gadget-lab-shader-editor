@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@gglab/shader-graph-core": "workspace:*",
-    "@reactflow/core": "^11.11.4"
+    "@xyflow/react": "^12.11.3"
   },
   "peerDependencies": {
     "react": ">=19.0.0"

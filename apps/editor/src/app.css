@@ -1,4 +1,8 @@
-/* GGLab shader graph editor — plain CSS, no framework. */
+/* GGLab shader graph editor — plain CSS, no framework.
+   Node card geometry is contract with FLOW_LAYOUT in flow-adapter.ts:
+   header height 48px, port row height 26px, handle 10px, card 190px,
+   no top padding (handle offsets are measured from the card border box). */
+
 :root {
     color-scheme: dark;
     --gglab-bg: #10141a;
@@ -32,7 +36,7 @@ body {
 
 .gglab-app {
     display: grid;
-    grid-template-columns: 240px 1fr 340px;
+    grid-template-columns: 260px 1fr 360px;
     height: 100%;
 }
 
@@ -74,10 +78,6 @@ h2:first-child {
 }
 
 /* palette */
-.gglab-palette-section {
-    margin-bottom: 8px;
-}
-
 .gglab-palette-entry {
     display: flex;
     justify-content: space-between;
@@ -102,23 +102,43 @@ h2:first-child {
     white-space: nowrap;
 }
 
-.gglab-palette-kind {
+.gglab-palette-hint {
+    font-size: 12px;
     color: var(--gglab-muted);
+}
+
+.gglab-parameter-choice {
+    border-left: 2px solid var(--gglab-border);
+    margin: 4px 0 4px 4px;
+    padding-left: 8px;
+}
+
+.gglab-palette-value {
+    padding: 3px 6px;
     font-size: 12px;
 }
 
-.gglab-notes p,
-.gglab-descriptor-hint,
-.gglab-descriptor-status {
-    font-size: 13px;
-    color: var(--gglab-text);
+.gglab-palette-deferred {
+    color: var(--gglab-warning);
+    font-size: 11px;
+    text-transform: lowercase;
 }
 
-/* canvas node cards */
+.gglab-palette-deferred-note {
+    display: block;
+    font-size: 11px;
+    color: var(--gglab-muted);
+}
+
+.gglab-notes p {
+    font-size: 13px;
+}
+
+/* canvas node card — geometry is contract with FLOW_LAYOUT */
 .gglab-node {
     position: relative;
-    min-width: 150px;
-    padding: 10px 12px;
+    width: 190px;
+    padding: 0;
     background: var(--gglab-panel);
     border: 1px solid var(--gglab-border);
     border-radius: 6px;
@@ -128,18 +148,75 @@ h2:first-child {
     border-color: var(--gglab-warning);
 }
 
+.gglab-node-focus {
+    border-color: var(--gglab-accent);
+    box-shadow: 0 0 0 2px rgba(90, 169, 255, 0.35);
+}
+
+.gglab-node-header {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    height: 48px;
+    padding: 8px 10px 0;
+    overflow: hidden;
+}
+
 .gglab-node-title {
     font-weight: 600;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .gglab-node-type {
     color: var(--gglab-muted);
-    font-size: 12px;
+    font-size: 11px;
 }
 
 .gglab-node-flag {
     color: var(--gglab-warning);
+    font-size: 10px;
+}
+
+.gglab-node-rows {
+    padding: 0 10px 8px;
+}
+
+.gglab-port-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    height: 26px;
+    align-items: center;
+}
+
+.gglab-port {
     font-size: 12px;
+    color: var(--gglab-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 0 4px;
+}
+
+.gglab-port-out {
+    text-align: right;
+}
+
+.gglab-port-focus {
+    color: var(--gglab-text);
+    font-weight: 700;
+}
+
+.react-flow__handle.gglab-handle-focus {
+    background: var(--gglab-accent) !important;
+    transform: scale(1.5);
+}
+
+.react-flow__edge.gglab-edge-focus .react-flow__edge-path {
+    stroke: var(--gglab-accent);
+    stroke-width: 3;
 }
 
 /* diagnostics */
@@ -153,13 +230,29 @@ h2:first-child {
     color: var(--gglab-ok);
 }
 
-.gglab-diagnostics-item dt {
-    margin: 0;
-    font-size: 12px;
+.gglab-diagnostics-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    color: inherit;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 6px;
+    margin: 2px 0;
+    font: inherit;
 }
 
-.gglab-diagnostics-item dd {
-    margin: 2px 0 8px;
+button.gglab-diagnostics-item:hover {
+    border-color: var(--gglab-accent);
+}
+
+.gglab-diagnostics-head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: baseline;
+    font-size: 12px;
 }
 
 .gglab-diagnostics-code {
@@ -167,18 +260,30 @@ h2:first-child {
     font-weight: 700;
 }
 
-.gglab-diagnostics-severity-error .gglab-diagnostics-code {
+.gglab-diagnostics-severity-error .gglab-diagnostics-code,
+button.gglab-diagnostics-severity-error .gglab-diagnostics-code {
     color: var(--gglab-error);
 }
 
-.gglab-diagnostics-severity-warning .gglab-diagnostics-code {
+.gglab-diagnostics-severity-warning .gglab-diagnostics-code,
+button.gglab-diagnostics-severity-warning .gglab-diagnostics-code {
     color: var(--gglab-warning);
+}
+
+.gglab-diagnostics-message {
+    display: block;
+    margin: 2px 0;
 }
 
 .gglab-diagnostics-path {
     color: var(--gglab-muted);
     font-family: ui-monospace, monospace;
-    font-size: 12px;
+    font-size: 11px;
+}
+
+.gglab-descriptor-hint,
+.gglab-descriptor-status {
+    font-size: 13px;
 }
 
 .gglab-descriptor-rejected {

@@ -14,10 +14,12 @@ import {
     addParameter,
     DescriptorPanel,
     DiagnosticsPanel,
+    diagnosticFocus,
     documentToFlow,
     FlowViewport,
     NodePalette,
     type AuthoringResult,
+    type CanvasFocus,
     type ConnectionRequest,
     type DescriptorPanelState,
     type ParameterRequest,
@@ -78,10 +80,12 @@ export function App() {
     const [savedText, setSavedText] = useState(() => SEED_DOCUMENT_TEXT);
     const [loadResult, setLoadResult] = useState<DiagnosticSet | null>(null);
     const [emission, setEmission] = useState<HlslEmission | null>(null);
+    // Which diagnostic's target the canvas is highlighting (null = none).
+    const [focus, setFocus] = useState<CanvasFocus | null>(null);
 
     const descriptor: SurfaceProfileDescriptor | null = descriptorState.kind === "ready" ? descriptorState.descriptor : null;
 
-    const flow = useMemo(() => documentToFlow(document), [document]);
+    const flow = useMemo(() => documentToFlow(document, focus), [document, focus]);
 
     const graphSets = useMemo<readonly DiagnosticSet[]>(() => {
         const validation = validateShaderGraph(document);
@@ -113,10 +117,17 @@ export function App() {
         if (result.applied) {
             setDocument(result.document);
             setOperationNotes([]);
+            setFocus(null); // the document changed — any highlighted target would be stale
             return;
         }
         const reason = result.refusal !== undefined ? result.refusal.reason : "The operation was not applied.";
         setOperationNotes((previous) => [...previous, reason]);
+    }
+
+    function selectDiagnostic(diagnostic: ShaderGraphDiagnostic): void {
+        // Navigation intent → target resolved against the document from the
+        // diagnostic's own dataPath anchor (never parsed from prose).
+        setFocus(diagnosticFocus(document, diagnostic));
     }
 
     const onAddNode = (type: string): void => {
@@ -163,7 +174,7 @@ export function App() {
     return (
         <div className="gglab-app">
             <aside className="gglab-side gglab-side-left">
-                <NodePalette onAddNode={onAddNode} onAddParameter={onAddParameter} />
+                <NodePalette onAddNode={onAddNode} onAddParameter={onAddParameter} descriptor={descriptor} />
                 {operationNotes.length > 0 && (
                     <section className="gglab-notes">
                         <h2>Authoring notes</h2>
@@ -179,13 +190,13 @@ export function App() {
             <aside className="gglab-side gglab-side-right">
                 <DescriptorPanel state={descriptorState} onStateChange={(state) => setDescriptorState(state)} />
                 {graphSets.map((set) => (
-                    <DiagnosticsPanel key={set.title} title={set.title} diagnostics={set.diagnostics} ok={set.ok} passedText={set.passedText} />
+                    <DiagnosticsPanel key={set.title} title={set.title} diagnostics={set.diagnostics} ok={set.ok} passedText={set.passedText} onSelect={selectDiagnostic} />
                 ))}
                 {contractSets.map((set) => (
-                    <DiagnosticsPanel key={set.title} title={set.title} diagnostics={set.diagnostics} ok={set.ok} passedText={set.passedText} />
+                    <DiagnosticsPanel key={set.title} title={set.title} diagnostics={set.diagnostics} ok={set.ok} passedText={set.passedText} onSelect={selectDiagnostic} />
                 ))}
                 {loadResult !== null && (
-                    <DiagnosticsPanel title={loadResult.title} diagnostics={loadResult.diagnostics} ok={loadResult.ok} passedText={loadResult.passedText} />
+                    <DiagnosticsPanel title={loadResult.title} diagnostics={loadResult.diagnostics} ok={loadResult.ok} passedText={loadResult.passedText} onSelect={selectDiagnostic} />
                 )}
                 <section className="gglab-document-io">
                     <h2>Document save / load</h2>

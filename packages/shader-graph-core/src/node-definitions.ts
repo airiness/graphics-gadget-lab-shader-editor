@@ -26,6 +26,9 @@
 import type { NodeTypeCatalog, NodeTypeSupport } from "./graph-document.js";
 import { NUMERIC_TYPES } from "./graph-types.js";
 import type { GraphType } from "./graph-types.js";
+import type { JsonValue } from "./json-value.js";
+import { DiagnosticCode, type ShaderGraphDiagnostic } from "./diagnostics.js";
+import { errorAt } from "./parse-helpers.js";
 
 export type NodeCategory = "constant" | "parameter" | "math" | "input" | "texture" | "output";
 
@@ -44,6 +47,15 @@ export interface NodePropertyDefinition {
     readonly type: GraphType;
     readonly required: boolean;
     readonly description?: string;
+    /**
+     * The creation-time default value, declared by the catalog itself. This
+     * is the single authority for "what a new node of this type carries":
+     * frontends (GUI, CLI) ask `createNode` and never invent defaults
+     * themselves. A required property without a declared default is simply
+     * absent on creation; whether the graph is then valid is the
+     * validator's call, not the catalog's.
+     */
+    readonly default?: JsonValue;
 }
 
 export interface ReferencePropertyDefinition {
@@ -82,8 +94,14 @@ function port(id: string, types: readonly GraphType[], required: boolean, descri
     return { id, name: id, types, required, ...(description !== undefined ? { description } : {}) };
 }
 
-function property(name: string, type: GraphType, required: boolean, description?: string): NodePropertyDefinition {
-    return { name, type, required, ...(description !== undefined ? { description } : {}) };
+function property(
+    name: string,
+    type: GraphType,
+    required: boolean,
+    description?: string,
+    defaultValue?: JsonValue,
+): NodePropertyDefinition {
+    return { name, type, required, ...(description !== undefined ? { description } : {}), ...(defaultValue !== undefined ? { default: defaultValue } : {}) };
 }
 
 const NO_REFERENCE_PROPERTIES: readonly ReferencePropertyDefinition[] = [];
@@ -119,10 +137,11 @@ function definition(
 
 export const NODE_DEFINITIONS: readonly NodeDefinition[] = [
     // Constants
-    definition("Float", "constant", "Constant float value.", [], [port("value", ["float"], true, "Constant value.")], [property("value", "float", true, "Constant float value.")]),
-    definition("Float2", "constant", "Constant float2 value.", [], [port("value", ["float2"], true, "Constant value.")], [property("value", "float2", true, "Constant float2 value.")]),
-    definition("Float3", "constant", "Constant float3 value.", [], [port("value", ["float3"], true, "Constant value.")], [property("value", "float3", true, "Constant float3 value.")]),
-    definition("Float4", "constant", "Constant float4 value.", [], [port("value", ["float4"], true, "Constant value.")], [property("value", "float4", true, "Constant float4 value.")]),
+    // Constant nodes: creation-time defaults declared here (single authority).
+    definition("Float", "constant", "Constant float value.", [], [port("value", ["float"], true, "Constant value.")], [property("value", "float", true, "Constant float value.", 0)]),
+    definition("Float2", "constant", "Constant float2 value.", [], [port("value", ["float2"], true, "Constant value.")], [property("value", "float2", true, "Constant float2 value.", [0, 0])]),
+    definition("Float3", "constant", "Constant float3 value.", [], [port("value", ["float3"], true, "Constant value.")], [property("value", "float3", true, "Constant float3 value.", [0, 0, 0])]),
+    definition("Float4", "constant", "Constant float4 value.", [], [port("value", ["float4"], true, "Constant value.")], [property("value", "float4", true, "Constant float4 value.", [0, 0, 0, 0])]),
 
     // Parameters
     definition(
@@ -232,6 +251,42 @@ for (const nodeDefinition of NODE_DEFINITIONS) {
 /** Looks up a node definition by document node type name. */
 export function getNodeDefinition(type: string): NodeDefinition | undefined {
     return DEFINITION_BY_TYPE.get(type);
+}
+
+/**
+ * The result of asking the catalog to create a node entry of a type.
+ *
+ * `createNode` is the single authority for node-creation semantics shared
+ * by every frontend (GUI palette clicks, a future CLI `add-node` surface,
+ * importers): the node version to record and the creation-time property
+ * values. Frontends construct the stable id and the document location —
+ * they never invent the version or the defaults. Creation success means
+ * "the catalog knows this type and says what a new entry carries"; whether
+ * the resulting graph is valid remains the validator's separate call.
+ */
+export interface CreateNodeResult {
+    readonly ok: boolean;
+    /** The node version a new entry of this type must carry (ok only). */
+    readonly nodeVersion: number;
+    /** Creation-time property values declared by the definition (ok only). */
+    readonly properties: Readonly<Record<string, JsonValue>>;
+    readonly diagnostics: readonly ShaderGraphDiagnostic[];
+}
+
+/** Ask the catalog for a new node entry of `type` (version + defaults). */
+export function createNode(type: string): CreateNodeResult {
+    const definition = getNodeDefinition(type);
+    if (definition === undefined) {
+        const diagnostic: ShaderGraphDiagnostic = errorAt("$", DiagnosticCode.UnknownNodeType, `No node catalog entry for type "${type}" — nothing was created.`);
+        return { ok: false, nodeVersion: 0, properties: {}, diagnostics: [diagnostic] };
+    }
+    const properties: { [name: string]: JsonValue } = {};
+    for (const propertyDefinition of definition.properties) {
+        if (propertyDefinition.required && propertyDefinition.default !== undefined) {
+            properties[propertyDefinition.name] = propertyDefinition.default;
+        }
+    }
+    return { ok: true, nodeVersion: definition.versionRange.minimumVersion, properties, diagnostics: [] };
 }
 
 /**
