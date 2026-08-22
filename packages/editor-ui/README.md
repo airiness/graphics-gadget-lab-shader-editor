@@ -5,7 +5,9 @@ Presentation components for the GGLab shader graph editor.
 Owns: canvas node/edge presentation (the React Flow projection), the node
 palette, panels (diagnostics, descriptor instance), the document
 authoring operations (pure data construction on the core's document
-model), and other UI components.
+model), the one-click auto layout (positions for `editorMetadata`), the
+single geometry source for the node card, and the small editor chrome
+kit (button / badge / input / collapsible / separator).
 
 Queries the headless core's semantic services for everything it shows:
 the node palette is the core's node catalog itself (there is no UI-side
@@ -40,6 +42,26 @@ root):
   catalog) renders on its own labeled row at its own handle position. The
   UI owns only layout (rows, offsets, grid slots); it owns no port
   semantics.
+- **One geometric system for the card** — `FLOW_GEOMETRY`
+  (`flow/flow-geometry.ts`) is the single home of the header height, port
+  row rhythm, handle size/position, and card width. The TS projection
+  (`portTop` / `handleStyle`), the inline handle styles, and the CSS (via
+  custom properties the viewport injects) all consume it, so the handle
+  center, the port-row center line, and the React Flow edge anchor agree
+  by construction — no parallel literals.
+- **Auto layout is session-state computation** — `autoLayout`
+  (dagre, left-to-right) turns the document's nodes + connections into a
+  positions map for `editorMetadata.nodes[*].position`; it reads the core
+  catalog for card sizes, defines no graph semantics, skips self-loops and
+  unknown endpoints for layout, and is deterministic. The composition root
+  writes the result as session state and the core keeps judging the
+  document — emission and identity never move with placement.
+- **Chrome kit, node language stays dedicated** — the editor chrome
+  (buttons, status badges, inputs, collapsible sections, separators) uses
+  a small shadcn-style kit (`components/ui/`) themed from the app's design
+  tokens; `ShaderNode`, the port rows, and the canvas geometry stay the
+  dedicated node design language, not the generic kit. The palette's
+  section/whole-library collapse and rail mode are UI session state.
 - **One authority per rule** — node version and creation-time property
   values come from the core's `createNode` (the GUI owns no defaults; a
   future CLI asks the same service); the parameter authoring vocabulary
@@ -64,6 +86,13 @@ root):
 - **Structured-only diagnostics** — panels render the core's
   `ShaderGraphDiagnostic` entries (code / severity / message / location);
   this package adds no classification of its own.
+
+Canvas chrome (dot grid, controls top-right, minimap bottom-right) is
+pure presentation: fixed overlay corners, no overlap. The xyflow
+attribution is hidden through `proOptions` at the app's request; the
+editor's own branding lives in the app shell. The viewport also exposes
+an `onFlowReady` fit trigger (session convenience — auto layout and load
+fit the graph; no semantics).
 
 Build/serve/test from the repository root: `pnpm typecheck`, `pnpm test`,
 `pnpm lint`. The React runtime is a peer dependency (the app provides it).

@@ -30,7 +30,7 @@ import {
 import { getNodeDefinition } from "@gglab/shader-graph-core";
 import "@xyflow/react/dist/style.css";
 import type { ShaderFlowNode, ShaderNodeData } from "./flow-adapter.js";
-import { FLOW_NODE_TYPE, handleStyle } from "./flow-adapter.js";
+import { FLOW_NODE_TYPE, flowGeometryCssVars, handleStyle } from "./flow-adapter.js";
 
 export { ReactFlowProvider };
 
@@ -111,6 +111,12 @@ export interface FlowViewportProps {
     readonly onConnectRequest?: (request: ConnectionRequest) => void;
     /** A node placement (session state) — never a semantic change. */
     readonly onNodePlaced?: (nodeId: string, position: { x: number; y: number }) => void;
+    /**
+     * Called once with a `fitView` trigger when the viewport finishes
+     * initializing — the composition root uses it for "auto layout" and
+     * "load" (session convenience, no semantics).
+     */
+    readonly onFlowReady?: (fitView: () => void) => void;
 }
 
 /**
@@ -160,13 +166,18 @@ export function FlowViewport(props: FlowViewportProps) {
     const nodeTypes = { [FLOW_NODE_TYPE]: ShaderNode };
     const { nodes, onNodesChange } = useSyncedFlowNodes(props.nodes);
     return (
-        <div className="gglab-viewport">
+        // The geometry custom properties come from the single geometry
+        // source (flow-geometry.ts), so the CSS references the same numbers
+        // the TS projection uses — no parallel literals to drift.
+        <div className="gglab-viewport" style={flowGeometryCssVars()}>
             <ReactFlow<ShaderNodeT>
                 nodes={nodes}
                 onNodesChange={onNodesChange}
                 edges={[...props.edges]}
                 nodeTypes={nodeTypes}
                 fitView
+                proOptions={{ hideAttribution: true }}
+                onInit={(instance) => props.onFlowReady?.(() => instance.fitView({ duration: 160 }))}
                 defaultEdgeOptions={{ style: { strokeWidth: 2 } }}
                 minZoom={0.2}
                 maxZoom={2.5}
@@ -193,8 +204,12 @@ export function FlowViewport(props: FlowViewportProps) {
                 }}
                 selectionOnDrag={false}
             >
+                {/* Overlay layout: controls top-right, minimap bottom-right —
+                    two fixed corners, no overlap, no margin hacks. The
+                    xyflow attribution is hidden (proOptions) per the editor's
+                    branding policy; the app's own brand bar stays. */}
                 <Background variant={BackgroundVariant.Dots} gap={26} size={1.4} color="#28313f" />
-                <Controls showInteractive={false} position="bottom-right" />
+                <Controls showInteractive={false} position="top-right" />
                 <MiniMap pannable zoomable nodeColor={minimapNodeColor} maskColor="rgba(15,19,25,0.78)" position="bottom-right" className="gglab-minimap" />
             </ReactFlow>
         </div>

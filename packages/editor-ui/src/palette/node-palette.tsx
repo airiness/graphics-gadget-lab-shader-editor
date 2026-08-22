@@ -10,12 +10,17 @@
  *     loaded descriptor there is no parameter vocabulary to show — the
  *     section says so instead of inventing one.
  *
- * Library search is a pure string filter over display names — presentation
- * convenience, never a semantic fact. Clicking an entry is an intent: the
- * composition root performs the document operation (atomically) and the
- * core's services judge the result.
+ * Structure: each section is collapsible (UI session state, never part of
+ * the persisted document), and the whole library can collapse to a rail
+ * (the composition root owns that layout state and the `rail` presentation
+ * here). Search is a pure string filter over display names — presentation
+ * convenience. Clicking an entry is an intent: the composition root
+ * performs the document operation (atomically) and the core's services
+ * judge the result.
  */
+import { useState, type ReactNode } from "react";
 import { NODE_DEFINITIONS, type GraphType, type NodeCategory, type SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
+import { CollapsibleContent, CollapsibleSection } from "../components/ui/collapsible.js";
 import { portKind, type PortKind } from "../flow/flow-adapter.js";
 import type { ParameterRequest } from "../session/authoring-operations.js";
 
@@ -84,6 +89,36 @@ function kind(valueType: string): PortKind {
     return portKind([valueType as GraphType]);
 }
 
+/** Chevron marker for a section header (presentation only). */
+function ChevronIcon({ open }: { open: boolean }) {
+    return (
+        <svg className={`gglab-chevron${open ? " gglab-chevron-open" : ""}`} width="9" height="6" viewBox="0 0 9 6" aria-hidden>
+            <path d="M1 1l3.5 3.5L8 1" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        </svg>
+    );
+}
+
+/** Panel collapse glyph (presentation only). */
+function PanelCloseIcon() {
+    return (
+        <svg width="13" height="13" viewBox="0 0 13 13" aria-hidden>
+            <rect x="1" y="1.5" width="11" height="10" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
+            <line x1="5.5" y1="1.5" x2="5.5" y2="11.5" stroke="currentColor" strokeWidth="1.2" />
+        </svg>
+    );
+}
+
+/** Panel expand glyph (presentation only). */
+function PanelOpenIcon() {
+    return (
+        <svg width="13" height="13" viewBox="0 0 13 13" aria-hidden>
+            <rect x="1" y="1.5" width="11" height="10" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
+            <line x1="5.5" y1="1.5" x2="5.5" y2="11.5" stroke="currentColor" strokeWidth="1.2" />
+            <path d="M7.6 5.4l1.9 1.6-1.9 1.6" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+    );
+}
+
 export interface NodePaletteProps {
     readonly onAddNode: (type: string) => void;
     readonly onAddParameter: (request: ParameterRequest) => void;
@@ -91,19 +126,78 @@ export interface NodePaletteProps {
     readonly descriptor: SurfaceProfileDescriptor | null;
     /** Optional library-search query (presentation filter only). */
     readonly query?: string;
+    /** Rail mode: the whole library collapsed (layout state owned by the app). */
+    readonly rail?: boolean;
+    readonly onExpandLibrary?: () => void;
+    readonly onCollapseLibrary?: () => void;
+}
+
+interface SectionProps {
+    readonly title: string;
+    readonly collapsed: boolean;
+    readonly onToggle: () => void;
+    readonly children: ReactNode;
+}
+
+/** One collapsible library section (collapse state = UI session state). */
+function LibrarySection(props: SectionProps) {
+    const open = !props.collapsed;
+    return (
+        <CollapsibleSection open={open} onOpenChange={() => props.onToggle()}>
+            <button type="button" className="gglab-section-head" aria-expanded={open} onClick={props.onToggle}>
+                <ChevronIcon open={open} />
+                <h2 className="gglab-section-title">{props.title}</h2>
+            </button>
+            <CollapsibleContent>
+                <div className="gglab-section-body">{props.children}</div>
+            </CollapsibleContent>
+        </CollapsibleSection>
+    );
 }
 
 export function NodePalette(props: NodePaletteProps) {
     const query = props.query ?? "";
+    // Section collapse state: per-key, UI session state (never persisted as
+    // document data). Default: everything open.
+    const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+    const toggle = (id: string): void => setCollapsed((previous) => ({ ...previous, [id]: !previous[id] }));
+
+    if (props.rail) {
+        return (
+            <div className="gglab-library-rail" aria-label="Node library (collapsed)">
+                <button type="button" className="gglab-rail-btn" onClick={() => props.onExpandLibrary?.()} title="Expand the node library">
+                    <PanelOpenIcon />
+                    <span className="gglab-rail-text">Node Library</span>
+                </button>
+            </div>
+        );
+    }
+
     const groups = nodeCatalogGroups().map((group) => ({
         ...group,
         definitions: group.definitions.filter((definition) => libraryMatchesQuery(query, [definition.displayName, definition.type])),
     }));
     const choices = parameterChoices(props.descriptor).filter((choice) => libraryMatchesQuery(query, [choice.class, ...choice.valueTypes]));
+
     return (
         <nav className="gglab-palette" aria-label="Node library">
-            <section className="gglab-library-section">
-                <h2>Parameters</h2>
+            <div className="gglab-library-head">
+                <h2 className="gglab-library-title">
+                    Node Library
+                    {props.onCollapseLibrary !== undefined && (
+                        <button
+                            type="button"
+                            className="gglab-icobtn"
+                            aria-label="Collapse the node library"
+                            title="Collapse library"
+                            onClick={() => props.onCollapseLibrary?.()}
+                        >
+                            <PanelCloseIcon />
+                        </button>
+                    )}
+                </h2>
+            </div>
+            <LibrarySection title="Parameters" collapsed={collapsed["parameters"] ?? false} onToggle={() => toggle("parameters")}>
                 {props.descriptor === null && (
                     <p className="gglab-palette-hint">
                         Load a profile descriptor to author parameters — the profile vocabulary (parameter classes and value types) is
@@ -135,10 +229,14 @@ export function NodePalette(props: NodePaletteProps) {
                         )}
                     </div>
                 ))}
-            </section>
+            </LibrarySection>
             {groups.map((group) => (
-                <section className="gglab-library-section" key={group.category}>
-                    <h2>{group.category}</h2>
+                <LibrarySection
+                    key={group.category}
+                    title={group.category}
+                    collapsed={collapsed[group.category] ?? false}
+                    onToggle={() => toggle(group.category)}
+                >
                     {group.definitions.length === 0 && <p className="gglab-palette-hint">No nodes match "{query}".</p>}
                     {group.definitions.map((definition) => (
                         <button
@@ -152,7 +250,7 @@ export function NodePalette(props: NodePaletteProps) {
                             <span className="gglab-palette-tag">{definition.type}</span>
                         </button>
                     ))}
-                </section>
+                </LibrarySection>
             ))}
         </nav>
     );

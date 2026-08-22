@@ -12,19 +12,26 @@
  *     compile preserves the HLSL bytes and the generated-source identity,
  *     and canvas placement never changes them.
  */
-import { act, renderHook } from "@testing-library/react";
+import { act, render, renderHook, screen, within } from "@testing-library/react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
     addConnection,
     addNode,
     addParameter,
+    autoLayout,
     diagnosticFocus,
     documentToFlow,
+    FLOW_GEOMETRY,
+    flowGeometryCssVars,
+    handleTop,
     libraryMatchesQuery,
+    nodeCardHeight,
     nodeCatalogGroups,
     parameterChoices,
+    portCenterY,
     portKind,
+    portRowTop,
     portTop,
     readDescriptorText,
     textureSignatureSerialized,
@@ -43,6 +50,7 @@ import {
     parseShaderGraphDocument,
     parseSurfaceProfileDescriptor,
     validateShaderGraph,
+    type GraphConnection,
     type ShaderGraphDiagnostic,
     type SurfaceProfileDescriptor,
 } from "@gglab/shader-graph-core";
@@ -665,5 +673,152 @@ describe("save → load → compile at the GUI boundary", () => {
             expect(sampleNode.data.outputPorts).toContain("RGB");
             expect(sampleNode.data.inputPorts).toContain("texture");
         }
+    });
+});
+
+// --- flow geometry: one source, three consumers ------------------------------
+
+describe("flow geometry (single source of truth)", () => {
+    it("handle center == port row center for every row (shared axis)", () => {
+        for (const index of [0, 1, 2, 5]) {
+            expect(portCenterY(index)).toBe(handleTop(index) + FLOW_GEOMETRY.handleSize / 2);
+        }
+    });
+
+    it("port rows are monotonic and the card height derives from the same numbers", () => {
+        expect(portRowTop(1)).toBeGreaterThan(portRowTop(0));
+        expect(portRowTop(1) - portRowTop(0)).toBe(FLOW_GEOMETRY.portRowHeight);
+        expect(nodeCardHeight(1)).toBe(FLOW_GEOMETRY.headerHeight + FLOW_GEOMETRY.portRowHeight + FLOW_GEOMETRY.rowsBottomPad);
+        expect(portTop(0)).toBe(handleTop(0));
+    });
+
+    it("the CSS custom properties are derived from the same geometry object", () => {
+        const vars = flowGeometryCssVars() as Record<string, string>;
+        expect(vars["--gglab-geom-row-h"]).toBe(`${FLOW_GEOMETRY.portRowHeight}px`);
+        expect(vars["--gglab-geom-node-w"]).toBe(`${FLOW_GEOMETRY.nodeWidth}px`);
+        expect(vars["--gglab-geom-handle-s"]).toBe(`${FLOW_GEOMETRY.handleSize}px`);
+        expect(vars["--gglab-geom-header-h"]).toBe(`${FLOW_GEOMETRY.headerHeight}px`);
+    });
+});
+
+// --- auto layout: session state only -----------------------------------------
+
+describe("auto layout (session state only)", () => {
+    /** Same placement merge the composition root applies. */
+    function applyAutoLayout(document: ReturnType<typeof loaded>) {
+        const layout = autoLayout(document);
+        const nodes = { ...document.editorMetadata.nodes };
+        for (const [id, position] of Object.entries(layout.positions)) {
+            nodes[id] = { position, unknownFields: {} };
+        }
+        return { ...document, editorMetadata: { ...document.editorMetadata, nodes } };
+    }
+
+    it("is deterministic and covers every node", () => {
+        const document = loaded(validV1Document());
+        const first = autoLayout(document);
+        const second = autoLayout(document);
+        expect(second.positions).toEqual(first.positions);
+        expect(Object.keys(first.positions).sort()).toEqual(document.nodes.map((node) => node.id).sort());
+        expect(first.nodeCount).toBe(document.nodes.length);
+    });
+
+    it("lays the graph out left-to-right along the connection direction", () => {
+        const document = loaded(validV1Document());
+        const { positions } = autoLayout(document);
+        const output = positions["n.out"];
+        const producerC = positions["n.c"];
+        const producerR = positions["n.r"];
+        if (output === undefined || producerC === undefined || producerR === undefined) {
+            throw new Error("auto layout must place these fixture nodes");
+        }
+        // n.c (and the other producers) feed n.out — the output sits to the right.
+        expect(output.x).toBeGreaterThan(producerC.x);
+        expect(output.x).toBeGreaterThan(producerR.x);
+    });
+
+    it("only touches editorMetadata: semantics, validation, and emission stay identical", () => {
+        const document = loaded(validV1Document());
+        const descriptor = parseSurfaceProfileDescriptorFixture(canonicalV1Fixture);
+        const baseline = emitHlsl(document, descriptor);
+        expect(baseline.ok).toBe(true);
+
+        const laidOut = applyAutoLayout(document);
+        // Semantic fields byte-identical…
+        expect(laidOut.nodes).toEqual(document.nodes);
+        expect(laidOut.connections).toEqual(document.connections);
+        expect(laidOut.parameters).toEqual(document.parameters);
+        // …every node got an authored position…
+        for (const node of document.nodes) {
+            expect(laidOut.editorMetadata.nodes[node.id]).toBeDefined();
+        }
+        // …the core still validates it…
+        expect(validateShaderGraph(laidOut).ok).toBe(true);
+        // …and emission (bytes + identity) is unchanged.
+        const after = emitHlsl(laidOut, descriptor);
+        expect(after.ok).toBe(true);
+        expect(after.source).toBe(baseline.source);
+        expect(after.sourceMap?.generatedSourceIdentity).toBe(baseline.sourceMap?.generatedSourceIdentity);
+    });
+
+    it("survives self-loop connections by skipping them for layout", () => {
+        const base = loaded(validV1Document());
+        const selfLoop: GraphConnection = {
+            id: "c.self",
+            from: { nodeId: "n.r", portId: "value", unknownFields: {} },
+            to: { nodeId: "n.r", portId: "value", unknownFields: {} },
+            unknownFields: {},
+        };
+        const document = { ...base, connections: [...base.connections, selfLoop] };
+        const result = autoLayout(document);
+        expect(Object.keys(result.positions).sort()).toEqual(base.nodes.map((node) => node.id).sort());
+    });
+});
+
+// --- node library collapse: UI session state, never document data -------------
+
+describe("node library collapse (UI session state)", () => {
+    it("collapses and reopens a section via its header (state stays in the palette)", async () => {
+        render(
+            <NodePalette
+                onAddNode={() => {}}
+                onAddParameter={() => {}}
+                descriptor={parseSurfaceProfileDescriptorFixture(canonicalV1Fixture)}
+            />,
+        );
+        const header = screen.getByRole("button", { name: /math/ });
+        const section = (): HTMLElement | null => (header as HTMLElement).closest('[data-slot="collapsible-section"]');
+        expect(section()?.getAttribute("data-state")).toBe("open");
+        await act(async () => {
+            header.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+        expect(section()?.getAttribute("data-state")).toBe("closed");
+        await act(async () => {
+            header.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+        expect(section()?.getAttribute("data-state")).toBe("open");
+    });
+
+    it("renders a rail (expand intent) instead of the library when collapsed", async () => {
+        let expanded = false;
+        const { container } = render(
+            <NodePalette
+                rail
+                onAddNode={() => {}}
+                onAddParameter={() => {}}
+                descriptor={null}
+                onExpandLibrary={() => {
+                    expanded = true;
+                }}
+            />,
+        );
+        // Scope to this render: RTL auto-cleanup is not registered here, so
+        // earlier mounts may still be attached to the shared document.
+        expect(within(container).queryByText("Multiply")).toBeNull();
+        const expandButton = within(container).getByRole("button", { name: /node library/i });
+        await act(async () => {
+            expandButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+        expect(expanded).toBe(true);
     });
 });

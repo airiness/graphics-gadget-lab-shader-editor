@@ -1,12 +1,18 @@
+import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
 /**
  * Dev/build server for the editor shell. Vite compiles the TypeScript/JSX
  * surface (esbuild under the hood); the React automatic runtime is used so
- * component files carry no React import of their own. No plugin stack is
- * needed for this slice: plain .tsx + CSS imports.
+ * component files carry no React import of their own.
+ *
+ * Tailwind v4 (CSS-first) provides the utilities the editor-ui kit
+ * (button / badge / input / collapsible / separator) and the chrome use;
+ * the kit's semantic tokens are themed from this app's design tokens in
+ * app.css (`@theme inline`), so the visual facts live in one place.
  */
 export default defineConfig({
+    plugins: [tailwindcss()],
     esbuild: {
         jsx: "automatic",
     },

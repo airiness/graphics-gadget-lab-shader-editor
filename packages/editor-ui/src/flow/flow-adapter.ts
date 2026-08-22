@@ -20,42 +20,47 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { ShaderGraphDocument } from "@gglab/shader-graph-core";
 import { getNodeDefinition, type GraphType } from "@gglab/shader-graph-core";
+import { FLOW_GEOMETRY, handleTop } from "./flow-geometry.js";
+
+export { FLOW_GEOMETRY, portCenterY, portRowCount, portRowTop, handleTop, nodeCardHeight, flowGeometryCssVars } from "./flow-geometry.js";
+export type { FlowGeometry } from "./flow-geometry.js";
 
 export const FLOW_NODE_TYPE = "gglab" as const;
 
-/** Port/node layout constants — presentation math only (not semantics). */
+/**
+ * Grid placement for unauthored nodes — presentation math only. Kept as a
+ * compatibility surface over the single FLOW_GEOMETRY source of truth
+ * (flow-geometry.ts), which also owns the card/handle math.
+ */
 export const FLOW_LAYOUT = {
-    startX: 60,
-    startY: 60,
-    columnWidth: 340,
-    rowHeight: 236,
-    columns: 3,
-    /** Node card header height (title, type, category, optional flag). */
-    headerHeight: 56,
-    /** One port row. */
-    portRowHeight: 26,
-    /** Handle dot size (must match the CSS). */
-    handleSize: 10,
-    nodeWidth: 200,
+    startX: FLOW_GEOMETRY.grid.startX,
+    startY: FLOW_GEOMETRY.grid.startY,
+    columnWidth: FLOW_GEOMETRY.grid.columnWidth,
+    rowHeight: FLOW_GEOMETRY.grid.rowHeight,
+    columns: FLOW_GEOMETRY.grid.columns,
+    headerHeight: FLOW_GEOMETRY.headerHeight,
+    portRowHeight: FLOW_GEOMETRY.portRowHeight,
+    handleSize: FLOW_GEOMETRY.handleSize,
+    nodeWidth: FLOW_GEOMETRY.nodeWidth,
 } as const;
 
-/** Vertical top offset for a port row's Handle. */
+/** Vertical top offset that centers a port row's Handle (single geometry source). */
 export function portTop(index: number): number {
-    return FLOW_LAYOUT.headerHeight + index * FLOW_LAYOUT.portRowHeight + (FLOW_LAYOUT.portRowHeight - FLOW_LAYOUT.handleSize) / 2;
+    return handleTop(index);
 }
 
 /** Inline style pinning a Handle dot to its port row (left/right set per side). */
 export function handleStyle(side: "input" | "output", rowIndex: number): Record<string, string | number> {
-    const size = FLOW_LAYOUT.handleSize;
+    const g = FLOW_GEOMETRY;
     return {
-        top: portTop(rowIndex),
-        width: size,
-        height: size,
-        minWidth: size,
-        minHeight: size,
-        border: "2px solid #10141a",
+        top: handleTop(rowIndex),
+        width: g.handleSize,
+        height: g.handleSize,
+        minWidth: g.handleSize,
+        minHeight: g.handleSize,
+        border: "2px solid #0f1319",
         borderRadius: "50%",
-        ...(side === "input" ? { left: -7 } : { right: -7 }),
+        ...(side === "input" ? { left: -g.handleInset } : { right: -g.handleInset }),
     };
 }
 

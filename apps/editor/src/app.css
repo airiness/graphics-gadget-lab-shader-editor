@@ -1,11 +1,43 @@
 /* ============================================================================
    GGLab Shader Editor — design system (tokens + primitives + node language).
-   Tailwind/shadcn-compatible by construction: every visual fact is a token
-   on :root; components reference tokens, not raw values.
-   Node card geometry is a contract with FLOW_LAYOUT in flow-adapter.ts:
-   header 56px, port row 26px, handle 10px, card width 200px, no top padding
-   (handle offsets are measured from the card border box).
+   Every visual fact is a token on :root; components reference tokens, not
+   raw values. Tailwind v4 supplies the chrome utilities; the shadcn-style
+   semantic tokens are bridged from these same root tokens below
+   (`@theme inline`), so the kit themes the one existing palette.
+   Node card geometry uses the --gglab-geom-* custom properties, which the
+   viewport injects from flow-geometry.ts (FLOW_GEOMETRY) — one source of
+   truth for header/row/handle/width; the fallbacks below only serve
+   standalone card renders outside a viewport.
    ========================================================================= */
+
+@import "tailwindcss";
+
+/* shadcn-style semantic tokens → this app's design tokens (one palette). */
+@theme inline {
+    --color-background: var(--bg);
+    --color-foreground: var(--text);
+    --color-card: var(--panel-2);
+    --color-card-foreground: var(--text);
+    --color-popover: var(--panel-hi);
+    --color-popover-foreground: var(--text);
+    --color-primary: var(--accent);
+    --color-primary-foreground: #0b1220;
+    --color-secondary: var(--panel-hi);
+    --color-secondary-foreground: var(--text);
+    --color-muted: var(--panel-2);
+    --color-muted-foreground: var(--muted);
+    --color-accent: var(--accent);
+    --color-accent-foreground: #0b1220;
+    --color-accent-soft: var(--accent-soft);
+    --color-destructive: var(--error);
+    --color-destructive-foreground: #1a0b0b;
+    --color-border: var(--border);
+    --color-border-soft: var(--border-soft);
+    --color-input: var(--bg);
+    --color-ring: var(--accent);
+    --font-sans: var(--font-ui);
+    --font-mono: var(--font-mono);
+}
 
 :root {
     color-scheme: dark;
@@ -131,6 +163,11 @@ body {
     min-height: 0;
 }
 
+/* Whole-library collapsed: the left column shrinks to a rail. */
+.gglab-body-library-collapsed {
+    grid-template-columns: 48px minmax(0, 1fr) 336px;
+}
+
 .gglab-side {
     overflow-y: auto;
     background: var(--panel);
@@ -142,6 +179,16 @@ body {
     position: relative;
     min-width: 0;
     min-height: 0;
+}
+
+/* Canvas toolbar (auto layout) — top-left corner, above the grid. */
+.gglab-canvas-actions {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 10;
+    display: flex;
+    gap: 8px;
 }
 
 .gglab-side-left {
@@ -405,23 +452,121 @@ button.gglab-btn {
     margin: 0 0 12px;
 }
 
-.gglab-library-section {
-    padding: 10px 0 4px;
-    border-top: 1px solid var(--border-soft);
+.gglab-library-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
 }
 
-.gglab-library-section:first-of-type {
-    border-top: none;
-    padding-top: 0;
-}
-
-.gglab-palette h2 {
-    margin: 0 0 8px;
+.gglab-library-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.09em;
     text-transform: uppercase;
     color: var(--muted);
+}
+
+.gglab-icobtn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    background: transparent;
+    color: var(--faint);
+    border: 1px solid transparent;
+    border-radius: var(--r-1);
+    cursor: pointer;
+}
+
+.gglab-icobtn:hover {
+    color: var(--text);
+    border-color: var(--border-hi);
+    background: var(--panel-hi);
+}
+
+.gglab-section-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 6px;
+    margin: 0;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid transparent;
+    border-radius: var(--r-1);
+    cursor: pointer;
+    font: inherit;
+}
+
+.gglab-section-head:hover {
+    color: var(--text);
+    background: var(--panel-hi);
+    border-color: var(--border-soft);
+}
+
+.gglab-section-title {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+}
+
+.gglab-chevron {
+    color: var(--faint);
+    transition: transform 0.14s ease;
+}
+
+.gglab-chevron-open {
+    transform: rotate(180deg);
+}
+
+.gglab-section-body {
+    padding: 2px 0 10px;
+}
+
+/* whole-library collapsed rail (layout state owned by the composition root) */
+.gglab-library-rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 0;
+}
+
+.gglab-rail-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 8px;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-2);
+    cursor: pointer;
+}
+
+.gglab-rail-btn:hover {
+    color: var(--text);
+    border-color: var(--border-hi);
+    background: var(--panel-hi);
+}
+
+.gglab-rail-text {
+    writing-mode: vertical-rl;
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
 }
 
 .gglab-palette-hint {
@@ -503,7 +648,7 @@ button.gglab-btn {
 
 .gglab-node {
     position: relative;
-    width: 200px;
+    width: var(--gglab-geom-node-w, 200px);
     padding: 0;
     background: var(--panel-2);
     border: 1px solid var(--border);
@@ -565,8 +710,8 @@ button.gglab-btn {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    height: 56px;
-    padding: 9px 12px 0 15px;
+    height: var(--gglab-geom-header-h, 56px);
+    padding: var(--gglab-geom-pad-top, 9px) var(--gglab-geom-pad-right, 12px) 0 var(--gglab-geom-pad-left, 15px);
     overflow: hidden;
 }
 
@@ -605,13 +750,13 @@ button.gglab-btn {
 }
 
 .gglab-node-rows {
-    padding: 0 12px 10px 15px;
+    padding: 0 var(--gglab-geom-pad-right, 12px) var(--gglab-geom-rows-pad, 10px) var(--gglab-geom-pad-left, 15px);
 }
 
 .gglab-port-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    height: 26px;
+    height: var(--gglab-geom-row-h, 26px);
     align-items: center;
 }
 
@@ -741,12 +886,14 @@ button.gglab-btn {
     margin: 12px;
 }
 
+/* Overlay layout: controls top-right, minimap bottom-right — fixed
+   corners with equal margins; they cannot overlap each other. */
 .react-flow__controls {
     border: 1px solid var(--border-soft);
     border-radius: var(--r-1);
     overflow: hidden;
     box-shadow: var(--shadow-1);
-    margin: 12px 0 12px 228px;
+    margin: 12px;
 }
 
 .react-flow__controls-button {
@@ -781,6 +928,13 @@ button.gglab-btn {
     border-radius: var(--r-2);
     padding: 12px;
     box-shadow: var(--shadow-1);
+}
+
+.gglab-diagnostics-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: -2px;
 }
 
 .gglab-diagnostics h2 {

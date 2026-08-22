@@ -10,6 +10,38 @@ the `@gglab/shader-graph-core` semantic services.
 Never owns: graph semantics, type rules, validation, HLSL generation,
 shader compilation, or backend target policy.
 
+## Editor structure and canvas chrome
+
+- **Collapsible node library** — every library section collapses/expands
+  through its header, and the whole sidebar collapses to a rail (expand
+  intent). All of it is UI session state in the composition root and the
+  palette: it never enters `ShaderGraphDocument`.
+- **Canvas overlay layout** — zoom controls top-right, minimap
+  bottom-right, dot grid behind the graph: fixed corners, no overlap. The
+  xyflow attribution is hidden through its official `proOptions`
+  configuration; the editor's own brand bar (top) and status bar (bottom)
+  stay — this is the editor's branding, not a library credit.
+- **One geometric system** — node-card geometry (header height, port-row
+  rhythm, handle size/position, card width) lives in exactly one place
+  (`FLOW_GEOMETRY` in editor-ui): the TS projection, the inline handle
+  styles, and the CSS all consume it (the CSS via custom properties the
+  viewport injects), so the handle center, the port-row center line, and
+  the React Flow edge anchor agree by construction. Tests lock the shared
+  axis and the row rhythm.
+- **Auto layout (one click)** — `autoLayout` (editor-ui, dagre, left-to-
+  right) computes positions for the whole graph and the composition root
+  writes them into `editorMetadata.nodes[*].position` (session state). The
+  core is re-asked as usual; the tests prove that applying a layout keeps
+  the semantic fields, the validation verdict, and the emitted HLSL +
+  identity byte-identical.
+- **Tailwind + shadcn-style kit (first phase: chrome)** — Tailwind v4 is
+  the utility layer for the app shell; editor-ui carries a small
+  shadcn-style kit (button / badge / input / collapsible / separator)
+  themed from this app's existing design tokens, so the chrome (sidebar,
+  panels, buttons, inputs, status badges, diagnostics panels) is the kit.
+  `ShaderNode` / port rows / canvas geometry intentionally stay the
+  dedicated node design language, not the generic kit.
+
 ## Visual foundation (editor design system)
 
 - **Shell** — brand bar (profile line + contract status chips, both core
@@ -117,4 +149,12 @@ pnpm build      # production bundle (dist/)
 - canvas placement (session state) never changes generated HLSL or its
   identity;
 - the flow projection invents no entries (one node/edge per core entry,
-  ports from the catalog).
+  ports from the catalog);
+- geometry has one source of truth: handle center, port-row center line,
+  and the edge anchor all derive from the same `FLOW_GEOMETRY` (shared axis
+  and row rhythm locked);
+- auto layout only touches `editorMetadata` (positions): semantic fields,
+  the core's validation verdict, and the emitted HLSL bytes + identity stay
+  byte-identical, and the layout is deterministic for a given document;
+- the node library collapse state (sections and the whole sidebar) lives in
+  the UI, never in the document.

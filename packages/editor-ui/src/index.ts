@@ -7,8 +7,23 @@
  * only as the canvas projection (flow-viewport), never as the model or the
  * semantics.
  */
-export { documentToFlow, authoredPosition, portTop, handleStyle, portKind, FLOW_NODE_TYPE, FLOW_LAYOUT } from "./flow/flow-adapter.js";
-export type { ShaderNodeData, ShaderFlowNode, CanvasFocus, PortKind } from "./flow/flow-adapter.js";
+export {
+    documentToFlow,
+    authoredPosition,
+    portTop,
+    handleStyle,
+    portKind,
+    FLOW_NODE_TYPE,
+    FLOW_LAYOUT,
+    FLOW_GEOMETRY,
+    portCenterY,
+    portRowCount,
+    portRowTop,
+    handleTop,
+    nodeCardHeight,
+    flowGeometryCssVars,
+} from "./flow/flow-adapter.js";
+export type { ShaderNodeData, ShaderFlowNode, CanvasFocus, PortKind, FlowGeometry } from "./flow/flow-adapter.js";
 export { FlowViewport, ShaderNode, ReactFlowProvider, useSyncedFlowNodes } from "./flow/flow-viewport.js";
 export type { ConnectionRequest, FlowViewportProps } from "./flow/flow-viewport.js";
 export { NodePalette, nodeCatalogGroups, parameterChoices, libraryMatchesQuery } from "./palette/node-palette.js";
@@ -20,3 +35,13 @@ export type { DescriptorPanelState, DescriptorPanelProps } from "./panels/descri
 export { addNode, removeNode, addConnection, addParameter } from "./session/authoring-operations.js";
 export type { AuthoringResult, AuthoringRefusal, ParameterRequest } from "./session/authoring-operations.js";
 export { diagnosticFocus } from "./session/diagnostic-focus.js";
+export { autoLayout } from "./session/auto-layout.js";
+export type { AutoLayoutResult } from "./session/auto-layout.js";
+export { cn } from "./components/ui/cn.js";
+export { Button, buttonVariants } from "./components/ui/button.js";
+export type { ButtonProps } from "./components/ui/button.js";
+export { Badge, BadgeDot, badgeVariants } from "./components/ui/badge.js";
+export type { BadgeProps } from "./components/ui/badge.js";
+export { Input } from "./components/ui/input.js";
+export { Collapsible, CollapsibleTrigger, CollapsibleContent, CollapsibleSection } from "./components/ui/collapsible.js";
+export { Separator } from "./components/ui/separator.js";

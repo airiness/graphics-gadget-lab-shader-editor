@@ -7,16 +7,21 @@
  * defined here: validation, port-level types, conformance, compatibility,
  * and emission all come from @gglab/shader-graph-core.
  */
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
     addConnection,
     addNode,
     addParameter,
+    autoLayout,
+    Badge,
+    BadgeDot,
+    Button,
     DescriptorPanel,
     DiagnosticsPanel,
     diagnosticFocus,
     documentToFlow,
     FlowViewport,
+    Input,
     NodePalette,
     type AuthoringResult,
     type CanvasFocus,
@@ -84,6 +89,10 @@ export function App() {
     const [focus, setFocus] = useState<CanvasFocus | null>(null);
     // Library search — a presentation filter over display names (no semantics).
     const [libraryQuery, setLibraryQuery] = useState("");
+    // Whole-library collapse — UI session state (layout), never document data.
+    const [libraryOpen, setLibraryOpen] = useState(true);
+    // Viewport fit trigger (registered by the flow adapter via onInit).
+    const fitRef = useRef<(() => void) | null>(null);
 
     const descriptor: SurfaceProfileDescriptor | null = descriptorState.kind === "ready" ? descriptorState.descriptor : null;
 
@@ -149,6 +158,25 @@ export function App() {
         }));
     };
 
+    const onAutoLayout = (): void => {
+        // Session convenience: compute positions for the WHOLE graph and
+        // write them into editorMetadata (session state). The core services
+        // are re-asked as usual; placement never changes emitted HLSL.
+        setDocument((previous) => {
+            const layout = autoLayout(previous);
+            if (layout.nodeCount === 0) {
+                return previous;
+            }
+            const nodes = { ...previous.editorMetadata.nodes };
+            for (const [id, position] of Object.entries(layout.positions)) {
+                nodes[id] = { position, unknownFields: {} };
+            }
+            return { ...previous, editorMetadata: { ...previous.editorMetadata, nodes } };
+        });
+        // Fit once the projection has picked up the new positions.
+        requestAnimationFrame(() => fitRef.current?.());
+    };
+
     const onSave = (): void => {
         setSavedText(JSON.stringify(document, null, 2));
         setEmission(null);
@@ -159,6 +187,7 @@ export function App() {
         if (parsed.ok && parsed.value !== null) {
             setDocument(parsed.value);
             setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: "The saved document loaded; the session state was restored." });
+            requestAnimationFrame(() => fitRef.current?.());
             return;
         }
         setLoadResult({ title: "Load result", ok: false, diagnostics: parsed.diagnostics, passedText: "" });
@@ -187,38 +216,62 @@ export function App() {
                     <span className="gglab-brand-sub">gglab.surface authoring</span>
                 </div>
                 <div className="gglab-header-group">
-                    <span className={`gglab-chip ${descriptor !== null ? "gglab-chip-mono" : ""}`}>
+                    <Badge variant="outline" className="font-mono">
                         {descriptor !== null ? `${descriptor.profileId} v${descriptor.profileVersion}` : "no profile contract"}
-                    </span>
-                    <span className={`gglab-chip ${descriptor === null ? "" : contractOk ? "gglab-chip-ok" : "gglab-chip-error"}`}>
-                        <span className="gglab-chip-dot" aria-hidden />
+                    </Badge>
+                    <Badge variant={descriptor === null ? "default" : contractOk ? "ok" : "error"}>
+                        <BadgeDot />
                         {descriptor === null ? "awaiting descriptor" : contractOk ? "contract ok" : `${contractProblemCount} contract problem${contractProblemCount === 1 ? "" : "s"}`}
-                    </span>
+                    </Badge>
                 </div>
             </header>
-            <div className="gglab-body">
+            <div className={`gglab-body${libraryOpen ? "" : " gglab-body-library-collapsed"}`}>
                 <aside className="gglab-side gglab-side-left">
-                    <div className="gglab-library-search">
-                        <input
-                            className="gglab-field"
-                            placeholder="Filter the library…"
-                            value={libraryQuery}
-                            onChange={(event) => setLibraryQuery(event.currentTarget.value)}
-                            aria-label="Filter the node library"
-                        />
-                    </div>
-                    <NodePalette onAddNode={onAddNode} onAddParameter={onAddParameter} descriptor={descriptor} query={libraryQuery} />
-                    {operationNotes.length > 0 && (
-                        <section className="gglab-notes">
-                            <h2>Authoring notes</h2>
-                            {operationNotes.map((note, index) => (
-                                <p key={index}>{note}</p>
-                            ))}
-                        </section>
+                    {libraryOpen ? (
+                        <>
+                            <div className="gglab-library-search">
+                                <Input
+                                    placeholder="Filter the library…"
+                                    value={libraryQuery}
+                                    onChange={(event) => setLibraryQuery(event.currentTarget.value)}
+                                    aria-label="Filter the node library"
+                                />
+                            </div>
+                            <NodePalette
+                                onAddNode={onAddNode}
+                                onAddParameter={onAddParameter}
+                                descriptor={descriptor}
+                                query={libraryQuery}
+                                onCollapseLibrary={() => setLibraryOpen(false)}
+                            />
+                            {operationNotes.length > 0 && (
+                                <section className="gglab-notes">
+                                    <h2>Authoring notes</h2>
+                                    {operationNotes.map((note, index) => (
+                                        <p key={index}>{note}</p>
+                                    ))}
+                                </section>
+                            )}
+                        </>
+                    ) : (
+                        <NodePalette rail onAddNode={onAddNode} onAddParameter={onAddParameter} descriptor={descriptor} onExpandLibrary={() => setLibraryOpen(true)} />
                     )}
                 </aside>
                 <main className="gglab-canvas">
-                    <FlowViewport nodes={flow.nodes} edges={flow.edges} onConnectRequest={onConnectRequest} onNodePlaced={onNodePlaced} />
+                    <div className="gglab-canvas-actions">
+                        <Button variant="outline" size="sm" onClick={onAutoLayout}>
+                            Auto layout
+                        </Button>
+                    </div>
+                    <FlowViewport
+                        nodes={flow.nodes}
+                        edges={flow.edges}
+                        onConnectRequest={onConnectRequest}
+                        onNodePlaced={onNodePlaced}
+                        onFlowReady={(fitView) => {
+                            fitRef.current = fitView;
+                        }}
+                    />
                 </main>
                 <aside className="gglab-side gglab-side-right">
                     <DescriptorPanel state={descriptorState} onStateChange={(state) => setDescriptorState(state)} />
@@ -241,20 +294,20 @@ export function App() {
                             spellCheck={false}
                         />
                         <div className="gglab-doc-actions">
-                            <button type="button" className="gglab-btn" onClick={onSave}>
+                            <Button variant="outline" onClick={onSave}>
                                 Save to text
-                            </button>
-                            <button type="button" className="gglab-btn gglab-btn-primary" onClick={onLoad}>
+                            </Button>
+                            <Button variant="primary" onClick={onLoad}>
                                 Load from text
-                            </button>
+                            </Button>
                         </div>
                     </section>
                     <section className="gglab-panel gglab-emission-block">
                         <h2 className="gglab-panel-title">Emission preview</h2>
                         <div className="gglab-emission-actions">
-                            <button type="button" className="gglab-btn" onClick={onEmit}>
+                            <Button variant="outline" onClick={onEmit}>
                                 Generate HLSL (core)
-                            </button>
+                            </Button>
                         </div>
                         {emission !== null && <EmissionPreview emission={emission} />}
                     </section>
@@ -265,10 +318,10 @@ export function App() {
                     <span className="gglab-status-item mono">
                         {document.nodes.length} nodes · {document.connections.length} connections · {document.parameters.length} parameters
                     </span>
-                    <span className={`gglab-chip ${graphOk ? "gglab-chip-ok" : "gglab-chip-error"}`}>
-                        <span className="gglab-chip-dot" aria-hidden />
+                    <Badge variant={graphOk ? "ok" : "error"}>
+                        <BadgeDot />
                         {graphOk ? "graph ok" : `${graphProblemCount} problem${graphProblemCount === 1 ? "" : "s"}`}
-                    </span>
+                    </Badge>
                 </div>
                 <div className="gglab-status-group">
                     <span className="gglab-status-item mono">{descriptor !== null ? `${descriptor.profileId} v${descriptor.profileVersion}` : "profile —"}</span>

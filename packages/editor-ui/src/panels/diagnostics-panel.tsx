@@ -9,6 +9,7 @@
  * intent; it never computes a target itself.
  */
 import type { ShaderGraphDiagnostic } from "@gglab/shader-graph-core";
+import { Badge } from "../components/ui/badge.js";
 
 export interface DiagnosticsPanelProps {
     readonly title: string;
@@ -26,7 +27,10 @@ export function DiagnosticsPanel(props: DiagnosticsPanelProps) {
     const selectable: boolean = props.onSelect !== undefined;
     return (
         <section className={`gglab-diagnostics gglab-diagnostics-${props.ok ? "ok" : "problems"}`}>
-            <h2>{props.title}</h2>
+            <div className="gglab-diagnostics-title">
+                <h2>{props.title}</h2>
+                <Badge variant={props.ok ? "ok" : "error"}>{props.ok ? "pass" : "problems"}</Badge>
+            </div>
             {props.ok && props.diagnostics.length === 0 ? <p className="gglab-diagnostics-passed">{props.passedText}</p> : null}
             {props.diagnostics.map((diagnostic, index) => {
                 const key = `${diagnostic.code}:${index}`;
