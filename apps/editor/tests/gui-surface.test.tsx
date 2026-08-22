@@ -55,6 +55,7 @@ import {
     emitHlsl,
     parseShaderGraphDocument,
     parseSurfaceProfileDescriptor,
+    serializeShaderGraphDocument,
     validateShaderGraph,
     type GraphConnection,
     type ShaderGraphDiagnostic,
@@ -666,6 +667,23 @@ describe("descriptor panel + shared verdicts", () => {
 // --- determinism at the GUI boundary -----------------------------------------
 
 describe("save → load → compile at the GUI boundary", () => {
+    it("saves through the core's .shadergraph serialization authority (not a raw object dump)", () => {
+        const original = loaded(validV1Document());
+        // The app's save path is the core's canonical serializer.
+        const saved = serializeShaderGraphDocument(original);
+        // The model's internal `unknownFields` bookkeeping keys are NOT the
+        // disk format: a raw JSON.stringify(document) would emit them, and
+        // the reader would re-nest retained data under a literal
+        // "unknownFields" field on the way back in. The canonical form has
+        // none — this is what makes save → load structurally lossless.
+        expect(saved).not.toContain("\"unknownFields\"");
+        // Structural round-trip closure: parse(saved) === the document.
+        const reloaded = loaded(saved);
+        expect(reloaded).toEqual(original);
+        // …and byte-stable for a further write.
+        expect(serializeShaderGraphDocument(reloaded)).toBe(saved);
+    });
+
     it("preserves the HLSL bytes and the generated-source identity", () => {
         const original = loaded(validV1Document());
         const descriptor = parseSurfaceProfileDescriptorFixture(canonicalV1Fixture);
@@ -675,13 +693,50 @@ describe("save → load → compile at the GUI boundary", () => {
         const firstIdentity = first.sourceMap?.generatedSourceIdentity;
         expect(firstIdentity).toMatch(/^[0-9a-f]{64}$/);
 
-        // Save (serialize) → load (parse) → compile again.
-        const saved = JSON.stringify(original, null, 2);
+        // Save (the core's canonical serialization) → load (parse) → compile again.
+        const saved = serializeShaderGraphDocument(original);
         const reloaded = loaded(saved);
         const second = emitHlsl(reloaded, descriptor);
         expect(second.ok).toBe(true);
         expect(second.source).toBe(firstSource);
         expect(second.sourceMap?.generatedSourceIdentity).toBe(firstIdentity);
+    });
+
+    it("retained unknown fields and their raw-dump corruption are both proven at the editor boundary", () => {
+        // A document carrying retained forward-compatible fields at three
+        // levels must survive the editor's save → load structurally.
+        const fixture = JSON.parse(validV1Document()) as Record<string, unknown>;
+        fixture["experimental"] = { retained: true };
+        const nodes = fixture["nodes"] as Record<string, unknown>[];
+        const firstNode = nodes[0];
+        if (firstNode === undefined) {
+            throw new Error("fixture must have a node");
+        }
+        firstNode["futureTintMode"] = "linear";
+        const editorMetadata = (fixture["editorMetadata"] ?? { nodes: {} }) as Record<string, Record<string, Record<string, unknown>>>;
+        const metaNodes = (editorMetadata["nodes"] ?? {}) as Record<string, Record<string, unknown>>;
+        for (const nodeId of Object.keys(metaNodes)) {
+            const state = metaNodes[nodeId];
+            if (state !== undefined) {
+                state["focusDepth"] = 4;
+            }
+        }
+        const original = loaded(JSON.stringify(fixture));
+        expect(original.unknownFields).toEqual({ experimental: { retained: true } });
+        expect(original.nodes[0]?.unknownFields).toEqual({ futureTintMode: "linear" });
+
+        // The core authority round-trips all of it structurally.
+        const saved = serializeShaderGraphDocument(original);
+        const reloaded = loaded(saved);
+        expect(reloaded).toEqual(original);
+        expect(serializeShaderGraphDocument(reloaded)).toBe(saved);
+
+        // And the refused debug path is demonstrated to corrupt: a raw
+        // JSON.stringify(document) emits the bookkeeping keys, which the
+        // reader then re-nests — the structure is NOT preserved.
+        const rawDump = JSON.stringify(original, null, 2);
+        const rawReloaded = loaded(rawDump);
+        expect(rawReloaded).not.toEqual(original);
     });
 
     it("canvas placement (session state) never changes the generated HLSL or identity", () => {

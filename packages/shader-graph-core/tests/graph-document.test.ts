@@ -204,6 +204,41 @@ describe("parseShaderGraphDocument", () => {
         );
     });
 
+    it("retains unknown fields at every level through a full lossless round-trip", () => {
+        const result = parseVariant((document) => {
+            document["futureTooling"] = { layout: { zed: 3, alpha: 1 } };
+            const parameters = document["parameters"] as Record<string, unknown>[];
+            expectElement(parameters, 0)["hint"] = "tint";
+            const nodes = document["nodes"] as Record<string, unknown>[];
+            expectElement(nodes, 0)["customCurve"] = [1, { zed: 1, alpha: 2 }];
+            const connections = document["connections"] as Record<string, unknown>[];
+            expectElement(connections, 0)["priority"] = 7;
+            (expectElement(connections, 0)["from"] as Record<string, unknown>)["lane"] = 2;
+            (document["editorMetadata"] as Record<string, unknown>)["viewport"] = { zoom: 1.5 };
+            ((document["editorMetadata"] as Record<string, unknown>)["nodes"] as Record<string, Record<string, unknown>>)["node.constant"]!["focusDepth"] = 4;
+        });
+        expect(result.ok).toBe(true);
+        const document = expectParsed(result.value);
+        // Retained at its own level — not re-nested, not dropped.
+        expect(document.unknownFields).toEqual({ futureTooling: { layout: { alpha: 1, zed: 3 } } });
+        expect(document.parameters[0]?.unknownFields).toEqual({ hint: "tint" });
+        expect(document.nodes[0]?.unknownFields).toEqual({ customCurve: [1, { alpha: 2, zed: 1 }] });
+        expect(document.connections[0]?.unknownFields).toEqual({ priority: 7 });
+        expect(document.connections[0]?.from.unknownFields).toEqual({ lane: 2 });
+        expect(document.editorMetadata.unknownFields).toEqual({ viewport: { zoom: 1.5 } });
+        expect(document.editorMetadata.nodes["node.constant"]?.unknownFields).toEqual({ focusDepth: 4 });
+
+        // The full round trip is structurally identical AND byte-stable —
+        // the canonical write emits retained fields as siblings (sorted),
+        // never as a nested "unknownFields" bookkeeping key.
+        const bytes1 = serializeShaderGraphDocument(document);
+        expect(bytes1).not.toContain('"unknownFields"');
+        const second = parseShaderGraphDocument(bytes1);
+        expect(second.ok).toBe(true);
+        expect(expectParsed(second.value)).toEqual(document);
+        expect(serializeShaderGraphDocument(expectParsed(second.value))).toBe(bytes1);
+    });
+
     it("rejects an unsupported schema version before interpreting anything", () => {
         const result = parseVariant((document) => {
             document["schemaVersion"] = 2;

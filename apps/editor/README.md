@@ -152,8 +152,15 @@ shader compilation, or backend target policy.
   core's shared verdicts, which is what the side panel reports, including
   the capability-based refusals (`PROFILE_MISMATCH`,
   `MISSING_PROFILE_CAPABILITY`, `FORBIDDEN_PROFILE_CAPABILITY`).
-- **Save / load** — the document serialized to JSON text and back through
-  the core's reader; load failures surface the reader's structured
+- **Save / load** — save is the core's `.shadergraph` serialization
+  authority (`serializeShaderGraphDocument`): the canonical, deterministic
+  disk format (fixed field order, retained forward-compatible fields
+  written back as siblings — never as the model's internal
+  `unknownFields` bookkeeping keys, and never a raw `JSON.stringify` of
+  the model object, which a re-parse would re-nest and corrupt). Load is
+  the core's reader; save → load is a structurally lossless round trip
+  (locked by a regression that also demonstrates the raw-dump corruption
+  the authority prevents). Load failures surface the reader's structured
   diagnostics.
 - **Emission preview** — the core's deterministic HLSL service
   (`emitHlsl`), shown with its generated-source identity (SHA-256 of the
@@ -262,7 +269,10 @@ pnpm tauri dev  # desktop window (requires the Rust toolchain)
   are consumed in real time and a fresh projection (commit, load, focus)
   re-syncs it in 1:1;
 - save → load → compile preserves the generated HLSL bytes and the
-  generated-source identity;
+  generated-source identity, and save → load is structurally lossless:
+  the saved text is the core's canonical `.shadergraph` serialization
+  (no `unknownFields` bookkeeping keys; retained unknown fields at every
+  level round-trip to their own position);
 - canvas placement (session state) never changes generated HLSL or its
   identity;
 - the flow projection invents no entries (one node/edge per core entry,

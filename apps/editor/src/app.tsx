@@ -38,6 +38,7 @@ import {
     emitHlsl,
     parseShaderGraphDocument,
     resolveGraphTypes,
+    serializeShaderGraphDocument,
     validateShaderGraph,
     type HlslEmission,
     type ShaderGraphDocument,
@@ -197,7 +198,11 @@ export function App() {
     };
 
     const onSave = (): void => {
-        setSavedText(JSON.stringify(document, null, 2));
+        // The `.shadergraph` disk format is the core's canonical
+        // serialization authority — never a raw `JSON.stringify(document)`,
+        // which would emit the model's internal `unknownFields` bookkeeping
+        // keys and corrupt retained forward-compatible data on re-parse.
+        setSavedText(serializeShaderGraphDocument(document));
         setEmission(null);
     };
 
