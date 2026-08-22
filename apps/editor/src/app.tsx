@@ -47,7 +47,8 @@ import {
     type SurfaceProfileDescriptor,
 } from "@gglab/shader-graph-core";
 import { createDesktopFileChannel, isDesktopHost, type FileChannel } from "./host-io.js";
-import { provenanceFromImport, provenanceFromFile, saveTarget, type DocumentProvenance } from "./document-session.js";
+import { basenameOf, closeAction, createSession, isDirty, provenanceFromImport, provenanceFromFile, saveTarget, sessionSaved, sessionTitle, type CloseChoice, type DocumentProvenance, type DocumentSession } from "./document-session.js";
+import { saveShortcutOf } from "./shortcuts.js";
 // Type-only (erased at compile time): the official dialog option shapes,
 // used for the single documented boundary cast below. Runtime functions
 // are dynamically imported inside the desktop effect only.
@@ -83,12 +84,6 @@ function seedDocument(): ShaderGraphDocument {
 }
 
 /** Last path segment of a host file path (Windows or POSIX separators). */
-function basenameOf(path: string): string {
-    const parts = path.split(/[\\/]/);
-    const last = parts[parts.length - 1];
-    return last === undefined || last === "" ? path : last;
-}
-
 interface DiagnosticSet {
     readonly title: string;
     readonly ok: boolean;
@@ -97,7 +92,11 @@ interface DiagnosticSet {
 }
 
 export function App() {
-    const [document, setDocument] = useState<ShaderGraphDocument>(() => seedDocument());
+    // The seeded startup document and its initial session share ONE
+    // instance so the baseline is exactly that document's canonical
+    // bytes.
+    const [seed] = useState(() => seedDocument());
+    const [document, setDocument] = useState<ShaderGraphDocument>(seed);
     const [operationNotes, setOperationNotes] = useState<readonly string[]>([]);
     const [descriptorState, setDescriptorState] = useState<DescriptorPanelState>({ kind: "empty" });
     const [savedText, setSavedText] = useState(() => SEED_DOCUMENT_TEXT);
@@ -114,10 +113,14 @@ export function App() {
     // Desktop slice 1: native document I/O channel (absent in the browser
     // — the web build keeps the text save/load surface only).
     const [fileChannel, setFileChannel] = useState<FileChannel | null>(null);
-    // Where the current document came from (file path, or no path at
-    // all) — the Save target is derived from THIS, never from leftover
+    // The full document session: provenance (where the current document
+    // came from) + the canonical bytes of its last saved state. The
+    // Save target is derived from the provenance — never from leftover
     // state of a previous document.
-    const [provenance, setProvenance] = useState<DocumentProvenance>(() => provenanceFromImport());
+    const [session, setSession] = useState<DocumentSession>(() => createSession(provenanceFromImport(), seed));
+    // Dirty = current canonical bytes ≠ baseline (core determinism makes
+    // the byte comparison a structural one).
+    const dirty = useMemo(() => isDirty(document, session), [document, session]);
     useEffect(() => {
         let cancelled = false;
         void (async () => {
@@ -163,7 +166,10 @@ export function App() {
      */
     const replaceDocumentSession = (next: ShaderGraphDocument, source: DocumentProvenance): void => {
         setDocument(next);
-        setProvenance(source);
+        // A new document becomes the new baseline — the session is not
+        // dirty merely because its text was imported or a file was
+        // opened.
+        setSession(createSession(source, next));
         setFocus(null);
         setEmission(null);
         setOperationNotes([]);
@@ -211,27 +217,32 @@ export function App() {
      * asks. An imported document can therefore never overwrite a file
      * from a previous session of a different document.
      */
-    const saveDocument = async (as: boolean): Promise<void> => {
+    /** Save to the session's target; resolve with success. Saving
+     * establishes the new baseline (the saved bytes) — the document is
+     * clean from that moment. */
+    const saveDocument = async (as: boolean): Promise<boolean> => {
         const channel = fileChannel;
         if (channel === null) {
-            return;
+            return false;
         }
         try {
             const text = serializeShaderGraphDocument(document);
-            let path = saveTarget(provenance, as);
+            let path = saveTarget(session, as);
             if (path === null) {
-                const defaultName = provenance.kind === "file" ? basenameOf(provenance.path) : "Untitled.shadergraph";
+                const defaultName = session.provenance.kind === "file" ? basenameOf(session.provenance.path) : "Untitled.shadergraph";
                 path = await channel.pickSavePath(defaultName);
                 if (path === null) {
-                    return; // user cancelled
+                    return false; // user cancelled
                 }
             }
             await channel.writeText(path, text);
-            setProvenance(provenanceFromFile(path));
+            setSession(sessionSaved(path, text));
             setSavedText(text);
             setOperationNotes((previous) => [...previous, `Saved ${path} as the core's canonical .shadergraph bytes.`]);
+            return true;
         } catch (error) {
             setOperationNotes((previous) => [...previous, `Save failed (${error instanceof Error ? error.message : String(error)}).`]);
+            return false;
         }
     };
 
@@ -248,6 +259,111 @@ export function App() {
                   return { name: basenameOf(path), text };
               }
             : undefined;
+
+    // The latest save flow, kept reachable from the once-registered
+    // close guard (a stale closure in a listener must never save the
+    // old document).
+    const saveRef = useRef(saveDocument);
+    useEffect(() => {
+        saveRef.current = saveDocument;
+    });
+    // The close guard's live inputs (dirty is the session's rule; bypass
+    // lets a confirmed "Don't Save" close actually happen).
+    const closeGuard = useRef({ bypass: false, dirty: false });
+    useEffect(() => {
+        closeGuard.current.dirty = dirty;
+    });
+
+    // Native window title — the session's single title rule (name + the
+    // dirty star), the same string the status bar shows.
+    useEffect(() => {
+        if (!isDesktopHost(globalThis)) {
+            return;
+        }
+        let disposed = false;
+        void (async () => {
+            const { getCurrentWindow } = await import("@tauri-apps/api/window");
+            if (disposed) {
+                return;
+            }
+            await getCurrentWindow().setTitle(sessionTitle(session, dirty));
+        })();
+        return () => {
+            disposed = true;
+        };
+    }, [session, dirty]);
+
+    // Unsaved close guard (registered once): while the session is dirty,
+    // a close attempt is prevented and the native dialog offers
+    // Save / Don't Save / Cancel. The pure decision (choice + save
+    // outcome → close or stay) is the session's rule, exercised by the
+    // tests without any window.
+    useEffect(() => {
+        if (!isDesktopHost(globalThis)) {
+            return;
+        }
+        let disposed = false;
+        let unlisten: (() => void) | undefined;
+        void (async () => {
+            const [{ getCurrentWindow }, { message }] = await Promise.all([import("@tauri-apps/api/window"), import("@tauri-apps/plugin-dialog")]);
+            if (disposed) {
+                return;
+            }
+            const win = getCurrentWindow();
+            unlisten = await win.onCloseRequested(async (event) => {
+                const guard = closeGuard.current;
+                if (!guard.dirty || guard.bypass) {
+                    guard.bypass = false;
+                    return; // clean session, or a confirmed "Don't Save"
+                }
+                // Keep the window: the unsaved-close dialog follows.
+                event.preventDefault();
+                const result = await message("Unsaved changes.", {
+                    title: "Unsaved changes",
+                    kind: "warning",
+                    buttons: {
+                        yes: "Save",
+                        no: "Don't Save",
+                        cancel: "Cancel",
+                    },
+                });
+                // Anything that is not a positive choice is a cancel (an
+                // ambiguous dismissal must never discard work).
+                const choice: CloseChoice = result === "Save" ? "save" : result === "Don't Save" ? "discard" : "cancel";
+                let saveSucceeded = false;
+                if (choice === "save") {
+                    saveSucceeded = await saveRef.current(false);
+                }
+                if (closeAction(choice, saveSucceeded) !== "close") {
+                    return; // cancel, or save failed — STAY
+                }
+                guard.bypass = true;
+                await win.close();
+            });
+        })();
+        return () => {
+            disposed = true;
+            unlisten?.();
+        };
+    }, []);
+
+    // Ctrl/⌘+S and Ctrl/⌘+Shift+S (desktop builds only — a browser keeps
+    // its own native defaults).
+    useEffect(() => {
+        if (fileChannel === null) {
+            return;
+        }
+        const handler = (ev: KeyboardEvent): void => {
+            const which = saveShortcutOf(ev);
+            if (which === null) {
+                return;
+            }
+            ev.preventDefault();
+            void (which === "save-as" ? saveRef.current(true) : saveRef.current(false));
+        };
+        window.addEventListener("keydown", handler);
+        return () => window.removeEventListener("keydown", handler);
+    }, [fileChannel]);
 
     const descriptor: SurfaceProfileDescriptor | null = descriptorState.kind === "ready" ? descriptorState.descriptor : null;
 
@@ -487,7 +603,7 @@ export function App() {
                                     Save As…
                                 </Button>
                             </div>
-                            {provenance.kind === "file" && <p className="gglab-panel-hint mono">{provenance.path}</p>}
+                            {session.provenance.kind === "file" && <p className="gglab-panel-hint mono">{session.provenance.path}</p>}
                         </section>
                     )}
                     <section className="gglab-panel gglab-document-io">
@@ -521,6 +637,13 @@ export function App() {
             </div>
             <footer className="gglab-statusbar">
                 <div className="gglab-status-group">
+                    {/* The document name + the dirty star — the same rule
+                        as the window title (sessionTitle), visible in-
+                        app too. */}
+                    <span className="gglab-status-item mono">
+                        {session.provenance.kind === "file" ? basenameOf(session.provenance.path) : "Untitled"}
+                        {dirty ? " *" : ""}
+                    </span>
                     <span className="gglab-status-item mono">
                         {document.nodes.length} nodes · {document.connections.length} connections · {document.parameters.length} parameters
                     </span>

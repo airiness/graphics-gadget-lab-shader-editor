@@ -178,7 +178,9 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         }
         // This is the security boundary for file access — assert the
         // exact set (sorted), not a subset or a prefix match.
-        expect([...caps.permissions].sort()).toEqual(["core:default", "dialog:allow-open", "dialog:allow-save", "fs:allow-read-text-file", "fs:allow-write-text-file"].sort());
+        expect([...caps.permissions].sort()).toEqual(
+            ["core:default", "core:window:allow-close", "core:window:allow-set-title", "dialog:allow-open", "dialog:allow-save", "fs:allow-read-text-file", "fs:allow-write-text-file"].sort(),
+        );
     });
 
     it("keeps the host custom-command-free (official plugins only, no arbitrary-path commands)", async () => {

@@ -265,6 +265,47 @@ inherits a previous document's path.
   is a no-op; an IO failure (e.g. the file vanished after the dialog) is
   an explicit `IO` rejected state carrying the host's message.
 
+### Document session (slice 2)
+
+The session record for the current document carries everything the
+desktop surface needs (owned by `src/document-session.ts`, so the UI,
+the title, and the close guard all use the same rules):
+
+```
+DocumentSession
+├─ provenance      file path (owned)  |  imported (owns no path)
+├─ savedBaseline   canonical bytes of the last saved / established state
+└─ dirty           ⇔  serializeShaderGraphDocument(current) ≠ savedBaseline
+```
+
+Because the core's serialization is deterministic and structurally
+stable, `dirty` is a byte comparison over two canonical forms — a
+structural comparison (locked by a test: equal documents in different
+key order are NOT dirty). Re-saving establishes the new baseline
+(`sessionSaved`); replacing the document establishes a fresh baseline
+(new document ⇒ not dirty).
+
+Behavior:
+
+- **window title** — `GGLab Shader Graph Editor — MyShader.shadergraph`,
+  gaining a trailing ` *` exactly while dirty (the same rule drives the
+  status bar; path display uses `basenameOf`);
+- **Ctrl/⌘+S** saves, **Ctrl/⌘+Shift+S** saves-as — classified by the
+  pure `saveShortcutOf` authority (browser builds keep their native
+  defaults);
+- **unsaved close guard** — while dirty, a close attempt is prevented
+  (the window's `onCloseRequested` + `preventDefault()`) and the native
+  dialog
+  offers **Save / Don't Save / Cancel** (the dialog's custom buttons,
+  matched on their labels — an ambiguous dismissal is treated as Cancel,
+  never discard). Save closes only on success; a failed save STAYS with
+  the error reported in-app. Don't Save closes; the guard records the
+  confirmation so it fires only once. The decision
+  (`choice + save outcome → close/stay`) is the pure `closeAction` rule,
+  tested without any window;
+- the title/close surface needs `core:window:allow-set-title` +
+  `core:window:allow-close` — both are part of the exact capability set.
+
 Layout:
 
 - `src-tauri/src/main.rs` — the window + the two official plugins
@@ -275,8 +316,9 @@ Layout:
   limited to the IPC origin — plus the dev preamble and HMR WebSocket
   origin in `devCsp`);
 - `src-tauri/capabilities/default.json` — exactly `core:default` +
-  `dialog:allow-open`/`dialog:allow-save` + `fs:allow-read-text-file`/
-  `fs:allow-write-text-file`;
+  `core:window:allow-close`/`core:window:allow-set-title` +
+  `dialog:allow-open`/`dialog:allow-save` +
+  `fs:allow-read-text-file`/`fs:allow-write-text-file`;
 - `src-tauri/icons/` — self-generated flat motif (two linked node cards,
   repo palette) as a classic **DIB-based** `icon.ico` (the older Windows
   resource compiler on this machine rejects PNG-compressed ICOs) plus the
