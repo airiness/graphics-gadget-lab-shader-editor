@@ -7,7 +7,7 @@
  * defined here: validation, port-level types, conformance, compatibility,
  * and emission all come from @gglab/shader-graph-core.
  */
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
     addConnection,
     addNode,
@@ -27,6 +27,7 @@ import {
     type AuthoringDropPayload,
     type AuthoringResult,
     type CanvasFocus,
+    FileIcon,
     type ConnectionRequest,
     type DescriptorPanelState,
     type ParameterRequest,
@@ -45,6 +46,7 @@ import {
     type ShaderGraphDiagnostic,
     type SurfaceProfileDescriptor,
 } from "@gglab/shader-graph-core";
+import { createDesktopFileChannel, isDesktopHost, type FileChannel } from "./host-io.js";
 import "./app.css";
 
 /** The editor's default workspace document (a valid gglab.surface v1 graph). */
@@ -75,6 +77,13 @@ function seedDocument(): ShaderGraphDocument {
     return parsed.value;
 }
 
+/** Last path segment of a host file path (Windows or POSIX separators). */
+function basenameOf(path: string): string {
+    const parts = path.split(/[\\/]/);
+    const last = parts[parts.length - 1];
+    return last === undefined || last === "" ? path : last;
+}
+
 interface DiagnosticSet {
     readonly title: string;
     readonly ok: boolean;
@@ -97,6 +106,114 @@ export function App() {
     const [libraryOpen, setLibraryOpen] = useState(true);
     // Viewport fit trigger (registered by the flow adapter via onInit).
     const fitRef = useRef<(() => void) | null>(null);
+    // Desktop slice 1: native document I/O channel (absent in the browser
+    // — the web build keeps the text save/load surface only).
+    const [fileChannel, setFileChannel] = useState<FileChannel | null>(null);
+    const [documentPath, setDocumentPath] = useState<string | null>(null);
+    useEffect(() => {
+        let cancelled = false;
+        void (async () => {
+            if (!isDesktopHost(globalThis)) {
+                return;
+            }
+            // Desktop-only code path: the Tauri bindings are code-split out
+            // of the web bundle and loaded only inside the desktop webview.
+            // The native surface stays thin on purpose: the shell's file
+            // commands (read_text_file / write_text_file) move path + UTF-8
+            // bytes only, and the dialog plugin's open / save commands only
+            // choose a path. Neither side knows anything about shader
+            // graphs, profiles, or retained fields.
+            const { invoke } = await import("@tauri-apps/api/core");
+            if (cancelled) {
+                return;
+            }
+            setFileChannel(
+                createDesktopFileChannel({
+                    invoke,
+                    openDialog: (options) => invoke<string | string[] | null>("plugin:dialog|open", { options }),
+                    saveDialog: (options) => invoke<string | null>("plugin:dialog|save", { options }),
+                }),
+            );
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    /** Open a `.shadergraph` through the host (path → UTF-8 → core reader). */
+    const openDocument = async (): Promise<void> => {
+        const channel = fileChannel;
+        if (channel === null) {
+            return;
+        }
+        try {
+            const path = await channel.pickDocumentPath();
+            if (path === null) {
+                return; // user cancelled
+            }
+            const text = await channel.readText(path);
+            const parsed = parseShaderGraphDocument(text);
+            if (parsed.ok && parsed.value !== null) {
+                setDocument(parsed.value);
+                setDocumentPath(path);
+                setSavedText(serializeShaderGraphDocument(parsed.value));
+                setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: `Opened ${path}; the session state was restored.` });
+                requestAnimationFrame(() => fitRef.current?.());
+                return;
+            }
+            setLoadResult({
+                title: "Load result",
+                ok: false,
+                diagnostics: parsed.diagnostics,
+                passedText: "",
+            });
+        } catch (error) {
+            setOperationNotes((previous) => [...previous, `Open failed (${error instanceof Error ? error.message : String(error)}).`]);
+        }
+    };
+
+    /**
+     * Save via the host: the BYTES are the core's canonical .shadergraph
+     * serialization (the disk format authority); the host only writes
+     * UTF-8 bytes to the chosen path. Save = the current path when one
+     * exists; Save As always re-asks.
+     */
+    const saveDocument = async (as: boolean): Promise<void> => {
+        const channel = fileChannel;
+        if (channel === null) {
+            return;
+        }
+        try {
+            const text = serializeShaderGraphDocument(document);
+            let path = as === false && documentPath !== null ? documentPath : null;
+            if (path === null) {
+                path = await channel.pickSavePath(documentPath !== null ? basenameOf(documentPath) : "shadergraph");
+                if (path === null) {
+                    return; // user cancelled
+                }
+            }
+            await channel.writeText(path, text);
+            setDocumentPath(path);
+            setSavedText(text);
+            setOperationNotes((previous) => [...previous, `Saved ${path} as the core's canonical .shadergraph bytes.`]);
+        } catch (error) {
+            setOperationNotes((previous) => [...previous, `Save failed (${error instanceof Error ? error.message : String(error)}).`]);
+        }
+    };
+
+    /** Desktop descriptor open: host path → UTF-8 → the panel's core reader. */
+    const openDescriptorFile =
+        fileChannel !== null
+            ? async (): Promise<{ name: string; text: string } | null> => {
+                  const channel = fileChannel;
+                  const path = await channel.pickDescriptorPath();
+                  if (path === null) {
+                      return null;
+                  }
+                  const text = await channel.readText(path);
+                  return { name: basenameOf(path), text };
+              }
+            : undefined;
 
     const descriptor: SurfaceProfileDescriptor | null = descriptorState.kind === "ready" ? descriptorState.descriptor : null;
 
@@ -302,7 +419,7 @@ export function App() {
                     />
                 </main>
                 <aside className="gglab-side gglab-side-right">
-                    <DescriptorPanel state={descriptorState} onStateChange={(state) => setDescriptorState(state)} />
+                    <DescriptorPanel state={descriptorState} onStateChange={(state) => setDescriptorState(state)} openDescriptorFile={openDescriptorFile} />
                     {graphSets.map((set) => (
                         <DiagnosticsPanel key={set.title} title={set.title} diagnostics={set.diagnostics} ok={set.ok} passedText={set.passedText} onSelect={selectDiagnostic} />
                     ))}
@@ -311,6 +428,30 @@ export function App() {
                     ))}
                     {loadResult !== null && (
                         <DiagnosticsPanel title={loadResult.title} diagnostics={loadResult.diagnostics} ok={loadResult.ok} passedText={loadResult.passedText} onSelect={selectDiagnostic} />
+                    )}
+                    {/* Desktop slice 1: native document I/O. The host owns
+                        path + UTF-8 bytes only; the core owns parse/
+                        serialize; this app owns which text moves where. */}
+                    {fileChannel !== null && (
+                        <section className="gglab-panel gglab-document-native">
+                            <h2 className="gglab-panel-title">Document</h2>
+                            <p className="gglab-panel-hint">
+                                Native open, save, save-as (the host moves path + UTF-8 bytes; bytes are the core's canonical .shadergraph serialization).
+                            </p>
+                            <div className="gglab-doc-actions" role="toolbar" aria-label="Document I/O">
+                                <Button variant="secondary" onClick={() => void openDocument()}>
+                                    <FileIcon />
+                                    Open…
+                                </Button>
+                                <Button variant="secondary" onClick={() => void saveDocument(false)}>
+                                    Save
+                                </Button>
+                                <Button variant="ghost" onClick={() => void saveDocument(true)}>
+                                    Save As…
+                                </Button>
+                            </div>
+                            {documentPath !== null && <p className="gglab-panel-hint mono">{documentPath}</p>}
+                        </section>
                     )}
                     <section className="gglab-panel gglab-document-io">
                         <h2 className="gglab-panel-title">Document save / load</h2>

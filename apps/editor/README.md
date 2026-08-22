@@ -192,10 +192,57 @@ existing React/Vite editor → Tauri WebView → native Windows desktop window
 ```
 
 The Rust/Tauri layer deliberately knows nothing about ShaderGraph
-semantics, `profileVersion`, descriptor compatibility, or HLSL emission:
-it registers **no commands, no plugins, no state** — the frontend runs
-exactly as it does in the browser. (Later desktop slices will add native
-Open/Save dialogs, window title, etc.; none of that is in this slice.)
+semantics, `profileVersion`, descriptor compatibility, or HLSL emission.
+
+### Native document I/O (slice 1)
+
+The desktop app can now read and write real files, through the thinnest
+possible native surface. The layer contract (one direction, never
+widened):
+
+```
+Tauri / native  →  a file path + UTF-8 bytes. That is all it knows.
+core            →  parse / serialize (the .shadergraph disk format,
+                   descriptor reading).
+editor (the app)→  document + session state; decides which text moves.
+```
+
+Native IPC surface (locked by `capabilities/default.json`, which grants
+only `core:default` + the dialog plugin's `dialog:allow-open` /
+`dialog:allow-save`; app commands take no generated permissions):
+
+- `read_text_file(path)` — UTF-8 read; invalid UTF-8 / IO failure is an
+  explicit rejection, never a silently lossy conversion (the text's
+  meaning is then the core reader's business);
+- `write_text_file(path, contents)` — UTF-8 write; the bytes are exactly
+  what the frontend (the core's canonical serialization) handed over;
+- the dialog plugin's `open` / `save` commands, invoked from JS as
+  `plugin:dialog|open` / `plugin:dialog|save` — they only choose a path,
+  with `.shadergraph` / JSON filters. (In this `@tauri-apps/api`
+  generation there is no separate `dialog` JS module — the wire format
+  is `invoke("plugin:dialog|…", { options })`.)
+
+The app keeps this behind a small **host/file abstraction**
+(`src/host-io.ts`): a `FileChannel` whose host `invoke` and dialogs are
+*injected* — so the module is unit-testable with fakes, and the Tauri
+bindings are dynamically imported, code-split out of the web bundle, and
+loaded only inside the desktop webview. The browser build keeps its
+text save/load surface untouched.
+
+UI (desktop only, above the existing text save/load block, which stays
+as the web path and the copy-to-clipboard path):
+
+- **Open…** — native open dialog → host UTF-8 read → **core** document
+  reader → session state restored (diagnostics shown like any other
+  core panel);
+- **Save** — the core's canonical `.shadergraph` serialization written to
+  the current path (asked again when none exists);
+- **Save As…** — native save dialog → same canonical bytes to the new
+  path;
+- **descriptor Open** — the panel receives an optional host file-open
+  injection (native dialog → UTF-8 text → the core's strict descriptor
+  reader); without one it falls back to the browser file input. Cancel
+  is a no-op; IO failure surfaces the host's message.
 
 Layout:
 

@@ -46,6 +46,7 @@ import {
     useSyncedFlowNodes,
     withNodePosition,
     type AuthoringDropPayload,
+    type DescriptorPanelState,
     type ShaderFlowNode,
 } from "@gglab/editor-ui";
 import {
@@ -1119,5 +1120,65 @@ describe("action affordance (chrome kit)", () => {
         expect(tag).toContain("focus-visible:outline-ring");
         // Icon glyph present in the action.
         expect(html).toContain("<svg");
+    });
+});
+
+// --- desktop slice 1: host file-open injection into the descriptor panel -----
+
+describe("descriptor panel: host file-open injection (desktop)", () => {
+    it("uses the injected host open and feeds its text to the core reader", async () => {
+        const states: DescriptorPanelState[] = [];
+        const { unmount } = render(
+            <DescriptorPanel
+                state={{ kind: "empty" }}
+                onStateChange={(state) => states.push(state)}
+                openDescriptorFile={async () => ({ name: "descriptor.json", text: JSON.stringify(canonicalV2Fixture) })}
+            />,
+        );
+        const button = screen.getByRole("button", { name: /open descriptor file/i });
+        await act(async () => {
+            void button.click();
+        });
+        expect(states).toHaveLength(1);
+        expect(states[0]).toMatchObject({ kind: "ready" });
+        if (states[0] !== undefined) {
+            expect(states[0]).toEqual({ kind: "ready", descriptor: parseSurfaceProfileDescriptorFixture(canonicalV2Fixture) });
+        }
+        unmount();
+    });
+
+    it("a cancelled host open leaves the panel state untouched (no spurious change)", async () => {
+        const states: DescriptorPanelState[] = [];
+        const { unmount } = render(
+            <DescriptorPanel
+                state={{ kind: "empty" }}
+                onStateChange={(state) => states.push(state)}
+                openDescriptorFile={async () => null}
+            />,
+        );
+        const button = screen.getByRole("button", { name: /open descriptor file/i });
+        await act(async () => {
+            void button.click();
+        });
+        expect(states).toHaveLength(0);
+        unmount();
+    });
+
+    it("a rejected host read surfaces the core reader's verdict, not a crash", async () => {
+        const states: DescriptorPanelState[] = [];
+        const { unmount } = render(
+            <DescriptorPanel
+                state={{ kind: "empty" }}
+                onStateChange={(state) => states.push(state)}
+                openDescriptorFile={async () => ({ name: "broken.json", text: "{ not a descriptor" })}
+            />,
+        );
+        const button = screen.getByRole("button", { name: /open descriptor file/i });
+        await act(async () => {
+            void button.click();
+        });
+        expect(states).toHaveLength(1);
+        expect(states[0]).toMatchObject({ kind: "rejected" });
+        unmount();
     });
 });

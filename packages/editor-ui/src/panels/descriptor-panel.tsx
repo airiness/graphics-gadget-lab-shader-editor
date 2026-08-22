@@ -44,14 +44,41 @@ export function textureSignatureSerialized(descriptor: SurfaceProfileDescriptor)
     return "generatedTextureSignature" in descriptor.samplingContract && "generatedSampleForm" in descriptor.samplingContract;
 }
 
+/** Picked file handed back by a host file-open injection (name for
+ * diagnostics, text for the core reader). */
+export interface PickedText {
+    readonly name: string;
+    readonly text: string;
+}
+
 export interface DescriptorPanelProps {
     readonly state: DescriptorPanelState;
     readonly onStateChange: (state: DescriptorPanelState) => void;
+    /**
+     * Optional host file-open injection (desktop slice): resolve with
+     * `{ name, text }`, or `null` for a user cancel. When absent, the
+     * component falls back to the browser file input (web behavior is
+     * unchanged). The panel stays headless — it only sees a generic
+     * "pick a file, give me its text" function.
+     */
+    readonly openDescriptorFile?: () => Promise<PickedText | null>;
 }
 
 export function DescriptorPanel(props: DescriptorPanelProps) {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const state = props.state;
+    const onOpenClicked = async (): Promise<void> => {
+        const nativeOpen = props.openDescriptorFile;
+        if (nativeOpen === undefined) {
+            fileInputRef.current?.click();
+            return;
+        }
+        const picked = await nativeOpen();
+        if (picked === null) {
+            return; // user cancelled the native dialog
+        }
+        props.onStateChange(readDescriptorText(picked.name, picked.text));
+    };
     return (
         <section className="gglab-panel">
             <h2 className="gglab-panel-title">Profile descriptor</h2>
@@ -59,8 +86,10 @@ export function DescriptorPanel(props: DescriptorPanelProps) {
                 The profile contract is consumed as a serialized data document (parsed by the core's strict reader), never a C++ ABI or header import.
             </p>
             {/* A clear ordinary action: neutral raised button, file icon,
-                hover/pressed/focus states from the button design language. */}
-            <Button variant="secondary" className="self-start" onClick={() => fileInputRef.current?.click()}>
+                hover/pressed/focus states from the button design language.
+                Desktop hosts inject a native open; the web build keeps
+                the hidden file input fallback. */}
+            <Button variant="secondary" className="self-start" onClick={() => void onOpenClicked()}>
                 <FileIcon />
                 Open descriptor file…
             </Button>
