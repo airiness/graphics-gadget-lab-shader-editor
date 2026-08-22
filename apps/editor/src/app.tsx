@@ -274,9 +274,12 @@ export function App() {
     });
     // The in-page close confirmation (Save / Don't Save / Cancel): the
     // overlay is app state; the pending close decision resolves through
-    // this ref (chosen by a button, or by the 10s safety timeout).
+    // this ref (answered by a button). closePendingRef is the re-entry
+    // guard: while the question is up, new close requests are absorbed
+    // (prevented, ignored) — never answered by a second question.
     const [closePrompt, setClosePrompt] = useState(false);
     const resolveRef = useRef<((choice: CloseChoice) => void) | null>(null);
+    const closePendingRef = useRef(false);
     const chooseCloseChoice = (choice: CloseChoice): void => {
         setClosePrompt(false);
         const resolve = resolveRef.current;
@@ -320,9 +323,11 @@ export function App() {
     //
     // So "close" is expressed by NOT preventing, and "stay" by
     // preventing. The handler therefore decides FIRST and only
-    // prevents when the session must stay — every branch resolves the
-    // handler (choice, timeout, or save outcome), so no close attempt
-    // can ever be left pending. The pure decision
+    // prevents when the session must stay. The question itself stays up
+    // until answered, like any modal confirmation (no auto-cancel
+    // countdown); while it is up, FURTHER close requests are absorbed
+    // (closePendingRef: prevented and ignored — never answered by a
+    // second question/resolver). The pure decision
     // (choice + save outcome → close/stay) is the session's rule,
     // exercised by the tests without any window.
     useEffect(() => {
@@ -341,37 +346,41 @@ export function App() {
                     setOperationNotes((previous) => [...previous, "Close guard: clean session — closing."]);
                     return; // not prevented → the api wrapper destroys the window
                 }
-                setOperationNotes((previous) => [...previous, "Close guard: close attempt intercepted — the session has unsaved changes."]);
-                // Await the user's choice from the in-page surface. A 10s
-                // no-interaction timeout resolves it as Cancel (STAY —
-                // never a silent discard).
-                const choice: CloseChoice = await new Promise<CloseChoice>((resolve) => {
-                    resolveRef.current = resolve;
-                    setClosePrompt(true);
-                    window.setTimeout(() => {
-                        if (resolveRef.current !== resolve) {
-                            return;
-                        }
-                        resolveRef.current = null;
-                        setClosePrompt(false);
-                        setOperationNotes((previous) => [...previous, "Close guard: no choice was made in time — treated as Cancel (the session was kept)."]);
-                        resolve("cancel");
-                    }, 10000);
-                });
-                setClosePrompt(false);
-                let saveSucceeded = false;
-                if (choice === "save") {
-                    saveSucceeded = await saveRef.current(false);
-                }
-                setOperationNotes((previous) => [...previous, `Close guard: choice = ${choice}(; save ${saveSucceeded ? "completed" : "not attempted/failed"}).`]);
-                if (closeAction(choice, saveSucceeded) === "stay") {
-                    event.preventDefault(); // stay — the session is kept
-                    setOperationNotes((previous) => [...previous, choice === "cancel" ? "Close guard: STAYED (Cancel)." : "Close guard: STAYED (the save did not complete)."]);
+                if (closePendingRef.current) {
+                    // The Save / Don't Save / Cancel question is already
+                    // up — absorb this new close request, do not create
+                    // a second question (or a second resolver that would
+                    // leak the first one).
+                    event.preventDefault();
                     return;
                 }
-                // discard (or a completed save) — NOT prevented, so the
-                // api wrapper destroys the window and the close happens.
-                setOperationNotes((previous) => [...previous, choice === "discard" ? "Close guard: closing (unsaved changes discarded, as chosen)." : "Close guard: closing (changes saved)."]);
+                closePendingRef.current = true;
+                try {
+                    setOperationNotes((previous) => [...previous, "Close guard: close attempt intercepted — the session has unsaved changes."]);
+                    // Await the user's choice from the in-page surface
+                    // (kept up until answered, like a modal question).
+                    const choice: CloseChoice = await new Promise<CloseChoice>((resolve) => {
+                        resolveRef.current = resolve;
+                        setClosePrompt(true);
+                    });
+                    setClosePrompt(false);
+                    let saveSucceeded = false;
+                    if (choice === "save") {
+                        saveSucceeded = await saveRef.current(false);
+                    }
+                    setOperationNotes((previous) => [...previous, `Close guard: choice = ${choice}(; save ${saveSucceeded ? "completed" : "not attempted/failed"}).`]);
+                    if (closeAction(choice, saveSucceeded) === "stay") {
+                        event.preventDefault(); // stay — the session is kept
+                        setOperationNotes((previous) => [...previous, choice === "cancel" ? "Close guard: STAYED (Cancel)." : "Close guard: STAYED (the save did not complete)."]);
+                        return;
+                    }
+                    // discard (or a completed save) — NOT prevented, so
+                    // the api wrapper destroys the window and the close
+                    // happens.
+                    setOperationNotes((previous) => [...previous, choice === "discard" ? "Close guard: closing (unsaved changes discarded, as chosen)." : "Close guard: closing (changes saved)."]);
+                } finally {
+                    closePendingRef.current = false;
+                }
             });
         })();
         return () => {

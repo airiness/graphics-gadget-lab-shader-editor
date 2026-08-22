@@ -301,11 +301,13 @@ Behavior:
   `preventDefault()`**. The guard therefore decides FIRST (an in-page
   Save / Don't Save / Cancel overlay — deterministic, always visible,
   no dialog permission needed) and only prevents when the session must
-  STAY (Cancel, or a save that did not complete). A 10-second
-  no-interaction timeout resolves as Cancel (never a silent discard).
-  Clean sessions simply return without preventing, so the wrapper's
-  destroy completes the close. Every branch resolves the handler (no
-  attempt can be left pending), and every step is recorded in the
+  STAY (Cancel, or a save that did not complete). The question stays up
+  until answered — like a modal confirmation, with no auto-cancel
+  countdown; while it is up, further close attempts (X-mashing) are
+  ABSORBED: prevented and ignored by a re-entry guard
+  (`closePendingRef`), never answered by a second question or a second
+  resolver. Clean sessions simply return without preventing, so the
+  wrapper's destroy completes the close. Every step is recorded in the
   operation notes. The decision (`choice + save outcome → close/stay`)
   is the pure `closeAction` rule, tested without any window;
 - the window surface needs `core:window:allow-set-title` (title) +
