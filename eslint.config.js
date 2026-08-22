@@ -7,6 +7,8 @@ export default tseslint.config(
         ignores: [
             "**/node_modules/",
             "**/dist/",
+            "**/target/",
+            "**/src-tauri/gen/",
             "coverage/",
             "pnpm-lock.yaml"
         ]

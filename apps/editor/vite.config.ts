@@ -19,5 +19,13 @@ export default defineConfig({
     server: {
         port: 5173,
         strictPort: true,
+        // The Tauri desktop host lives in src-tauri (Rust/cargo). Keep the
+        // Vite dev watcher away from it: cargo owns those files, and
+        // watching them in parallel (especially the cargo build tree under
+        // src-tauri/target) causes file-watch contention under `tauri dev`.
+        // (chokidar v4 option name is `ignored`, not `ignore`.)
+        watch: {
+            ignored: ["**/src-tauri/**", "**/target/**"],
+        },
     },
 });

@@ -167,7 +167,61 @@ slice. After review it is considered **frozen**: the next stage hosts the
 existing React/Vite editor unchanged inside the Tauri 2 desktop
 shell (Slice 0), rather than widening the Web GUI scope. No Tauri,
 native dialogs, filesystem IO, undo/redo, property inspector, context
-menus, new nodes/parameter classes, or toolchain integration live here.
+menus, new nodes/parameter classes, or toolchain integration live in
+the Web GUI.
+
+## Desktop shell (Tauri 2)
+
+```
+apps/editor
+├─ React/Vite frontend       (unchanged; the browser app)
+└─ src-tauri                 (thin desktop host — the only new thing)
+```
+
+Slice 0's entire job is:
+
+```
+existing React/Vite editor → Tauri WebView → native Windows desktop window
+```
+
+The Rust/Tauri layer deliberately knows nothing about ShaderGraph
+semantics, `profileVersion`, descriptor compatibility, or HLSL emission:
+it registers **no commands, no plugins, no state** — the frontend runs
+exactly as it does in the browser. (Later desktop slices will add native
+Open/Save dialogs, window title, etc.; none of that is in this slice.)
+
+Layout:
+
+- `src-tauri/src/main.rs` — builds the context and runs the window;
+- `src-tauri/tauri.conf.json` — window (1440×900, min 960×600),
+  `devUrl` = the Vite dev server, `frontendDist` = `../dist`;
+- `src-tauri/capabilities/default.json` — empty (no IPC in this slice);
+- `src-tauri/icons/` — self-generated flat motif (two linked node cards,
+  repo palette) as a classic **DIB-based** `icon.ico` (the older Windows
+  resource compiler on this machine rejects PNG-compressed ICOs) plus the
+  same pixels as `icon.png`.
+
+Known pitfalls (both locked by config + comments in the code):
+
+- the Vite dev watcher must stay out of `src-tauri/` (and any cargo
+  `target/`): watching cargo-owned files in parallel crashes the dev
+  server with `EBUSY`. Handled in `vite.config.ts` via
+  `server.watch.ignored` (chokidar **v4** spells it `ignored`, not
+  `ignore` — the v3 spelling is silently ignored);
+- Rust/cargo is a build-time-only requirement (never bundled); the web
+  build stays standalone.
+
+Run (requires a stable Rust toolchain + WebView2 runtime; the web build
+still runs standalone exactly as before):
+
+```
+pnpm tauri dev      # from the repo root (or: pnpm tauri:dev in apps/editor)
+pnpm tauri build    # release build (needs the stable Rust toolchain)
+```
+
+Environment note: on machines with `HTTP_PROXY`/`HTTPS_PROXY` set,
+export `NO_PROXY=localhost,127.0.0.1` before starting, so the embedded
+webview's loopback requests bypass the proxy.
 
 ## Run
 
@@ -176,6 +230,7 @@ pnpm install
 pnpm dev        # from the apps/editor package (Vite dev server)
 pnpm test       # GUI slice tests (vitest + jsdom + React server render)
 pnpm build      # production bundle (dist/)
+pnpm tauri dev  # desktop window (requires the Rust toolchain)
 ```
 
 ## Invariants locked by this package's tests
