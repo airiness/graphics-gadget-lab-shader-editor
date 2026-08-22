@@ -6,7 +6,9 @@
  *
  * `readDescriptorText` is the pure core of this component (and the unit
  * that tests exercise): text → parsed instance, or the reader's structured
- * rejection. The file input is the browser plumbing around it.
+ * rejection. The file input is hidden browser plumbing behind a styled
+ * button (the desktop-tool surface never shows a raw native file picker
+ * control).
  */
 import { useRef } from "react";
 import { parseSurfaceProfileDescriptor, type SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
@@ -49,16 +51,21 @@ export function DescriptorPanel(props: DescriptorPanelProps) {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const state = props.state;
     return (
-        <section className="gglab-descriptor">
-            <h2>Profile descriptor</h2>
-            <p className="gglab-descriptor-hint">
+        <section className="gglab-panel">
+            <h2 className="gglab-panel-title">Profile descriptor</h2>
+            <p className="gglab-panel-hint">
                 The profile contract is consumed as a serialized data document (parsed by the core's strict reader), never a C++ ABI or header import.
             </p>
+            <button type="button" className="gglab-btn" onClick={() => fileInputRef.current?.click()}>
+                Open descriptor file…
+            </button>
             <input
                 ref={fileInputRef}
                 type="file"
                 accept="application/json,.json"
-                className="gglab-descriptor-file"
+                className="gglab-visually-hidden"
+                tabIndex={-1}
+                aria-hidden
                 onChange={async (event) => {
                     const file = event.currentTarget.files?.[0];
                     if (file === undefined) {
@@ -66,24 +73,31 @@ export function DescriptorPanel(props: DescriptorPanelProps) {
                     }
                     const text = await file.text();
                     props.onStateChange(readDescriptorText(file.name, text));
+                    event.currentTarget.value = "";
                 }}
             />
-            {state.kind === "empty" && <p className="gglab-descriptor-status">No descriptor loaded — compatibility and conformance are not yet judged.</p>}
+            {state.kind === "empty" && <p className="gglab-panel-status">No descriptor loaded — compatibility and conformance are not yet judged.</p>}
             {state.kind === "rejected" && (
-                <p className="gglab-descriptor-status gglab-descriptor-rejected">
-                    <span className="gglab-descriptor-code">{state.diagnosticCode}</span> {state.diagnosticMessage}
+                <p className="gglab-panel-status gglab-panel-status-warn">
+                    <span className="gglab-panel-code">{state.diagnosticCode}</span> {state.diagnosticMessage}
                 </p>
             )}
             {state.kind === "ready" && (
-                <dl className="gglab-descriptor-status">
-                    <dt>descriptorVersion</dt>
-                    <dd>{String(state.descriptor.descriptorVersion)}</dd>
-                    <dt>profile line</dt>
-                    <dd>
-                        {state.descriptor.profileId} profileVersion {String(state.descriptor.profileVersion)}
-                    </dd>
-                    <dt>texture-signature contract</dt>
-                    <dd>{textureSignatureSerialized(state.descriptor) ? "serialized" : "not serialized"}</dd>
+                <dl className="gglab-facts">
+                    <div className="gglab-fact">
+                        <dt>descriptorVersion</dt>
+                        <dd>{String(state.descriptor.descriptorVersion)}</dd>
+                    </div>
+                    <div className="gglab-fact">
+                        <dt>profile line</dt>
+                        <dd>
+                            {state.descriptor.profileId} · profileVersion {String(state.descriptor.profileVersion)}
+                        </dd>
+                    </div>
+                    <div className="gglab-fact">
+                        <dt>texture-signature</dt>
+                        <dd>{textureSignatureSerialized(state.descriptor) ? "serialized" : "not serialized"}</dd>
+                    </div>
                 </dl>
             )}
         </section>

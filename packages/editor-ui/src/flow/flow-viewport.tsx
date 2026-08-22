@@ -1,23 +1,38 @@
 /**
  * The canvas — a React Flow (v12, @xyflow/react) presentation/interaction
- * adapter. It renders the document→flow projection and forwards two raw
- * interaction intents (a connection attempt; a node placement) to the
- * composition root, which asks the core's services before anything is
- * treated as a fact. Nothing here validates a connection or infers a type.
+ * adapter plus the `ShaderNode` design language.
  *
- * Port layout is the UI's only layout job: one row per port (a shader
- * graph's true UI unit), each handle dot pinned to its row by the same
- * constants the adapter exposes — six channel outputs are six distinct,
- * individually grabbable points, each labeled by its catalog name.
+ * ShaderNode: the port is the visual core. Every catalog port renders on
+ * its own labeled row at its own handle position; a data-category dot
+ * (scalar / vector / texture — the core catalog's own types, mapped to
+ * colors) and a category rail (the core's node categories) give the card
+ * structure a node editor reads at a glance, without the UI owning any
+ * vocabulary. Unknown node types keep their explicit warning state.
+ *
+ * Canvas chrome (grid, controls, minimap) is pure presentation: it never
+ * adds a node, port, or semantic fact.
  */
 import { useEffect, useRef } from "react";
-import { Handle, Position, ReactFlow, ReactFlowProvider, useNodesState, type Connection, type NodeProps } from "@xyflow/react";
-
-/** Re-exported so consumers can wrap standalone custom nodes that use Handle. */
-export { ReactFlowProvider };
+import {
+    Background,
+    BackgroundVariant,
+    Controls,
+    Handle,
+    MiniMap,
+    Position,
+    ReactFlow,
+    ReactFlowProvider,
+    useNodesState,
+    type Connection,
+    type Node,
+    type NodeProps,
+} from "@xyflow/react";
+import { getNodeDefinition } from "@gglab/shader-graph-core";
 import "@xyflow/react/dist/style.css";
 import type { ShaderFlowNode, ShaderNodeData } from "./flow-adapter.js";
 import { FLOW_NODE_TYPE, handleStyle } from "./flow-adapter.js";
+
+export { ReactFlowProvider };
 
 type ShaderNodeT = ShaderFlowNode;
 
@@ -32,22 +47,31 @@ function portRows(inputPorts: readonly string[], outputPorts: readonly string[])
     return result;
 }
 
-/** One graph node: header + one row per port + one Handle per port. */
+/** One graph node, in the ShaderNode design language. */
 export function ShaderNode(props: NodeProps<ShaderNodeT>) {
     const data: ShaderNodeData = props.data;
     const rows = portRows(data.inputPorts, data.outputPorts);
     return (
-        <div className={`gglab-node${data.knownToCatalog === false ? " gglab-node-unknown" : ""}${data.focused ? " gglab-node-focus" : ""}`}>
+        <div className={`gglab-node gglab-node-cat-${data.nodeCategory ?? "unknown"}${data.knownToCatalog === false ? " gglab-node-unknown" : ""}${data.focused ? " gglab-node-focus" : ""}`}>
             <div className="gglab-node-header">
                 <div className="gglab-node-title">{data.label}</div>
-                <div className="gglab-node-type">{data.nodeType}</div>
+                <div className="gglab-node-meta">
+                    <span className="gglab-node-type">{data.nodeType}</span>
+                    <span className="gglab-node-category">{data.nodeCategory ?? "unknown"}</span>
+                </div>
                 {data.knownToCatalog === false && <div className="gglab-node-flag">unknown to the node catalog — preserved, not replaced</div>}
             </div>
             <div className="gglab-node-rows">
-                {rows.map((row) => (
+                {rows.map((row, rowIndex) => (
                     <div className="gglab-port-row" key={row.key}>
-                        <span className={`gglab-port gglab-port-in${data.focusedPorts.includes(row.inputId ?? "") ? " gglab-port-focus" : ""}`}>{row.inputId ?? ""}</span>
-                        <span className={`gglab-port gglab-port-out${data.focusedPorts.includes(row.outputId ?? "") ? " gglab-port-focus" : ""}`}>{row.outputId ?? ""}</span>
+                        <span className={`gglab-port gglab-port-in${data.focusedPorts.includes(row.inputId ?? "") ? " gglab-port-focus" : ""}`}>
+                            {row.inputId !== undefined && <span className={`gglab-dot gglab-dot-${data.inputPortKinds[rowIndex] ?? "generic"}`} aria-hidden />}
+                            {row.inputId ?? ""}
+                        </span>
+                        <span className={`gglab-port gglab-port-out${data.focusedPorts.includes(row.outputId ?? "") ? " gglab-port-focus" : ""}`}>
+                            {row.outputId ?? ""}
+                            {row.outputId !== undefined && <span className={`gglab-dot gglab-dot-${data.outputPortKinds[rowIndex] ?? "generic"}`} aria-hidden />}
+                        </span>
                     </div>
                 ))}
             </div>
@@ -58,7 +82,7 @@ export function ShaderNode(props: NodeProps<ShaderNodeT>) {
                     type="target"
                     position={Position.Left}
                     style={handleStyle("input", index)}
-                    className={data.focusedPorts.includes(portId) ? "gglab-handle-focus" : undefined}
+                    className={`gglab-handle-kind-${data.inputPortKinds[index] ?? "generic"}${data.focusedPorts.includes(portId) ? " gglab-handle-focus" : ""}`}
                 />
             ))}
             {data.outputPorts.map((portId, index) => (
@@ -68,7 +92,7 @@ export function ShaderNode(props: NodeProps<ShaderNodeT>) {
                     type="source"
                     position={Position.Right}
                     style={handleStyle("output", index)}
-                    className={data.focusedPorts.includes(portId) ? "gglab-handle-focus" : undefined}
+                    className={`gglab-handle-kind-${data.outputPortKinds[index] ?? "generic"}${data.focusedPorts.includes(portId) ? " gglab-handle-focus" : ""}`}
                 />
             ))}
         </div>
@@ -95,10 +119,8 @@ export interface FlowViewportProps {
  * nodes follow it, and they also follow the mouse: React Flow's position
  * changes are consumed here in real time (no teleport on release), while
  * the document is only written once, on drag stop, as session state.
- *
  * Transient state (positions mid-drag, selection) never leaves this
- * component; a new projection (document edit, load, focus change) replaces
- * it.
+ * component; a new projection replaces it.
  */
 export function useSyncedFlowNodes(sourceNodes: readonly ShaderFlowNode[]) {
     const [nodes, setNodes, onNodesChange] = useNodesState<ShaderNodeT>([...sourceNodes]);
@@ -106,11 +128,32 @@ export function useSyncedFlowNodes(sourceNodes: readonly ShaderFlowNode[]) {
     useEffect(() => {
         if (syncedFrom.current !== sourceNodes) {
             syncedFrom.current = sourceNodes;
-            // Re-commit the projection to the transient state.
             setNodes([...sourceNodes]);
         }
     }, [sourceNodes, setNodes]);
     return { nodes, onNodesChange };
+}
+
+function minimapNodeColor(node: Node): string {
+    const nodeType = typeof node.data?.nodeType === "string" ? node.data.nodeType : "";
+    const definition = getNodeDefinition(nodeType);
+    if (definition !== undefined) {
+        switch (definition.category) {
+            case "constant":
+                return "#d9a85f";
+            case "parameter":
+                return "#cf8a6a";
+            case "math":
+                return "#6fbfa8";
+            case "input":
+                return "#7fa7d9";
+            case "texture":
+                return "#a58fd9";
+            case "output":
+                return "#d98fa5";
+        }
+    }
+    return "#67748a";
 }
 
 export function FlowViewport(props: FlowViewportProps) {
@@ -124,6 +167,9 @@ export function FlowViewport(props: FlowViewportProps) {
                 edges={[...props.edges]}
                 nodeTypes={nodeTypes}
                 fitView
+                defaultEdgeOptions={{ style: { strokeWidth: 2 } }}
+                minZoom={0.2}
+                maxZoom={2.5}
                 onConnect={(connection: Connection) => {
                     const sourceHandle = connection.sourceHandle;
                     const targetHandle = connection.targetHandle;
@@ -146,7 +192,11 @@ export function FlowViewport(props: FlowViewportProps) {
                     }
                 }}
                 selectionOnDrag={false}
-            />
+            >
+                <Background variant={BackgroundVariant.Dots} gap={26} size={1.4} color="#28313f" />
+                <Controls showInteractive={false} position="bottom-right" />
+                <MiniMap pannable zoomable nodeColor={minimapNodeColor} maskColor="rgba(15,19,25,0.78)" position="bottom-right" className="gglab-minimap" />
+            </ReactFlow>
         </div>
     );
 }

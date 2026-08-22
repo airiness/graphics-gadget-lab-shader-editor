@@ -7,11 +7,11 @@
  * only as the canvas projection (flow-viewport), never as the model or the
  * semantics.
  */
-export { documentToFlow, authoredPosition, portTop, handleStyle, FLOW_NODE_TYPE, FLOW_LAYOUT } from "./flow/flow-adapter.js";
-export type { ShaderNodeData, ShaderFlowNode, CanvasFocus } from "./flow/flow-adapter.js";
+export { documentToFlow, authoredPosition, portTop, handleStyle, portKind, FLOW_NODE_TYPE, FLOW_LAYOUT } from "./flow/flow-adapter.js";
+export type { ShaderNodeData, ShaderFlowNode, CanvasFocus, PortKind } from "./flow/flow-adapter.js";
 export { FlowViewport, ShaderNode, ReactFlowProvider, useSyncedFlowNodes } from "./flow/flow-viewport.js";
 export type { ConnectionRequest, FlowViewportProps } from "./flow/flow-viewport.js";
-export { NodePalette, nodeCatalogGroups, parameterChoices } from "./palette/node-palette.js";
+export { NodePalette, nodeCatalogGroups, parameterChoices, libraryMatchesQuery } from "./palette/node-palette.js";
 export type { NodePaletteProps, ParameterChoice } from "./palette/node-palette.js";
 export { DiagnosticsPanel } from "./panels/diagnostics-panel.js";
 export type { DiagnosticsPanelProps } from "./panels/diagnostics-panel.js";

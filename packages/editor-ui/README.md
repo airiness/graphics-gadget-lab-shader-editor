@@ -16,6 +16,16 @@ This package never redefines graph semantics.
 Rules this slice implements (mirrored in `apps/editor`'s composition
 root):
 
+- **Visual foundation** — the `ShaderNode` design language renders the
+  port as the visual unit (labeled row, own handle, data-category dot;
+  category rail from the core's node categories). Data-category and
+  node-category colors are presentation mappings over core-owned
+  vocabulary — the UI owns the palette, never the words. Canvas chrome
+  (dot grid, zoom controls, minimap) is pure presentation. The library
+  search filter is a plain string over display names. Primitives
+  (button / field / chip / panel / fact) sit on shared `:root` tokens so
+  a future Tailwind/shadcn kit can theme the same facts.
+
 - **React Flow v12 (`@xyflow/react`) is a presentation/interaction
   adapter, and dragging is controlled end-to-end** — the core's
   `ShaderGraphDocument` is the persisted model; the flow projection is

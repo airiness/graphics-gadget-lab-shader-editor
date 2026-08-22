@@ -10,6 +10,30 @@ the `@gglab/shader-graph-core` semantic services.
 Never owns: graph semantics, type rules, validation, HLSL generation,
 shader compilation, or backend target policy.
 
+## Visual foundation (editor design system)
+
+- **Shell** — brand bar (profile line + contract status chips, both core
+  facts), a full-bleed canvas (the protagonist), an inspector on the right,
+  and a status bar (node/connection/parameter counts, graph verdict, HLSL
+  state + identity prefix — all core-derived, none invented).
+- **Node anatomy** — the port is the visual core: every catalog port gets
+  its own labeled row, its own handle position, and a data-category dot
+  (scalar / vector / texture). The card carries a category rail from the
+  core's node categories, plus hover / selected / diagnostic-focus states.
+  Colors are a **presentation mapping over core-owned vocabulary** (the
+  catalog's type lists and categories); the UI owns the palette, never the
+  words.
+- **Canvas chrome** — dot grid, zoom controls, and a minimap (category
+  colors) around the projection; pure presentation, adding no node, port,
+  or semantic fact.
+- **Primitives** — a shared token set (neutrals, semantics, data
+  categories, radii, shadows, type scale) and a button / field / chip /
+  panel / fact vocabulary on `:root`, referenced by class — structured so
+  a Tailwind theme can consume the same tokens when the component kit
+  grows.
+- **Library search** — a pure case-insensitive string filter over display
+  names in the palette; presentation convenience, never a semantic fact.
+
 ## Current surface (authoring loop)
 
 - **Canvas** — the document projected into React Flow v12

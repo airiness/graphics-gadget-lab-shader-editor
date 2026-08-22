@@ -21,8 +21,10 @@ import {
     addParameter,
     diagnosticFocus,
     documentToFlow,
+    libraryMatchesQuery,
     nodeCatalogGroups,
     parameterChoices,
+    portKind,
     portTop,
     readDescriptorText,
     textureSignatureSerialized,
@@ -222,12 +224,12 @@ describe("node palette", () => {
         const choices = parameterChoices(descriptor);
         // Every active class + its FULL value-type list from the descriptor
         // (including float2, which a UI-side list would omit).
-        expect(choices).toContainEqual({ class: "ScalarParameter", valueTypes: ["float"], deferred: false });
-        expect(choices).toContainEqual({ class: "VectorParameter", valueTypes: ["float2", "float3", "float4"], deferred: false });
-        expect(choices).toContainEqual({ class: "Texture2DParameter", valueTypes: ["Texture2D"], deferred: false });
+        expect(choices).toContainEqual({ class: "ScalarParameter", valueTypes: ["float"], kind: "scalar", deferred: false });
+        expect(choices).toContainEqual({ class: "VectorParameter", valueTypes: ["float2", "float3", "float4"], kind: "vector", deferred: false });
+        expect(choices).toContainEqual({ class: "Texture2DParameter", valueTypes: ["Texture2D"], kind: "texture", deferred: false });
         // Deferred classes are surfaced, never authorable.
-        expect(choices).toContainEqual({ class: "BoolParameter", valueTypes: [], deferred: true });
-        expect(choices).toContainEqual({ class: "SamplerParameter", valueTypes: [], deferred: true });
+        expect(choices).toContainEqual({ class: "BoolParameter", valueTypes: [], kind: "generic", deferred: true });
+        expect(choices).toContainEqual({ class: "SamplerParameter", valueTypes: [], kind: "generic", deferred: true });
     });
 
     it("a descriptor that admits no Texture2DParameter offers no Texture2DParameter (no drift)", () => {
@@ -282,7 +284,7 @@ function flowNodeAt(x: number, y: number): readonly ShaderFlowNode[] {
             id: "n1",
             type: "gglab",
             position: { x, y },
-            data: { label: "n1", nodeType: "Float", inputPorts: [], outputPorts: ["value"], knownToCatalog: true, focused: false, focusedPorts: [] },
+            data: { label: "n1", nodeType: "Float", inputPorts: [], outputPorts: ["value"], inputPortKinds: [], outputPortKinds: ["scalar"], nodeCategory: "constant", knownToCatalog: true, focused: false, focusedPorts: [] },
         },
     ];
 }
@@ -316,6 +318,75 @@ describe("viewport node state (controlled dragging)", () => {
         const loaded = flowNodeAt(500, 400);
         rerender(loaded);
         expect(result.current.nodes[0]?.position).toEqual({ x: 500, y: 400 });
+    });
+});
+
+// --- typed port presentation + node library filter (visual foundation) -----------
+
+describe("typed port presentation (core types → data categories)", () => {
+    it("maps the catalog's type lists to scalar / vector / texture / generic", () => {
+        expect(portKind(["float"])).toBe("scalar");
+        expect(portKind(["float2"])).toBe("vector");
+        expect(portKind(["float3", "float"])).toBe("vector");
+        expect(portKind(["float", "float2", "float3", "float4"])).toBe("vector");
+        expect(portKind(["Texture2D"])).toBe("texture");
+        expect(portKind([])).toBe("generic");
+    });
+
+    it("exposes per-port kinds and the node category on the projection (catalog facts only)", () => {
+        const document = loaded(textureV2Document());
+        const projection = documentToFlow(document);
+        const sample = projection.nodes.find((node) => node.data.nodeType === "SampleTexture2D");
+        expect(sample !== undefined).toBe(true);
+        if (sample !== undefined) {
+            expect(sample.data.nodeCategory).toBe("texture");
+            expect(sample.data.inputPortKinds).toEqual(["texture", "vector"]);
+            expect(sample.data.outputPortKinds).toEqual(["vector", "vector", "scalar", "scalar", "scalar", "scalar"]);
+        }
+        const surface = projection.nodes.find((node) => node.data.nodeType === "SurfaceOutput");
+        expect(surface !== undefined).toBe(true);
+        if (surface !== undefined) {
+            expect(surface.data.nodeCategory).toBe("output");
+            expect(surface.data.inputPortKinds).toEqual(["vector", "vector", "scalar", "scalar", "scalar"]);
+        }
+        // Edges carry their data category (from the producer port's core types).
+        expect(projection.edges.some((edge) => edge.className?.includes("gglab-edge-kind-texture"))).toBe(true);
+        expect(projection.edges.some((edge) => edge.className?.includes("gglab-edge-kind-vector"))).toBe(true);
+    });
+
+    it("renders a card with data-category dots for its ports (SurfaceOutput: vector + scalar)", () => {
+        const document = loaded(textureV2Document());
+        const projection = documentToFlow(document);
+        const surface = projection.nodes.find((node) => node.data.nodeType === "SurfaceOutput");
+        expect(surface !== undefined).toBe(true);
+        if (surface !== undefined) {
+            const html = renderToString(
+                <ReactFlowProvider>
+                    <ShaderNode {...(surface as unknown as Parameters<typeof ShaderNode>[0])} />
+                </ReactFlowProvider>,
+            );
+            expect(html).toContain("gglab-dot-vector");
+            expect(html).toContain("gglab-dot-scalar");
+            expect(html).toContain("gglab-node-cat-output");
+        }
+    });
+});
+
+describe("node library search (pure presentation filter)", () => {
+    it("filters over display names only — empty query passes everything, case-insensitive", () => {
+        expect(libraryMatchesQuery("", ["Multiply"])).toBe(true);
+        expect(libraryMatchesQuery("  mul  ", ["Multiply", "Lerp"])).toBe(true);
+        expect(libraryMatchesQuery("lerp", ["Multiply"])).toBe(false);
+    });
+
+    it("hides non-matching nodes and parameter classes (server render)", () => {
+        const descriptor = parseSurfaceProfileDescriptorFixture(canonicalV1Fixture);
+        const withLerp = renderToString(<NodePalette onAddNode={() => undefined} onAddParameter={() => undefined} descriptor={descriptor} query="lerp" />);
+        expect(withLerp).toContain("Lerp");
+        expect(withLerp).not.toContain("Multiply");
+        const withTex = renderToString(<NodePalette onAddNode={() => undefined} onAddParameter={() => undefined} descriptor={descriptor} query="tex" />);
+        expect(withTex).toContain("Texture2DParameter");
+        expect(withTex).not.toContain("VectorParameter");
     });
 });
 

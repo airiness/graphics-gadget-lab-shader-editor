@@ -1,19 +1,53 @@
-/* GGLab shader graph editor — plain CSS, no framework.
-   Node card geometry is contract with FLOW_LAYOUT in flow-adapter.ts:
-   header height 48px, port row height 26px, handle 10px, card 190px,
-   no top padding (handle offsets are measured from the card border box). */
+/* ============================================================================
+   GGLab Shader Editor — design system (tokens + primitives + node language).
+   Tailwind/shadcn-compatible by construction: every visual fact is a token
+   on :root; components reference tokens, not raw values.
+   Node card geometry is a contract with FLOW_LAYOUT in flow-adapter.ts:
+   header 56px, port row 26px, handle 10px, card width 200px, no top padding
+   (handle offsets are measured from the card border box).
+   ========================================================================= */
 
 :root {
     color-scheme: dark;
-    --gglab-bg: #10141a;
-    --gglab-panel: #171d26;
-    --gglab-border: #2b3442;
-    --gglab-text: #dce4ee;
-    --gglab-muted: #8b98a8;
-    --gglab-accent: #5aa9ff;
-    --gglab-error: #ff7a7a;
-    --gglab-warning: #ffc857;
-    --gglab-ok: #6fd39a;
+    /* neutral scale */
+    --bg: #0f1319;
+    --panel: #151b23;
+    --panel-2: #1a222d;
+    --panel-hi: #202a37;
+    --border: #2b3442;
+    --border-soft: #232d3a;
+    --border-hi: #3b4859;
+    --text: #dde5ef;
+    --muted: #93a0b1;
+    --faint: #66748a;
+    /* semantics */
+    --accent: #5aa9ff;
+    --accent-soft: rgba(90, 169, 255, 0.14);
+    --ok: #6fd39a;
+    --warn: #e8b45a;
+    --error: #ff7a7a;
+    /* data categories (port handles, dots, edge strokes) — a presentation
+       mapping over the core catalog's type vocabulary */
+    --kind-scalar: #d9a85f;
+    --kind-vector: #6fbfa8;
+    --kind-texture: #a58fd9;
+    --kind-generic: #7c8b9e;
+    /* node categories (card rail) — a presentation mapping over the core's
+       node categories */
+    --cat-constant: #d9a85f;
+    --cat-parameter: #cf8a6a;
+    --cat-math: #6fbfa8;
+    --cat-input: #7fa7d9;
+    --cat-texture: #a58fd9;
+    --cat-output: #d98fa5;
+    --cat-unknown: #7c8b9e;
+    /* structure */
+    --r-1: 4px;
+    --r-2: 8px;
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45), 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+    --font-ui: "Segoe UI", "Inter", system-ui, sans-serif;
+    --font-mono: "Cascadia Code", "JetBrains Mono", ui-monospace, Consolas, monospace;
 }
 
 * {
@@ -28,160 +62,550 @@ body,
 }
 
 body {
-    background: var(--gglab-bg);
-    color: var(--gglab-text);
-    font-family: "Segoe UI", system-ui, sans-serif;
-    font-size: 14px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
 }
+
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 6px;
+    border: 2px solid var(--panel);
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+/* ---- shell ----------------------------------------------------------------
+   The canvas is the protagonist: a full-bleed center with grid + chrome,
+   flanked by a compact library and an inspector; the brand bar and the
+   status bar bookend it. */
 
 .gglab-app {
     display: grid;
-    grid-template-columns: 260px 1fr 360px;
+    grid-template-rows: 46px minmax(0, 1fr) 30px;
     height: 100%;
+}
+
+.gglab-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border-soft);
+}
+
+.gglab-header-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.gglab-brand {
+    font-size: 13px;
+    font-weight: 650;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+}
+
+.gglab-brand-sub {
+    color: var(--faint);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.gglab-body {
+    display: grid;
+    grid-template-columns: 252px minmax(0, 1fr) 336px;
+    min-height: 0;
 }
 
 .gglab-side {
     overflow-y: auto;
-    background: var(--gglab-panel);
-    border-color: var(--gglab-border);
+    background: var(--panel);
+    border-color: var(--border-soft);
     padding: 12px;
-}
-
-.gglab-side-left {
-    border-right: 1px solid var(--gglab-border);
-}
-
-.gglab-side-right {
-    border-left: 1px solid var(--gglab-border);
 }
 
 .gglab-canvas {
     position: relative;
     min-width: 0;
+    min-height: 0;
 }
 
-.gglab-viewport {
-    position: absolute;
-    inset: 0;
+.gglab-side-left {
+    border-right: 1px solid var(--border-soft);
 }
 
-h2 {
-    font-size: 13px;
+.gglab-side-right {
+    border-left: 1px solid var(--border-soft);
+}
+
+.gglab-statusbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0 16px;
+    background: var(--panel);
+    border-top: 1px solid var(--border-soft);
+    color: var(--muted);
+    font-size: 11.5px;
+}
+
+.gglab-status-group {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.gglab-status-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.gglab-status-item.mono,
+.gglab-statusbar .mono {
+    font-family: var(--font-mono);
+}
+
+/* ---- primitives -----------------------------------------------------------
+   Button / Field / Chip / Panel / Fact — the shared language. */
+
+.gglab-btn {
+    appearance: none;
+    background: var(--panel-hi);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: var(--r-1);
+    padding: 6px 12px;
+    font: 600 12.5px var(--font-ui);
+    cursor: pointer;
+    transition:
+        background-color 0.12s ease,
+        border-color 0.12s ease;
+}
+
+.gglab-btn:hover {
+    border-color: var(--border-hi);
+    background: #243043;
+}
+
+.gglab-btn:active {
+    transform: translateY(1px);
+}
+
+.gglab-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.gglab-btn-primary {
+    background: var(--accent);
+    border-color: #6fb4ff;
+    color: #0b1220;
+}
+
+.gglab-btn-primary:hover {
+    background: #74b8ff;
+    border-color: #74b8ff;
+}
+
+.gglab-btn-ghost {
+    background: transparent;
+    border-color: transparent;
+    color: var(--muted);
+}
+
+.gglab-btn-ghost:hover {
+    color: var(--text);
+    border-color: var(--border-hi);
+    background: var(--panel-hi);
+}
+
+button.gglab-btn {
+    align-self: auto;
+}
+
+.gglab-field {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    color: var(--text);
+    border-radius: var(--r-1);
+    padding: 7px 10px;
+    font: 13px var(--font-ui);
+}
+
+.gglab-field::placeholder {
+    color: var(--faint);
+}
+
+.gglab-field:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.gglab-field-mono {
+    font: 12px var(--font-mono);
+    line-height: 1.55;
+    resize: vertical;
+    tab-size: 4;
+}
+
+.gglab-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 10px;
+    border: 1px solid var(--border-soft);
+    border-radius: 999px;
+    background: var(--panel-2);
+    color: var(--muted);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.gglab-chip-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--faint);
+}
+
+.gglab-chip-ok {
+    color: var(--ok);
+}
+
+.gglab-chip-ok .gglab-chip-dot {
+    background: var(--ok);
+}
+
+.gglab-chip-warn {
+    color: var(--warn);
+}
+
+.gglab-chip-warn .gglab-chip-dot {
+    background: var(--warn);
+}
+
+.gglab-chip-error {
+    color: var(--error);
+}
+
+.gglab-chip-error .gglab-chip-dot {
+    background: var(--error);
+}
+
+.gglab-chip-mono {
+    font-family: var(--font-mono);
+    letter-spacing: 0;
+}
+
+.gglab-panel {
+    background: var(--panel-2);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-2);
+    padding: 12px;
+    margin: 0 0 12px;
+    box-shadow: var(--shadow-1);
+}
+
+.gglab-panel-title {
+    margin: 0 0 8px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--gglab-muted);
-    margin: 16px 0 8px;
+    color: var(--muted);
 }
 
-h2:first-child {
-    margin-top: 0;
+.gglab-panel-hint {
+    margin: 0 0 10px;
+    color: var(--faint);
+    font-size: 11.5px;
+    line-height: 1.5;
 }
 
-/* palette */
+.gglab-panel-status {
+    margin: 8px 0 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--muted);
+}
+
+.gglab-panel-status-warn {
+    color: var(--warn);
+}
+
+.gglab-panel-code {
+    font-family: var(--font-mono);
+    font-weight: 700;
+}
+
+.gglab-facts {
+    display: block;
+    margin: 10px 0 0;
+}
+
+.gglab-fact {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border-soft);
+    font-size: 12px;
+}
+
+.gglab-fact:last-child {
+    border-bottom: none;
+}
+
+.gglab-fact dt {
+    color: var(--faint);
+    font-size: 11px;
+}
+
+.gglab-fact dd {
+    margin: 0;
+    color: var(--text);
+}
+
+.gglab-visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    clip: rect(0 0 0 0);
+    overflow: hidden;
+}
+
+/* ---- node library (left side) -------------------------------------------- */
+
+.gglab-library-search {
+    margin: 0 0 12px;
+}
+
+.gglab-library-section {
+    padding: 10px 0 4px;
+    border-top: 1px solid var(--border-soft);
+}
+
+.gglab-library-section:first-of-type {
+    border-top: none;
+    padding-top: 0;
+}
+
+.gglab-palette h2 {
+    margin: 0 0 8px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.gglab-palette-hint {
+    margin: 0 0 8px;
+    color: var(--faint);
+    font-size: 11.5px;
+    line-height: 1.5;
+}
+
 .gglab-palette-entry {
     display: flex;
+    align-items: center;
     justify-content: space-between;
+    gap: 8px;
     width: 100%;
-    padding: 6px 8px;
-    margin: 2px 0;
+    padding: 5px 8px;
+    margin: 1px 0;
     background: transparent;
-    color: var(--gglab-text);
+    color: var(--text);
     border: 1px solid transparent;
-    border-radius: 4px;
+    border-radius: var(--r-1);
     cursor: pointer;
-    font: inherit;
+    font: 12.5px var(--font-ui);
     text-align: left;
 }
 
 .gglab-palette-entry:hover {
-    border-color: var(--gglab-accent);
-    background: rgba(90, 169, 255, 0.08);
+    border-color: var(--border-hi);
+    background: var(--panel-2);
+}
+
+.gglab-palette-entry:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
 }
 
 .gglab-palette-name {
     white-space: nowrap;
 }
 
-.gglab-palette-hint {
-    font-size: 12px;
-    color: var(--gglab-muted);
+.gglab-palette-tag {
+    font: 10px var(--font-mono);
+    color: var(--faint);
+    white-space: nowrap;
 }
 
 .gglab-parameter-choice {
-    border-left: 2px solid var(--gglab-border);
-    margin: 4px 0 4px 4px;
-    padding-left: 8px;
+    border-left: 2px solid var(--border);
+    margin: 4px 0 4px 6px;
+    padding-left: 10px;
+}
+
+.gglab-parameter-deferred {
+    border-left-color: var(--faint);
+    opacity: 0.85;
 }
 
 .gglab-palette-value {
-    padding: 3px 6px;
-    font-size: 12px;
+    padding: 3px 8px;
+    font: 12px var(--font-ui);
 }
 
 .gglab-palette-deferred {
-    color: var(--gglab-warning);
-    font-size: 11px;
+    color: var(--warn);
+    font-size: 10.5px;
     text-transform: lowercase;
 }
 
 .gglab-palette-deferred-note {
     display: block;
     font-size: 11px;
-    color: var(--gglab-muted);
+    color: var(--faint);
+    margin: 2px 0 4px;
 }
 
-.gglab-notes p {
-    font-size: 13px;
-}
+/* ---- node language (canvas cards) -----------------------------------------
+   The port is the visual core: labeled row + own handle + data-category
+   dot; the category rail identifies the node family at a glance. */
 
-/* canvas node card — geometry is contract with FLOW_LAYOUT */
 .gglab-node {
     position: relative;
-    width: 190px;
+    width: 200px;
     padding: 0;
-    background: var(--gglab-panel);
-    border: 1px solid var(--gglab-border);
-    border-radius: 6px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    box-shadow: var(--shadow-1);
 }
 
-.gglab-node-unknown {
-    border-color: var(--gglab-warning);
+/* category rail — the color itself is defined on the category class */
+.gglab-node::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 10px;
+    bottom: 10px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--cat, var(--cat-unknown));
 }
 
+.gglab-node-cat-constant {
+    --cat: var(--cat-constant);
+}
+.gglab-node-cat-parameter {
+    --cat: var(--cat-parameter);
+}
+.gglab-node-cat-math {
+    --cat: var(--cat-math);
+}
+.gglab-node-cat-input {
+    --cat: var(--cat-input);
+}
+.gglab-node-cat-texture {
+    --cat: var(--cat-texture);
+}
+.gglab-node-cat-output {
+    --cat: var(--cat-output);
+}
+.gglab-node-cat-unknown {
+    --cat: var(--cat-unknown);
+}
+
+.gglab-node:hover,
+.react-flow__node:hover .gglab-node {
+    border-color: var(--border-hi);
+    box-shadow: var(--shadow-2);
+}
+
+.react-flow__node.selected .gglab-node,
 .gglab-node-focus {
-    border-color: var(--gglab-accent);
-    box-shadow: 0 0 0 2px rgba(90, 169, 255, 0.35);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow-2);
+}
+
+.gglab-node-unknown .gglab-node-category {
+    color: var(--warn);
 }
 
 .gglab-node-header {
     display: flex;
     flex-direction: column;
-    gap: 1px;
-    height: 48px;
-    padding: 8px 10px 0;
+    gap: 2px;
+    height: 56px;
+    padding: 9px 12px 0 15px;
     overflow: hidden;
 }
 
 .gglab-node-title {
-    font-weight: 600;
-    font-size: 13px;
+    font-weight: 650;
+    font-size: 13.5px;
+    letter-spacing: 0.01em;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
+.gglab-node-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
 .gglab-node-type {
-    color: var(--gglab-muted);
-    font-size: 11px;
+    color: var(--faint);
+    font: 10.5px var(--font-mono);
+}
+
+.gglab-node-category {
+    color: var(--muted);
+    font-size: 10px;
+    text-transform: lowercase;
+    background: var(--panel-hi);
+    padding: 1px 6px;
+    border-radius: 3px;
 }
 
 .gglab-node-flag {
-    color: var(--gglab-warning);
-    font-size: 10px;
+    color: var(--warn);
+    font-size: 10.5px;
 }
 
 .gglab-node-rows {
-    padding: 0 10px 8px;
+    padding: 0 12px 10px 15px;
 }
 
 .gglab-port-row {
@@ -192,42 +616,186 @@ h2:first-child {
 }
 
 .gglab-port {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
     font-size: 12px;
-    color: var(--gglab-muted);
+    color: var(--muted);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    padding: 0 4px;
+    padding: 0 2px;
 }
 
 .gglab-port-out {
-    text-align: right;
+    justify-content: flex-end;
 }
 
 .gglab-port-focus {
-    color: var(--gglab-text);
-    font-weight: 700;
+    color: var(--text);
+    font-weight: 650;
+}
+
+/* data-category dots (port labels) — colors from the tokens above */
+.gglab-dot {
+    width: 7px;
+    height: 7px;
+    min-width: 7px;
+    border-radius: 50%;
+    background: var(--kind-generic);
+}
+
+.gglab-dot-scalar {
+    background: var(--kind-scalar);
+}
+
+.gglab-dot-vector {
+    background: var(--kind-vector);
+}
+
+.gglab-dot-texture {
+    background: var(--kind-texture);
+}
+
+.gglab-dot-generic {
+    background: var(--kind-generic);
+}
+
+/* handles: base geometry inline (FLOW_LAYOUT), color by data category */
+.react-flow__handle {
+    background: var(--kind-generic);
+}
+
+.react-flow__handle.gglab-handle-kind-scalar {
+    background: var(--kind-scalar);
+}
+
+.react-flow__handle.gglab-handle-kind-vector {
+    background: var(--kind-vector);
+}
+
+.react-flow__handle.gglab-handle-kind-texture {
+    background: var(--kind-texture);
+}
+
+.react-flow__handle.gglab-handle-kind-generic {
+    background: var(--kind-generic);
 }
 
 .react-flow__handle.gglab-handle-focus {
-    background: var(--gglab-accent) !important;
-    transform: scale(1.5);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* edges: stroke by data category (a muted mix so the graph stays calm);
+   the base stroke is the fallback for older engines without color-mix. */
+.react-flow__edge .react-flow__edge-path {
+    stroke: #56637a;
+    stroke-width: 2;
+}
+
+.react-flow__edge.gglab-edge-kind-scalar .react-flow__edge-path {
+    stroke: var(--kind-scalar);
+    stroke: color-mix(in srgb, var(--kind-scalar) 70%, #3a4658);
+}
+
+.react-flow__edge.gglab-edge-kind-vector .react-flow__edge-path {
+    stroke: var(--kind-vector);
+    stroke: color-mix(in srgb, var(--kind-vector) 70%, #3a4658);
+}
+
+.react-flow__edge.gglab-edge-kind-texture .react-flow__edge-path {
+    stroke: var(--kind-texture);
+    stroke: color-mix(in srgb, var(--kind-texture) 70%, #3a4658);
+}
+
+.react-flow__edge.gglab-edge-kind-generic .react-flow__edge-path {
+    stroke: #56637a;
 }
 
 .react-flow__edge.gglab-edge-focus .react-flow__edge-path {
-    stroke: var(--gglab-accent);
+    stroke: var(--accent) !important;
     stroke-width: 3;
 }
 
-/* diagnostics */
+/* ---- canvas chrome ---------------------------------------------------------- */
+
+.gglab-viewport {
+    position: absolute;
+    inset: 0;
+    background: var(--bg);
+}
+
+.react-flow {
+    background: transparent;
+}
+
+.react-flow__minimap {
+    background: var(--panel) !important;
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-1);
+    overflow: hidden;
+}
+
+.gglab-minimap {
+    margin: 12px;
+}
+
+.react-flow__controls {
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-1);
+    overflow: hidden;
+    box-shadow: var(--shadow-1);
+    margin: 12px 0 12px 228px;
+}
+
+.react-flow__controls-button {
+    width: 28px;
+    height: 28px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--border-soft);
+}
+
+.react-flow__controls-button:last-child {
+    border-bottom: none;
+}
+
+.react-flow__controls-button svg {
+    fill: var(--muted);
+    max-width: 12px;
+    max-height: 12px;
+}
+
+.react-flow__controls-button:hover:not(:disabled) {
+    background: var(--panel-hi);
+}
+
+/* ---- diagnostics ------------------------------------------------------------ */
+
 .gglab-diagnostics {
-    border-top: 1px solid var(--gglab-border);
-    padding-top: 8px;
-    margin-top: 8px;
+    border-top: none;
+    padding: 0;
+    margin: 0 0 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-2);
+    padding: 12px;
+    box-shadow: var(--shadow-1);
+}
+
+.gglab-diagnostics h2 {
+    margin: 0 0 8px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted);
 }
 
 .gglab-diagnostics-passed {
-    color: var(--gglab-ok);
+    color: var(--ok);
+    margin: 4px 0;
+    font-size: 12px;
 }
 
 .gglab-diagnostics-item {
@@ -237,14 +805,20 @@ h2:first-child {
     background: transparent;
     color: inherit;
     border: 1px solid transparent;
-    border-radius: 4px;
+    border-radius: var(--r-1);
     padding: 6px;
     margin: 2px 0;
     font: inherit;
 }
 
 button.gglab-diagnostics-item:hover {
-    border-color: var(--gglab-accent);
+    border-color: var(--border-hi);
+    background: var(--panel-hi);
+}
+
+button.gglab-diagnostics-item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
 }
 
 .gglab-diagnostics-head {
@@ -252,100 +826,94 @@ button.gglab-diagnostics-item:hover {
     flex-wrap: wrap;
     gap: 6px;
     align-items: baseline;
-    font-size: 12px;
+    font-size: 11.5px;
 }
 
 .gglab-diagnostics-code {
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono);
     font-weight: 700;
 }
 
-.gglab-diagnostics-severity-error .gglab-diagnostics-code,
-button.gglab-diagnostics-severity-error .gglab-diagnostics-code {
-    color: var(--gglab-error);
+.gglab-diagnostics-severity-error .gglab-diagnostics-code {
+    color: var(--error);
 }
 
-.gglab-diagnostics-severity-warning .gglab-diagnostics-code,
-button.gglab-diagnostics-severity-warning .gglab-diagnostics-code {
-    color: var(--gglab-warning);
+.gglab-diagnostics-severity-warning .gglab-diagnostics-code {
+    color: var(--warn);
 }
 
 .gglab-diagnostics-message {
     display: block;
     margin: 2px 0;
+    line-height: 1.45;
 }
 
 .gglab-diagnostics-path {
-    color: var(--gglab-muted);
-    font-family: ui-monospace, monospace;
+    color: var(--faint);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+}
+
+/* ---- notes / document io / emission ----------------------------------------- */
+
+.gglab-notes {
+    background: var(--panel-2);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-2);
+    padding: 12px;
+    margin: 0 0 12px;
+}
+
+.gglab-notes h2 {
+    margin: 0 0 8px;
     font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--warn);
 }
 
-.gglab-descriptor-hint,
-.gglab-descriptor-status {
-    font-size: 13px;
-}
-
-.gglab-descriptor-rejected {
-    color: var(--gglab-error);
-}
-
-/* document io + emission */
-.gglab-document-text {
-    width: 100%;
-    resize: vertical;
-    background: var(--gglab-bg);
-    color: var(--gglab-text);
-    border: 1px solid var(--gglab-border);
-    border-radius: 4px;
-    font-family: ui-monospace, monospace;
+.gglab-notes p {
     font-size: 12px;
-    padding: 8px;
+    line-height: 1.5;
+    margin: 4px 0;
 }
 
-.gglab-document-buttons,
-.gglab-emission {
+.gglab-document-io .gglab-doc-actions {
     display: flex;
-    flex-direction: column;
-    gap: 6px;
+    gap: 8px;
+    margin-top: 10px;
 }
 
-button {
-    background: var(--gglab-accent);
-    color: #0b1220;
-    border: none;
-    border-radius: 4px;
-    padding: 7px 10px;
-    font: inherit;
-    font-weight: 600;
-    cursor: pointer;
-    align-self: flex-start;
-}
-
-button:hover {
-    filter: brightness(1.1);
+.gglab-emission-block .gglab-emission-actions {
+    margin-bottom: 10px;
 }
 
 .gglab-emission-identity code {
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    word-break: break-all;
 }
 
 .gglab-emission-source {
-    margin: 0;
-    padding: 10px;
-    background: var(--gglab-bg);
-    border: 1px solid var(--gglab-border);
-    border-radius: 4px;
+    margin: 8px 0 0;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-1);
     overflow-x: auto;
-    font-family: ui-monospace, monospace;
-    font-size: 12px;
+    font: 11.5px/1.6 var(--font-mono);
+    color: var(--text);
     white-space: pre;
 }
 
 .gglab-emission-problem.gglab-emission-severity-error {
-    color: var(--gglab-error);
+    color: var(--error);
+    font-size: 12px;
 }
 
 .gglab-emission-problem.gglab-emission-severity-warning {
-    color: var(--gglab-warning);
+    color: var(--warn);
+    font-size: 12px;
 }
