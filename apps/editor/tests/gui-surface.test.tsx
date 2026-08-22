@@ -20,8 +20,11 @@ import {
     addNode,
     addParameter,
     autoLayout,
+    decodeAuthoringDrop,
     diagnosticFocus,
     documentToFlow,
+    DescriptorPanel,
+    encodeAuthoringDrop,
     FLOW_GEOMETRY,
     flowGeometryCssVars,
     handleTop,
@@ -40,6 +43,8 @@ import {
     ReactFlowProvider,
     ShaderNode,
     useSyncedFlowNodes,
+    withNodePosition,
+    type AuthoringDropPayload,
     type ShaderFlowNode,
 } from "@gglab/editor-ui";
 import {
@@ -52,6 +57,7 @@ import {
     validateShaderGraph,
     type GraphConnection,
     type ShaderGraphDiagnostic,
+    type ShaderGraphDocument,
     type SurfaceProfileDescriptor,
 } from "@gglab/shader-graph-core";
 
@@ -362,7 +368,7 @@ describe("typed port presentation (core types → data categories)", () => {
         expect(projection.edges.some((edge) => edge.className?.includes("gglab-edge-kind-vector"))).toBe(true);
     });
 
-    it("renders a card with data-category dots for its ports (SurfaceOutput: vector + scalar)", () => {
+    it("renders the Handle as the port's sole socket glyph — type-colored, and no second dot in the card", () => {
         const document = loaded(textureV2Document());
         const projection = documentToFlow(document);
         const surface = projection.nodes.find((node) => node.data.nodeType === "SurfaceOutput");
@@ -373,9 +379,12 @@ describe("typed port presentation (core types → data categories)", () => {
                     <ShaderNode {...(surface as unknown as Parameters<typeof ShaderNode>[0])} />
                 </ReactFlowProvider>,
             );
-            expect(html).toContain("gglab-dot-vector");
-            expect(html).toContain("gglab-dot-scalar");
+            // The socket glyph is the Handle, carrying the data-category color.
+            expect(html).toContain("gglab-handle-kind-vector");
+            expect(html).toContain("gglab-handle-kind-scalar");
             expect(html).toContain("gglab-node-cat-output");
+            // Port labels are plain text now — one visual dot per port, not two.
+            expect(html).not.toContain("gglab-dot-");
         }
     });
 });
@@ -820,5 +829,175 @@ describe("node library collapse (UI session state)", () => {
             expandButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
         });
         expect(expanded).toBe(true);
+    });
+
+    it("collapse-all / expand-all, and an active search keeps matched sections visible", async () => {
+        const descriptor = parseSurfaceProfileDescriptorFixture(canonicalV1Fixture);
+        const { container, rerender } = render(
+            <NodePalette onAddNode={() => {}} onAddParameter={() => {}} descriptor={descriptor} query="" />,
+        );
+        const sections = (): HTMLElement[] =>
+            Array.from(container.querySelectorAll('[data-slot="collapsible-section"]')) as HTMLElement[];
+        expect(sections().length).toBeGreaterThan(1);
+
+        // Collapse all → every section closed.
+        const collapseAll = within(container).getByRole("button", { name: /collapse all/i });
+        await act(async () => {
+            collapseAll.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+        for (const section of sections()) {
+            expect(section.getAttribute("data-state")).toBe("closed");
+        }
+
+        // An active search must force the matched section open…
+        rerender(<NodePalette onAddNode={() => {}} onAddParameter={() => {}} descriptor={descriptor} query="mul" />);
+        const matched = sections().filter((section) => (section.textContent ?? "").includes("Multiply"));
+        expect(matched.length).toBeGreaterThan(0);
+        for (const section of matched) {
+            expect(section.getAttribute("data-state")).toBe("open");
+        }
+
+        // …and the user's previous choice is restored when the search clears.
+        rerender(<NodePalette onAddNode={() => {}} onAddParameter={() => {}} descriptor={descriptor} query="" />);
+        for (const section of matched) {
+            expect(section.getAttribute("data-state")).toBe("closed");
+        }
+
+        // Expand all → everything open again.
+        const expandAll = within(container).getByRole("button", { name: /expand all/i });
+        await act(async () => {
+            expandAll.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+        for (const section of sections()) {
+            expect(section.getAttribute("data-state")).toBe("open");
+        }
+    });
+});
+
+// --- palette → canvas drag and drop (authoring intent + coordinate) ---------
+
+describe("palette → canvas drag and drop", () => {
+    it("drag payload round-trips and rejects anything that is not a known payload", () => {
+        const node: AuthoringDropPayload = { kind: "node", nodeType: "Float3" };
+        expect(decodeAuthoringDrop(encodeAuthoringDrop(node))).toEqual(node);
+        const parameter: AuthoringDropPayload = { kind: "parameter", parameterClass: "ScalarParameter", valueType: "float" };
+        expect(decodeAuthoringDrop(encodeAuthoringDrop(parameter))).toEqual(parameter);
+        expect(decodeAuthoringDrop("")).toBeNull();
+        expect(decodeAuthoringDrop("not json")).toBeNull();
+        expect(decodeAuthoringDrop(JSON.stringify({ kind: "node" }))).toBeNull();
+        expect(decodeAuthoringDrop(JSON.stringify({ kind: "alien", nodeType: "X" }))).toBeNull();
+    });
+
+    it("marks node and parameter entries as drag sources (click-to-add remains)", () => {
+        const descriptor = parseSurfaceProfileDescriptorFixture(canonicalV1Fixture);
+        const html = renderToString(<NodePalette onAddNode={() => {}} onAddParameter={() => {}} descriptor={descriptor} />);
+        // Node entries are draggable HTML5 DnD sources…
+        expect(html).toContain("gglab-palette-draggable");
+        expect(html).toMatch(/draggable/);
+        // …and the usage hint tells the user both interactions.
+        expect(html).toContain("Drag an entry onto the canvas");
+    });
+
+    it("a node drop seeds the initial position in editorMetadata (atomic, core-judged)", () => {
+        const base = loaded(validV1Document());
+        // Seed pre-existing editor-state metadata on an unrelated node…
+        const seeded = withNodePosition(base, "n.r", { x: 5, y: 5 });
+        const withMeta: ShaderGraphDocument = {
+            ...seeded,
+            editorMetadata: {
+                ...seeded.editorMetadata,
+                nodes: { ...seeded.editorMetadata.nodes, "n.r": { ...(seeded.editorMetadata.nodes["n.r"] as object), unknownFields: { gizmo: 42 } } },
+            },
+        };
+        const result = addNode(withMeta, "Float", { position: { x: 123, y: 45 } });
+        expect(result.applied).toBe(true);
+        expect(result.document.nodes).toHaveLength(base.nodes.length + 1);
+        expect(result.createdId).toBeDefined();
+        if (result.createdId !== undefined) {
+            expect(result.document.editorMetadata.nodes[result.createdId]?.position).toEqual({ x: 123, y: 45 });
+        }
+        // …and a drop must not disturb metadata it does not own.
+        expect(result.document.editorMetadata.nodes["n.r"]?.unknownFields).toEqual({ gizmo: 42 });
+    });
+
+    it("a parameter drop goes through the atomic addParameter authority, with position in the same operation", () => {
+        const base = loaded(validV1Document());
+        const result = addParameter(
+            base,
+            { name: "New Parameter", class: "ScalarParameter", valueType: "float" },
+            { position: { x: 77, y: 88 } },
+        );
+        expect(result.applied).toBe(true);
+        expect(result.document.parameters).toHaveLength(base.parameters.length + 1);
+        expect(result.document.nodes).toHaveLength(base.nodes.length + 1);
+        if (result.createdId !== undefined) {
+            expect(result.document.editorMetadata.nodes[result.createdId]?.position).toEqual({ x: 77, y: 88 });
+        }
+    });
+
+    it("an uncreatable parameter class is refused atomically (unchanged input, no position side-effect)", () => {
+        const base = loaded(validV1Document());
+        const result = addParameter(
+            base,
+            { name: "New Parameter", class: "GhostParameter", valueType: "float" },
+            { position: { x: 1, y: 2 } },
+        );
+        expect(result.applied).toBe(false);
+        expect(result.document).toBe(base);
+        expect(result.createdId).toBeUndefined();
+    });
+});
+
+// --- position patch preserves editor metadata (regression) ------------------
+
+describe("position patching preserves existing editor metadata", () => {
+    it("patching a position only touches position — unknownFields survive (drag + auto layout)", () => {
+        const base = loaded(validV1Document());
+        let seeded = withNodePosition(base, "n.r", { x: 1, y: 1 });
+        // Simulate newer presentation metadata already present on the node…
+        seeded = {
+            ...seeded,
+            editorMetadata: {
+                ...seeded.editorMetadata,
+                nodes: {
+                    ...seeded.editorMetadata.nodes,
+                    "n.r": { ...(seeded.editorMetadata.nodes["n.r"] as object), unknownFields: { gizmo: 42, nested: { a: 1 } } },
+                },
+            },
+        };
+        // …a drag-placement patch keeps it…
+        const patched = withNodePosition(seeded, "n.r", { x: 9, y: 9 });
+        expect(patched.editorMetadata.nodes["n.r"]?.position).toEqual({ x: 9, y: 9 });
+        expect(patched.editorMetadata.nodes["n.r"]?.unknownFields).toEqual({ gizmo: 42, nested: { a: 1 } });
+        expect(patched.nodes).toEqual(seeded.nodes);
+
+        // …and a full auto-layout pass (through the same helper) keeps it too.
+        const layout = autoLayout(seeded);
+        let laidOut = seeded;
+        for (const [id, position] of Object.entries(layout.positions)) {
+            laidOut = withNodePosition(laidOut, id, position);
+        }
+        expect(laidOut.editorMetadata.nodes["n.r"]?.unknownFields).toEqual({ gizmo: 42, nested: { a: 1 } });
+
+        // …with emission (bytes + identity) still unchanged.
+        const descriptor = parseSurfaceProfileDescriptorFixture(canonicalV1Fixture);
+        expect(emitHlsl(laidOut, descriptor).sourceMap?.generatedSourceIdentity).toBe(
+            emitHlsl(base, descriptor).sourceMap?.generatedSourceIdentity,
+        );
+    });
+});
+
+// --- action affordance (chrome kit) -----------------------------------------
+
+describe("action affordance (chrome kit)", () => {
+    it("the descriptor panel's Open file is a solid primary action with an icon", () => {
+        const html = renderToString(<DescriptorPanel state={{ kind: "empty" }} onStateChange={() => {}} />);
+        const button = html.match(/<button[^>]*>[\s\S]*?Open descriptor file/);
+        expect(button).not.toBeNull();
+        const tag = button !== null && button[0] !== undefined ? button[0].slice(0, button[0].indexOf(">") + 1) : "";
+        expect(tag).toContain("bg-primary");
+        expect(tag).toContain("active:translate-y-px");
+        // Icon glyph is present in the action.
+        expect(html).toContain("<svg");
     });
 });

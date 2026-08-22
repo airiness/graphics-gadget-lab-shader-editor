@@ -56,12 +56,31 @@ root):
   unknown endpoints for layout, and is deterministic. The composition root
   writes the result as session state and the core keeps judging the
   document — emission and identity never move with placement.
+- **One position-patch helper** — every placement write (drag stop, auto
+  layout, drop authoring) goes through `withNodePosition`, which patches
+  the node's `position` ONLY and preserves its existing `NodeEditorState`
+  (`unknownFields`, future presentation metadata). Placement can never drop
+  metadata it does not own (a regression test locks this, including
+  through a full layout pass with pre-existing unknown metadata).
+- **Palette → canvas DnD is intent + coordinate, never semantics** — the
+  palette shapes a transient drag payload (node type, or the descriptor's
+  `(class, valueType)` choice) from core/catalog/descriptor facts; the flow
+  viewport contributes only the screen→flow coordinate
+  (`instance.screenToFlowPosition`) and a shape-guarded decode
+  (`decodeAuthoringDrop`); the creation is the same core-judged authoring
+  operation as a click — `addNode(…, { position })` or the atomic
+  `addParameter(…, { position })` (parameter entry + node + initial
+  placement in one operation; a refusal returns the unchanged input whole).
 - **Chrome kit, node language stays dedicated** — the editor chrome
   (buttons, status badges, inputs, collapsible sections, separators) uses
   a small shadcn-style kit (`components/ui/`) themed from the app's design
   tokens; `ShaderNode`, the port rows, and the canvas geometry stay the
   dedicated node design language, not the generic kit. The palette's
-  section/whole-library collapse and rail mode are UI session state.
+  collapse is UI session state: per-section, `Collapse all` / `Expand
+  all` (keys derived from the palette's own section structure — no
+  separate registry), or the whole-library rail; while a search query is
+  live, matched sections are forced visible and the previous choice is
+  restored when it clears.
 - **One authority per rule** — node version and creation-time property
   values come from the core's `createNode` (the GUI owns no defaults; a
   future CLI asks the same service); the parameter authoring vocabulary

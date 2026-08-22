@@ -12,6 +12,7 @@
  */
 import { useRef } from "react";
 import { parseSurfaceProfileDescriptor, type SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
+import { FileIcon } from "../components/icons.js";
 import { Button } from "../components/ui/button.js";
 
 export type DescriptorPanelState =
@@ -57,7 +58,10 @@ export function DescriptorPanel(props: DescriptorPanelProps) {
             <p className="gglab-panel-hint">
                 The profile contract is consumed as a serialized data document (parsed by the core's strict reader), never a C++ ABI or header import.
             </p>
-            <Button variant="outline" className="self-start" onClick={() => fileInputRef.current?.click()}>
+            {/* Primary action of the profile panel: solid affordance, icon,
+                hover/pressed/focus states from the chrome kit. */}
+            <Button variant="primary" className="self-start" onClick={() => fileInputRef.current?.click()}>
+                <FileIcon />
                 Open descriptor file…
             </Button>
             <input

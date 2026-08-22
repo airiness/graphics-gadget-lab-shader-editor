@@ -13,9 +13,36 @@ shader compilation, or backend target policy.
 ## Editor structure and canvas chrome
 
 - **Collapsible node library** — every library section collapses/expands
-  through its header, and the whole sidebar collapses to a rail (expand
-  intent). All of it is UI session state in the composition root and the
-  palette: it never enters `ShaderGraphDocument`.
+  through its header, `Collapse all` / `Expand all` drive the whole
+  library, and the whole sidebar collapses to a rail (expand intent).
+  Section keys come from the palette's own structure (the parameters
+  section + the catalog's category groups) — no separate registry. While a
+  search query is live, matched sections are forced visible and the user's
+  previous choice is restored when the query clears. All of it is UI
+  session state in the composition root and the palette: it never enters
+  `ShaderGraphDocument`.
+- **Authoring by drag or click** — a palette entry (node, or descriptor
+  parameter choice) can be **dragged onto the canvas**: the palette shapes
+  the transient drag payload from core/catalog/descriptor facts, React Flow
+  contributes only the screen→flow coordinate
+  (`instance.screenToFlowPosition`), and the same core-judged authoring
+  operation as a click creates the entry — `addNode(…, { position })` or
+  the atomic `addParameter(…, { position })` (parameter entry + node +
+  initial placement in ONE operation, refused atomically on a rejection).
+  Click-to-add remains the alternative.
+- **Actions read as actions** — canvas `Auto layout` and profile-panel
+  `Open descriptor file…` are chrome-kit buttons (icon + solid/outline
+  layering, hover/pressed/focus states), not plain text; the primary
+  action is the theme's primary color.
+- **One port, one socket glyph** — the React Flow Handle on the card edge
+  is the port's sole socket glyph (data-category color + focus state); the
+  port label is plain text on the same row center line
+  (`FLOW_GEOMETRY`) — no second dot to misalign.
+- **Placement patches only position** — drag placement, auto layout, and
+  drop authoring all write `editorMetadata.nodes[*].position` through one
+  shared position-patch helper, preserving the node's existing
+  `NodeEditorState` (`unknownFields`, future presentation metadata); the
+  unknown-metadata regression is locked by tests.
 - **Canvas overlay layout** — zoom controls top-right, minimap
   bottom-right, dot grid behind the graph: fixed corners, no overlap. The
   xyflow attribution is hidden through its official `proOptions`

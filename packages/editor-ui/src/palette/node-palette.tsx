@@ -18,11 +18,12 @@
  * performs the document operation (atomically) and the core's services
  * judge the result.
  */
-import { useState, type ReactNode } from "react";
+import { useState, type DragEvent, type ReactNode } from "react";
 import { NODE_DEFINITIONS, type GraphType, type NodeCategory, type SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
+import { Button } from "../components/ui/button.js";
 import { CollapsibleContent, CollapsibleSection } from "../components/ui/collapsible.js";
 import { portKind, type PortKind } from "../flow/flow-adapter.js";
-import type { ParameterRequest } from "../session/authoring-operations.js";
+import { AUTHORING_DROP_MIME, encodeAuthoringDrop, type AuthoringDropPayload, type ParameterRequest } from "../session/authoring-operations.js";
 
 const CATEGORY_ORDER: readonly NodeCategory[] = ["parameter", "constant", "math", "input", "texture", "output"];
 
@@ -135,13 +136,19 @@ export interface NodePaletteProps {
 interface SectionProps {
     readonly title: string;
     readonly collapsed: boolean;
+    readonly forceOpen: boolean;
     readonly onToggle: () => void;
     readonly children: ReactNode;
 }
 
-/** One collapsible library section (collapse state = UI session state). */
+/**
+ * One collapsible library section (collapse state = UI session state).
+ * `forceOpen` (active search) overrides the user's collapse choice: a
+ * matched section must be visible while the query is live, and the user's
+ * previous choice is restored when the query clears.
+ */
 function LibrarySection(props: SectionProps) {
-    const open = !props.collapsed;
+    const open = props.forceOpen || !props.collapsed;
     return (
         <CollapsibleSection open={open} onOpenChange={() => props.onToggle()}>
             <button type="button" className="gglab-section-head" aria-expanded={open} onClick={props.onToggle}>
@@ -178,6 +185,22 @@ export function NodePalette(props: NodePaletteProps) {
         definitions: group.definitions.filter((definition) => libraryMatchesQuery(query, [definition.displayName, definition.type])),
     }));
     const choices = parameterChoices(props.descriptor).filter((choice) => libraryMatchesQuery(query, [choice.class, ...choice.valueTypes]));
+    const searching = query.trim() !== "";
+    // Section keys come from the palette's own structure (the "parameters"
+    // section + the catalog's category groups) — no separate registry.
+    const sectionKeys = ["parameters", ...groups.map((group) => group.category)];
+    const setAll = (collapsedValue: boolean): void => {
+        const next: Record<string, boolean> = {};
+        for (const key of sectionKeys) {
+            next[key] = collapsedValue;
+        }
+        setCollapsed(next);
+    };
+
+    const startDrag = (payload: AuthoringDropPayload) => (event: DragEvent<HTMLButtonElement>): void => {
+        event.dataTransfer.setData(AUTHORING_DROP_MIME, encodeAuthoringDrop(payload));
+        event.dataTransfer.effectAllowed = "copy";
+    };
 
     return (
         <nav className="gglab-palette" aria-label="Node library">
@@ -196,8 +219,19 @@ export function NodePalette(props: NodePaletteProps) {
                         </button>
                     )}
                 </h2>
+                <div className="gglab-library-bulk">
+                    <Button variant="ghost" size="sm" onClick={() => setAll(true)}>
+                        Collapse all
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => setAll(false)}>
+                        Expand all
+                    </Button>
+                </div>
             </div>
-            <LibrarySection title="Parameters" collapsed={collapsed["parameters"] ?? false} onToggle={() => toggle("parameters")}>
+            <p className="gglab-palette-hint gglab-palette-usage">
+                Drag an entry onto the canvas to place it, or click to add at a free slot.
+            </p>
+            <LibrarySection title="Parameters" collapsed={collapsed["parameters"] ?? false} forceOpen={searching} onToggle={() => toggle("parameters")}>
                 {props.descriptor === null && (
                     <p className="gglab-palette-hint">
                         Load a profile descriptor to author parameters — the profile vocabulary (parameter classes and value types) is
@@ -218,9 +252,11 @@ export function NodePalette(props: NodePaletteProps) {
                                 <button
                                     key={valueType}
                                     type="button"
-                                    className="gglab-palette-entry gglab-palette-value"
+                                    className="gglab-palette-entry gglab-palette-value gglab-palette-draggable"
+                                    draggable
+                                    onDragStart={startDrag({ kind: "parameter", parameterClass: choice.class, valueType })}
                                     onClick={() => props.onAddParameter({ name: "New Parameter", class: choice.class, valueType: valueType as GraphType })}
-                                    title={`Add a ${choice.class} (valueType ${valueType})`}
+                                    title={`Drag to the canvas, or click — add a ${choice.class} (valueType ${valueType})`}
                                 >
                                     <span aria-hidden className={`gglab-dot gglab-dot-${kind(valueType)}`} />
                                     <span className="gglab-palette-name">{valueType}</span>
@@ -235,6 +271,7 @@ export function NodePalette(props: NodePaletteProps) {
                     key={group.category}
                     title={group.category}
                     collapsed={collapsed[group.category] ?? false}
+                    forceOpen={searching}
                     onToggle={() => toggle(group.category)}
                 >
                     {group.definitions.length === 0 && <p className="gglab-palette-hint">No nodes match "{query}".</p>}
@@ -242,9 +279,11 @@ export function NodePalette(props: NodePaletteProps) {
                         <button
                             key={definition.type}
                             type="button"
-                            className="gglab-palette-entry"
+                            className="gglab-palette-entry gglab-palette-draggable"
+                            draggable
+                            onDragStart={startDrag({ kind: "node", nodeType: definition.type })}
                             onClick={() => props.onAddNode(definition.type)}
-                            title={definition.description}
+                            title={`Drag to the canvas, or click — ${definition.description}`}
                         >
                             <span className="gglab-palette-name">{definition.displayName}</span>
                             <span className="gglab-palette-tag">{definition.type}</span>

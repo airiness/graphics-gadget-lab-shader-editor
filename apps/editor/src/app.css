@@ -569,6 +569,25 @@ button.gglab-btn {
     text-transform: uppercase;
 }
 
+/* Bulk section controls (collapse all / expand all). */
+.gglab-library-bulk {
+    display: flex;
+    gap: 2px;
+}
+
+.gglab-palette-usage {
+    margin: 0 0 10px;
+}
+
+/* Palette entries are drag-and-drop sources (HTML5 DnD). */
+.gglab-palette-draggable {
+    cursor: grab;
+}
+
+.gglab-palette-draggable:active {
+    cursor: grabbing;
+}
+
 .gglab-palette-hint {
     margin: 0 0 8px;
     color: var(--faint);

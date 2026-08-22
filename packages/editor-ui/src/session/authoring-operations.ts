@@ -22,6 +22,54 @@ import type {
     ShaderGraphDocument,
 } from "@gglab/shader-graph-core";
 import { createNode, getNodeDefinition } from "@gglab/shader-graph-core";
+import { withNodePosition } from "./node-position.js";
+
+/**
+ * The transient palette → canvas drag payload (UI state only; serialized
+ * for the HTML5 dataTransfer). React Flow supplies the drop coordinate;
+ * the core's authoring operations decide whether the creation holds.
+ */
+export type AuthoringDropPayload =
+    | { readonly kind: "node"; readonly nodeType: string }
+    | { readonly kind: "parameter"; readonly parameterClass: string; readonly valueType: string };
+
+/** MIME type for the authoring drag payload (presentation-owned vocabulary). */
+export const AUTHORING_DROP_MIME = "application/x-gglab-authoring";
+
+export function encodeAuthoringDrop(payload: AuthoringDropPayload): string {
+    return JSON.stringify(payload);
+}
+
+/** Decode + shape-guard a drag payload; anything that is not one of the two
+ * known payloads is `null` (never a silent reinterpretation). */
+export function decodeAuthoringDrop(raw: string): AuthoringDropPayload | null {
+    if (raw === "") {
+        return null;
+    }
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(raw);
+    } catch {
+        return null;
+    }
+    if (typeof parsed !== "object" || parsed === null) {
+        return null;
+    }
+    const candidate = parsed as Record<string, unknown>;
+    if (candidate.kind === "node" && typeof candidate.nodeType === "string" && candidate.nodeType !== "") {
+        return { kind: "node", nodeType: candidate.nodeType };
+    }
+    if (
+        candidate.kind === "parameter" &&
+        typeof candidate.parameterClass === "string" &&
+        candidate.parameterClass !== "" &&
+        typeof candidate.valueType === "string" &&
+        candidate.valueType !== ""
+    ) {
+        return { kind: "parameter", parameterClass: candidate.parameterClass, valueType: candidate.valueType };
+    }
+    return null;
+}
 
 export interface AuthoringRefusal {
     readonly reason: string;
@@ -94,12 +142,10 @@ export function addNode(
         unknownFields: {},
     };
     const nodes = [...document.nodes, node];
-    const editorMetadata =
-        options.position !== undefined
-            ? { ...document.editorMetadata, nodes: { ...document.editorMetadata.nodes, [node.id]: { position: options.position, unknownFields: {} } } }
-            : document.editorMetadata;
+    const placed =
+        options.position !== undefined ? withNodePosition(document, node.id, options.position) : document;
     return {
-        document: { ...document, nodes, editorMetadata },
+        document: { ...placed, nodes },
         applied: true,
         refusal: undefined,
         createdId: node.id,
@@ -168,8 +214,17 @@ export interface ParameterRequest {
  * The (class, valueType) pairing is not judged here either — it is supplied
  * by the caller from the descriptor's own vocabulary, and the core's
  * conformance service checks it against the loaded descriptor.
+ *
+ * `options.position` (optional) seeds the new parameter node's initial
+ * placement in the SAME atomic operation (palette/canvas drop coordinate) —
+ * still session state, still refused-together with everything else on a
+ * rejection (the unchanged input is returned whole).
  */
-export function addParameter(document: ShaderGraphDocument, request: ParameterRequest): AuthoringResult {
+export function addParameter(
+    document: ShaderGraphDocument,
+    request: ParameterRequest,
+    options: { position?: { x: number; y: number } } = {},
+): AuthoringResult {
     const nodeType = nodeTypeForParameterClass(request.class);
     const creation = createNode(nodeType);
     if (creation.ok === false) {
@@ -195,8 +250,10 @@ export function addParameter(document: ShaderGraphDocument, request: ParameterRe
         },
         unknownFields: {},
     };
+    const withEntries = { ...document, parameters: [...document.parameters, parameter], nodes: [...document.nodes, node] };
+    const placed = options.position !== undefined ? withNodePosition(withEntries, node.id, options.position) : withEntries;
     return {
-        document: { ...document, parameters: [...document.parameters, parameter], nodes: [...document.nodes, node] },
+        document: placed,
         applied: true,
         refusal: undefined,
         createdId: node.id,

@@ -32,8 +32,18 @@ export { DiagnosticsPanel } from "./panels/diagnostics-panel.js";
 export type { DiagnosticsPanelProps } from "./panels/diagnostics-panel.js";
 export { DescriptorPanel, readDescriptorText, textureSignatureSerialized } from "./panels/descriptor-panel.js";
 export type { DescriptorPanelState, DescriptorPanelProps } from "./panels/descriptor-panel.js";
-export { addNode, removeNode, addConnection, addParameter } from "./session/authoring-operations.js";
-export type { AuthoringResult, AuthoringRefusal, ParameterRequest } from "./session/authoring-operations.js";
+export {
+    addNode,
+    removeNode,
+    addConnection,
+    addParameter,
+    AUTHORING_DROP_MIME,
+    encodeAuthoringDrop,
+    decodeAuthoringDrop,
+} from "./session/authoring-operations.js";
+export type { AuthoringResult, AuthoringRefusal, ParameterRequest, AuthoringDropPayload } from "./session/authoring-operations.js";
+export { withNodePosition } from "./session/node-position.js";
+export { LayoutIcon, FileIcon } from "./components/icons.js";
 export { diagnosticFocus } from "./session/diagnostic-focus.js";
 export { autoLayout } from "./session/auto-layout.js";
 export type { AutoLayoutResult } from "./session/auto-layout.js";

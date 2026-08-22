@@ -3,16 +3,19 @@
  * adapter plus the `ShaderNode` design language.
  *
  * ShaderNode: the port is the visual core. Every catalog port renders on
- * its own labeled row at its own handle position; a data-category dot
- * (scalar / vector / texture — the core catalog's own types, mapped to
- * colors) and a category rail (the core's node categories) give the card
- * structure a node editor reads at a glance, without the UI owning any
- * vocabulary. Unknown node types keep their explicit warning state.
+ * its own labeled row, and the React Flow Handle on the card edge is the
+ * port's SOLE socket glyph, carrying the data-category color (scalar /
+ * vector / texture — the core catalog's own types, mapped to colors) and
+ * the focus state. The category rail (the core's node categories) gives
+ * the card structure a node editor reads at a glance, without the UI
+ * owning any vocabulary. Unknown node types keep their explicit warning
+ * state. Port labels share the row center line with their Handle
+ * (`FLOW_GEOMETRY` — one geometry, no second dot to misalign).
  *
  * Canvas chrome (grid, controls, minimap) is pure presentation: it never
  * adds a node, port, or semantic fact.
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type DragEvent } from "react";
 import {
     Background,
     BackgroundVariant,
@@ -31,6 +34,7 @@ import { getNodeDefinition } from "@gglab/shader-graph-core";
 import "@xyflow/react/dist/style.css";
 import type { ShaderFlowNode, ShaderNodeData } from "./flow-adapter.js";
 import { FLOW_NODE_TYPE, flowGeometryCssVars, handleStyle } from "./flow-adapter.js";
+import { AUTHORING_DROP_MIME, decodeAuthoringDrop, type AuthoringDropPayload } from "../session/authoring-operations.js";
 
 export { ReactFlowProvider };
 
@@ -62,15 +66,16 @@ export function ShaderNode(props: NodeProps<ShaderNodeT>) {
                 {data.knownToCatalog === false && <div className="gglab-node-flag">unknown to the node catalog — preserved, not replaced</div>}
             </div>
             <div className="gglab-node-rows">
-                {rows.map((row, rowIndex) => (
+                {/* The Handle on the card edge is the port's only socket
+                    glyph (type/category color + focus state). The labels
+                    share the same row center line — no second dot. */}
+                {rows.map((row) => (
                     <div className="gglab-port-row" key={row.key}>
                         <span className={`gglab-port gglab-port-in${data.focusedPorts.includes(row.inputId ?? "") ? " gglab-port-focus" : ""}`}>
-                            {row.inputId !== undefined && <span className={`gglab-dot gglab-dot-${data.inputPortKinds[rowIndex] ?? "generic"}`} aria-hidden />}
                             {row.inputId ?? ""}
                         </span>
                         <span className={`gglab-port gglab-port-out${data.focusedPorts.includes(row.outputId ?? "") ? " gglab-port-focus" : ""}`}>
                             {row.outputId ?? ""}
-                            {row.outputId !== undefined && <span className={`gglab-dot gglab-dot-${data.outputPortKinds[rowIndex] ?? "generic"}`} aria-hidden />}
                         </span>
                     </div>
                 ))}
@@ -117,6 +122,14 @@ export interface FlowViewportProps {
      * "load" (session convenience, no semantics).
      */
     readonly onFlowReady?: (fitView: () => void) => void;
+    /**
+     * A palette → canvas drop (authoring intent at a coordinate).
+     * React Flow contributes the screen→flow coordinate
+     * (`instance.screenToFlowPosition`) and nothing else: the payload was
+     * shaped by the palette from core/catalog/descriptor facts, and the
+     * creation itself is the core-judged authoring operation.
+     */
+    readonly onDropRequest?: (payload: AuthoringDropPayload, position: { x: number; y: number }) => void;
 }
 
 /**
@@ -165,6 +178,37 @@ function minimapNodeColor(node: Node): string {
 export function FlowViewport(props: FlowViewportProps) {
     const nodeTypes = { [FLOW_NODE_TYPE]: ShaderNode };
     const { nodes, onNodesChange } = useSyncedFlowNodes(props.nodes);
+    // The flow instance (for screen→flow coordinate conversion on drop).
+    const flowInstanceRef = useRef<import("@xyflow/react").ReactFlowInstance<ShaderNodeT> | null>(null);
+
+    const handleDragOver = (event: DragEvent<HTMLDivElement>): void => {
+        // Only accept when an authoring payload is being dragged.
+        if (event.dataTransfer.types.includes(AUTHORING_DROP_MIME) === false) {
+            return;
+        }
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+    };
+
+    const handleDrop = (event: DragEvent<HTMLDivElement>): void => {
+        const raw = event.dataTransfer.getData(AUTHORING_DROP_MIME);
+        if (raw === "") {
+            return;
+        }
+        event.preventDefault();
+        const payload = decodeAuthoringDrop(raw);
+        if (payload === null) {
+            return;
+        }
+        const instance = flowInstanceRef.current;
+        // React Flow owns the coordinate system: screen point → flow point.
+        const point =
+            instance === null || instance.screenToFlowPosition === undefined
+                ? { x: 0, y: 0 }
+                : instance.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+        props.onDropRequest?.(payload, { x: Math.round(point.x), y: Math.round(point.y) });
+    };
+
     return (
         // The geometry custom properties come from the single geometry
         // source (flow-geometry.ts), so the CSS references the same numbers
@@ -173,11 +217,16 @@ export function FlowViewport(props: FlowViewportProps) {
             <ReactFlow<ShaderNodeT>
                 nodes={nodes}
                 onNodesChange={onNodesChange}
+                onDragOver={handleDragOver}
+                onDrop={handleDrop}
                 edges={[...props.edges]}
                 nodeTypes={nodeTypes}
                 fitView
                 proOptions={{ hideAttribution: true }}
-                onInit={(instance) => props.onFlowReady?.(() => instance.fitView({ duration: 160 }))}
+                onInit={(instance) => {
+                    flowInstanceRef.current = instance;
+                    props.onFlowReady?.(() => instance.fitView({ duration: 160 }));
+                }}
                 defaultEdgeOptions={{ style: { strokeWidth: 2 } }}
                 minZoom={0.2}
                 maxZoom={2.5}

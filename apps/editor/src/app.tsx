@@ -22,12 +22,15 @@ import {
     documentToFlow,
     FlowViewport,
     Input,
+    LayoutIcon,
     NodePalette,
+    type AuthoringDropPayload,
     type AuthoringResult,
     type CanvasFocus,
     type ConnectionRequest,
     type DescriptorPanelState,
     type ParameterRequest,
+    withNodePosition,
 } from "@gglab/editor-ui";
 import {
     checkProfileConformance,
@@ -36,6 +39,7 @@ import {
     parseShaderGraphDocument,
     resolveGraphTypes,
     validateShaderGraph,
+    type GraphType,
     type HlslEmission,
     type ShaderGraphDocument,
     type ShaderGraphDiagnostic,
@@ -151,30 +155,48 @@ export function App() {
         applyAuthoring(addConnection(document, request.from, request.to));
     };
     const onNodePlaced = (nodeId: string, position: { x: number; y: number }): void => {
-        // Session state (canvas layout): recorded, never a semantic change.
-        setDocument((previous) => ({
-            ...previous,
-            editorMetadata: { ...previous.editorMetadata, nodes: { ...previous.editorMetadata.nodes, [nodeId]: { position, unknownFields: {} } } },
-        }));
+        // Session state (canvas layout): the shared position-patch helper
+        // updates ONLY the position, preserving the node's existing
+        // editor-state metadata (unknownFields, future presentation fields).
+        setDocument((previous) => withNodePosition(previous, nodeId, position));
     };
 
     const onAutoLayout = (): void => {
         // Session convenience: compute positions for the WHOLE graph and
-        // write them into editorMetadata (session state). The core services
-        // are re-asked as usual; placement never changes emitted HLSL.
+        // patch them into editorMetadata (session state) one node at a time
+        // through the shared helper — never dropping metadata it doesn't
+        // own. The core services are re-asked as usual; placement never
+        // changes emitted HLSL.
         setDocument((previous) => {
             const layout = autoLayout(previous);
             if (layout.nodeCount === 0) {
                 return previous;
             }
-            const nodes = { ...previous.editorMetadata.nodes };
+            let placed = previous;
             for (const [id, position] of Object.entries(layout.positions)) {
-                nodes[id] = { position, unknownFields: {} };
+                placed = withNodePosition(placed, id, position);
             }
-            return { ...previous, editorMetadata: { ...previous.editorMetadata, nodes } };
+            return placed;
         });
         // Fit once the projection has picked up the new positions.
         requestAnimationFrame(() => fitRef.current?.());
+    };
+
+    const onDropRequest = (payload: AuthoringDropPayload, position: { x: number; y: number }): void => {
+        // Palette → canvas drop: the coordinate came from the flow adapter
+        // (screen → flow), the creation is the same core-judged authoring
+        // operation as a click, only seeded with the drop position.
+        if (payload.kind === "node") {
+            applyAuthoring(addNode(document, payload.nodeType, { position }));
+            return;
+        }
+        applyAuthoring(
+            addParameter(
+                document,
+                { name: "New Parameter", class: payload.parameterClass, valueType: payload.valueType as GraphType },
+                { position },
+            ),
+        );
     };
 
     const onSave = (): void => {
@@ -259,7 +281,8 @@ export function App() {
                 </aside>
                 <main className="gglab-canvas">
                     <div className="gglab-canvas-actions">
-                        <Button variant="outline" size="sm" onClick={onAutoLayout}>
+                        <Button variant="outline" size="sm" onClick={onAutoLayout} title="Lay the whole graph out (positions are session state)">
+                            <LayoutIcon />
                             Auto layout
                         </Button>
                     </div>
@@ -268,6 +291,7 @@ export function App() {
                         edges={flow.edges}
                         onConnectRequest={onConnectRequest}
                         onNodePlaced={onNodePlaced}
+                        onDropRequest={onDropRequest}
                         onFlowReady={(fitView) => {
                             fitRef.current = fitView;
                         }}
