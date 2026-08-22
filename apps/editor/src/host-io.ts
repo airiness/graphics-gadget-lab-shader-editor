@@ -4,20 +4,23 @@
  *
  * The layer contract (kept one-directional, and mirrored in the Rust
  * shell):
- *   Tauri / native layer — only a file path + UTF-8 bytes. It has no
- *     knowledge of shader graphs, node types, profile versions, or
- *     retained fields.
- *   shader-graph-core    — parses and serializes documents (the
- *     .shadergraph disk format authority) and profile descriptors.
- *   this app            — owns document/session state and decides which
- *     text hands to the host.
+ *   native layer (official Tauri plugins only, no custom commands)
+ *                — dialog plugins choose a path (and, on a user pick,
+ *                  add that path to the filesystem scope); the fs plugin
+ *                  serves scoped UTF-8 bytes. Arbitrary-path access does
+ *                  not exist in the host;
+ *   shader-graph-core — parses and serializes documents (the
+ *     .shadergraph disk format authority) and profile descriptors;
+ *   this app        — owns document/session state and decides which
+ *     text moves where.
  *
- * The channel is pure: the host's `invoke` and the dialog calls are
- * INJECTED, so the module has no Tauri import of its own (the web build
- * never downloads the desktop code, and tests drive it with fakes).
+ * The channel is pure: the host's official API functions (open / save /
+ * readTextFile / writeTextFile) are INJECTED, so the module has no Tauri
+ * import of its own — the web build never downloads the desktop code,
+ * and tests drive it with fakes.
  */
 
-/** Detect the stable Tauri 2 marker on a window-like object. */
+/** Detect the stable Tauri marker on a window-like object. */
 export function isDesktopHost(host: unknown): boolean {
     if (typeof host !== "object" || host === null) {
         return false;
@@ -25,17 +28,27 @@ export function isDesktopHost(host: unknown): boolean {
     return "__TAURI_INTERNALS__" in (host as Record<string, unknown>);
 }
 
-/** The Tauri core bridge: invoke a command by name with its args. */
-export type HostInvoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
-/** Tauri `open` dialog; `null` is a user cancel. */
-export type HostOpenDialog = (options?: Record<string, unknown>) => Promise<string | string[] | null>;
-/** Tauri `save` dialog; `null` is a user cancel. */
-export type HostSaveDialog = (options?: Record<string, unknown>) => Promise<string | null>;
+/** File dialog options as produced by the channel; `multiple`/`directory`
+ * are always false (single file picks only). */
+export type FileDialogOptions = Record<string, unknown>;
+/** Official `open` shape; `null` is a user cancel. */
+export type HostOpenDialog = (options?: FileDialogOptions) => Promise<string | string[] | null>;
+/** Official `save` shape; `null` is a user cancel. */
+export type HostSaveDialog = (options?: FileDialogOptions) => Promise<string | null>;
+/**
+ * Official `readTextFile`. Declared as `Promise<unknown>` on purpose:
+ * this boundary verifies the payload at runtime instead of casting it —
+ * an IPC result is whatever the other side sent.
+ */
+export type HostReadTextFile = (path: string) => Promise<unknown>;
+/** Official `writeTextFile`: scoped UTF-8 write. */
+export type HostWriteTextFile = (path: string, contents: string) => Promise<void>;
 
 export interface DesktopHost {
-    readonly invoke: HostInvoke;
     readonly openDialog: HostOpenDialog;
     readonly saveDialog: HostSaveDialog;
+    readonly readTextFile: HostReadTextFile;
+    readonly writeTextFile: HostWriteTextFile;
 }
 
 /**
@@ -51,9 +64,9 @@ export interface FileChannel {
     /** Save dialog → destination path (the host appends nothing; the name
      * is what the user chose). */
     pickSavePath(defaultName: string): Promise<string | null>;
-    /** Read UTF-8 text at a path. */
+    /** Read scoped UTF-8 text at a user-selected path. */
     readText(path: string): Promise<string>;
-    /** Write UTF-8 text at a path. */
+    /** Write scoped UTF-8 text to a user-selected path. */
     writeText(path: string, contents: string): Promise<void>;
 }
 
@@ -85,11 +98,14 @@ export function createDesktopFileChannel(host: DesktopHost): FileChannel {
             });
         },
         async readText(path) {
-            const text = await host.invoke("read_text_file", { path });
-            return text as string;
+            const text = await host.readTextFile(path);
+            if (typeof text !== "string") {
+                throw new Error(`Host returned an unexpected payload for ${path} — expected UTF-8 text; refusing to reinterpret it.`);
+            }
+            return text;
         },
         async writeText(path, contents) {
-            await host.invoke("write_text_file", { path, contents });
+            await host.writeTextFile(path, contents);
         },
     };
 }

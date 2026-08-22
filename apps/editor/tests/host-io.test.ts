@@ -2,15 +2,19 @@
  * Desktop slice 1 — native document I/O regression (host/file abstraction).
  *
  * The layer contract under test:
- *   host (Tauri)   — only a path + UTF-8 bytes; it does not know what a
- *                    shader graph, a profile, or a retained field is;
- *   core           — parses and serializes (the .shadergraph disk format);
- *   editor (app)   — document + session state; chooses which text moves.
+ *   native layer (official Tauri plugins only, NO custom commands)
+ *                — dialogs choose a path (and add THAT path to the
+ *                  filesystem scope); the fs plugin serves scoped
+ *                  UTF-8 bytes. It does not know what a shader graph,
+ *                  a profile, or a retained field is;
+ *   core         — parses and serializes (the .shadergraph disk format);
+ *   editor (app) — document + session state; chooses which text moves.
  *
  * The `FileChannel` is the app's seam over the host. It is pure: the
- * Tauri `invoke` and the dialog calls are injected, so these tests drive
- * it with fakes (no Tauri runtime needed) and assert the exact IPC names,
- * argument shapes, and cancellation/error semantics of the contract.
+ * host's official API functions (open / save / readTextFile /
+ * writeTextFile) are injected, so these tests drive it with fakes (no
+ * Tauri runtime needed) and assert argument shapes, the runtime type
+ * boundary on reads, and cancellation/error semantics.
  */
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -18,29 +22,25 @@ import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createDesktopFileChannel, isDesktopHost, type DesktopHost } from "../src/host-io.js";
 
-/// The host contract as a fake: invoke + both dialogs, recording EVERY
-/// call (record first, then delegate to the override — or the fake
-/// default — so the call log is complete either way).
-function fakeHost(overrides: Partial<Pick<DesktopHost, "invoke" | "openDialog" | "saveDialog">> = {}): {
+const FAKE_DOCUMENT_TEXT = '{"schemaVersion":1,"graphId":"g","profile":"gglab.surface","profileVersion":1,"parameters":[],"nodes":[],"connections":[],"editorMetadata":{"nodes":{}}}';
+
+/// The host contract as a fake: the four official API functions,
+/// recording EVERY call (record first, then delegate to the override —
+/// or the fake default — so the call log is complete either way).
+function fakeHost(
+    overrides: Partial<Pick<DesktopHost, "openDialog" | "saveDialog" | "readTextFile" | "writeTextFile">> = {},
+): {
     host: DesktopHost;
-    invokes: Array<{ command: string; args?: Record<string, unknown> }>;
     opens: Array<Record<string, unknown>>;
     saves: Array<Record<string, unknown>>;
+    reads: string[];
+    writes: Array<{ path: string; contents: string }>;
 } {
-    const invokes: Array<{ command: string; args?: Record<string, unknown> }> = [];
     const opens: Array<Record<string, unknown>> = [];
     const saves: Array<Record<string, unknown>> = [];
+    const reads: string[] = [];
+    const writes: Array<{ path: string; contents: string }> = [];
     const host: DesktopHost = {
-        invoke: (command, args) => {
-            invokes.push({ command, args });
-            if (overrides.invoke !== undefined) {
-                return Promise.resolve(overrides.invoke(command, args));
-            }
-            if (command === "read_text_file") {
-                return Promise.resolve('{"schemaVersion":1,"graphId":"g","profile":"gglab.surface","profileVersion":1,"parameters":[],"nodes":[],"connections":[],"editorMetadata":{"nodes":{}}}');
-            }
-            return Promise.reject(new Error(`unexpected invoke in fake host: ${command}`));
-        },
         openDialog: (options) => {
             opens.push(options ?? {});
             if (overrides.openDialog !== undefined) {
@@ -55,8 +55,22 @@ function fakeHost(overrides: Partial<Pick<DesktopHost, "invoke" | "openDialog" |
             }
             return Promise.resolve("C:\\gglab\\renamed.shadergraph");
         },
+        readTextFile: (path) => {
+            reads.push(path);
+            if (overrides.readTextFile !== undefined) {
+                return Promise.resolve(overrides.readTextFile(path));
+            }
+            return Promise.resolve(FAKE_DOCUMENT_TEXT);
+        },
+        writeTextFile: (path, contents) => {
+            writes.push({ path, contents });
+            if (overrides.writeTextFile !== undefined) {
+                return Promise.resolve(overrides.writeTextFile(path, contents));
+            }
+            return Promise.resolve(undefined);
+        },
     };
-    return { host, invokes, opens, saves };
+    return { host, opens, saves, reads, writes };
 }
 
 describe("host/file abstraction (native document I/O)", () => {
@@ -67,28 +81,28 @@ describe("host/file abstraction (native document I/O)", () => {
         expect(isDesktopHost("not a window")).toBe(false);
     });
 
-    it("reads through the host's read_text_file with the exact path argument", async () => {
-        const { host, invokes } = fakeHost();
+    it("reads through the host's readTextFile with the exact path argument", async () => {
+        const { host, reads } = fakeHost();
         const channel = createDesktopFileChannel(host);
         const text = await channel.readText("C:\\docs\\graph.shadergraph");
         expect(text).toContain("schemaVersion");
-        expect(invokes).toEqual([{ command: "read_text_file", args: { path: "C:\\docs\\graph.shadergraph" } }]);
+        expect(reads).toEqual(["C:\\docs\\graph.shadergraph"]);
     });
 
-    it("writes through the host's write_text_file with path + contents", async () => {
-        const { host, invokes } = fakeHost({
-            invoke: async (command, args) => {
-                if (command === "write_text_file") {
-                    expect(args?.["contents"]).toContain("schemaVersion");
-                    return null;
-                }
-                throw new Error(`unexpected invoke in fake host: ${command}`);
-            },
+    it("refuses a non-text read payload at the boundary (no cast through)", async () => {
+        const { host } = fakeHost({
+            readTextFile: async () => ({ bytes: [1, 2, 3] }), // wrong shape from the host
         });
         const channel = createDesktopFileChannel(host);
-        await channel.writeText("C:\\docs\\out.shadergraph", '{"schemaVersion":1}');
+        await expect(channel.readText("C:\\docs\\weird.shadergraph")).rejects.toThrow(/unexpected payload for C:\\docs\\weird\.shadergraph — expected UTF-8 text/);
+    });
+
+    it("writes through the host's writeTextFile with path + contents", async () => {
+        const { host, writes } = fakeHost();
+        const channel = createDesktopFileChannel(host);
         const expectedContents = '{"schemaVersion":1}';
-        expect(invokes).toEqual([{ command: "write_text_file", args: { path: "C:\\docs\\out.shadergraph", contents: expectedContents } }]);
+        await channel.writeText("C:\\docs\\out.shadergraph", expectedContents);
+        expect(writes).toEqual([{ path: "C:\\docs\\out.shadergraph", contents: expectedContents }]);
     });
 
     it("picks document paths through the open dialog with the .shadergraph filter; cancel is null", async () => {
@@ -129,8 +143,8 @@ describe("host/file abstraction (native document I/O)", () => {
 
     it("surfaces host failures as rejections carrying the host's message", async () => {
         const { host } = fakeHost({
-            invoke: async (command) => {
-                throw new Error(`Write failed at C:\\gglab\\blocked.shadergraph: access denied (host: ${command})`);
+            writeTextFile: async () => {
+                throw new Error("Write failed at C:\\gglab\\blocked.shadergraph: access denied");
             },
         });
         const channel = createDesktopFileChannel(host);
@@ -152,7 +166,7 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         expect(windows[0]?.["title"]).toBe("GGLab Shader Graph Editor");
     });
 
-    it("exposes exactly the thin IPC surface: core defaults + dialog open/save (no semantic knowledge)", async () => {
+    it("grants exactly the scoped surface: core + dialog open/save + scoped fs text read/write", async () => {
         const caps = (JSON.parse(await readFile(resolve(tauriDir, "capabilities/default.json"), "utf8")) as Array<{
             identifier: string;
             windows: string[];
@@ -162,19 +176,37 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         if (caps === undefined) {
             return;
         }
-        expect(caps.permissions).toEqual(expect.arrayContaining(["core:default", "dialog:allow-open", "dialog:allow-save"]));
-        // Only core + dialog ACL ids — no document/semantic surface.
+        expect(caps.permissions).toEqual(
+            expect.arrayContaining(["core:default", "dialog:allow-open", "dialog:allow-save", "fs:allow-read-text-file", "fs:allow-write-text-file"]),
+        );
+        // Only official-plugin ACL ids — no custom-command, no semantic surface.
         for (const permission of caps.permissions) {
-            expect(permission.startsWith("core:") || permission.startsWith("dialog:")).toBe(true);
+            expect(permission.startsWith("core:") || permission.startsWith("dialog:") || permission.startsWith("fs:")).toBe(true);
         }
     });
 
-    it("registers the two thin host file commands and the dialog plugin", async () => {
+    it("keeps the host custom-command-free (official plugins only, no arbitrary-path commands)", async () => {
         const mainRs = await readFile(resolve(tauriDir, "src/main.rs"), "utf8");
-        expect(mainRs).toContain("read_text_file");
-        expect(mainRs).toContain("write_text_file");
         expect(mainRs).toContain("tauri_plugin_dialog");
-        expect(mainRs).toContain("fs::read_to_string");
-        expect(mainRs).toContain("fs::write");
+        expect(mainRs).toContain("tauri_plugin_fs");
+        // No hand-written IPC surface, no raw arbitrary-path fs access.
+        expect(mainRs).not.toContain("#[tauri::command]");
+        expect(mainRs).not.toContain("invoke_handler");
+        expect(mainRs).not.toContain("fs::read_to_string");
+        expect(mainRs).not.toContain("fs::write");
+    });
+
+    it("tightens the webview CSP now that the host can move real files", async () => {
+        const conf = JSON.parse(await readFile(resolve(tauriDir, "tauri.conf.json"), "utf8")) as {
+            app?: { security?: { csp?: string | null; devCsp?: string | null } };
+        };
+        const security = conf.app?.security;
+        expect(security?.csp).not.toBeNull();
+        expect(typeof security?.csp).toBe("string");
+        if (typeof security?.csp === "string") {
+            expect(security.csp).toContain("script-src 'self'");
+            expect(security.csp).toContain("connect-src");
+        }
+        expect(typeof security?.devCsp).toBe("string");
     });
 });

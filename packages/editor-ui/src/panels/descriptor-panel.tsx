@@ -73,11 +73,23 @@ export function DescriptorPanel(props: DescriptorPanelProps) {
             fileInputRef.current?.click();
             return;
         }
-        const picked = await nativeOpen();
-        if (picked === null) {
-            return; // user cancelled the native dialog
+        try {
+            const picked = await nativeOpen();
+            if (picked === null) {
+                return; // user cancelled the native dialog
+            }
+            props.onStateChange(readDescriptorText(picked.name, picked.text));
+        } catch (error) {
+            // Host IO failure (the file vanished after the dialog,
+            // access denied, ...) is an explicit rejected state carrying
+            // the host's message — never an unhandled rejection.
+            props.onStateChange({
+                kind: "rejected",
+                fileName: "host",
+                diagnosticCode: "IO",
+                diagnosticMessage: error instanceof Error ? error.message : String(error),
+            });
         }
-        props.onStateChange(readDescriptorText(picked.name, picked.text));
     };
     return (
         <section className="gglab-panel">

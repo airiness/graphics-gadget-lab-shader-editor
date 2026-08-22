@@ -47,6 +47,10 @@ import {
     type SurfaceProfileDescriptor,
 } from "@gglab/shader-graph-core";
 import { createDesktopFileChannel, isDesktopHost, type FileChannel } from "./host-io.js";
+// Type-only (erased at compile time): the official dialog option shapes,
+// used for the single documented boundary cast below. Runtime functions
+// are dynamically imported inside the desktop effect only.
+import type { OpenDialogOptions, SaveDialogOptions } from "@tauri-apps/plugin-dialog";
 import "./app.css";
 
 /** The editor's default workspace document (a valid gglab.surface v1 graph). */
@@ -116,22 +120,27 @@ export function App() {
             if (!isDesktopHost(globalThis)) {
                 return;
             }
-            // Desktop-only code path: the Tauri bindings are code-split out
-            // of the web bundle and loaded only inside the desktop webview.
-            // The native surface stays thin on purpose: the shell's file
-            // commands (read_text_file / write_text_file) move path + UTF-8
-            // bytes only, and the dialog plugin's open / save commands only
-            // choose a path. Neither side knows anything about shader
-            // graphs, profiles, or retained fields.
-            const { invoke } = await import("@tauri-apps/api/core");
+            // Desktop-only code path: the official plugin JS APIs are
+            // code-split out of the web bundle and loaded only inside the
+            // desktop webview. The native side stays thin and scoped:
+            // dialog.open / dialog.save choose a path (and the dialog
+            // plugin adds THAT path to the filesystem scope), then
+            // fs.readTextFile / fs.writeTextFile move scoped UTF-8 bytes.
+            // No arbitrary-path command exists in the host.
+            const [dialog, fs] = await Promise.all([import("@tauri-apps/plugin-dialog"), import("@tauri-apps/plugin-fs")]);
             if (cancelled) {
                 return;
             }
             setFileChannel(
                 createDesktopFileChannel({
-                    invoke,
-                    openDialog: (options) => invoke<string | string[] | null>("plugin:dialog|open", { options }),
-                    saveDialog: (options) => invoke<string | null>("plugin:dialog|save", { options }),
+                    // The host-io slots are intentionally generic
+                    // (Record<string, unknown> options); the official API
+                    // types live here, at the composition root — the single
+                    // place cast/verification is allowed.
+                    openDialog: (options) => dialog.open(options as unknown as OpenDialogOptions),
+                    saveDialog: (options) => dialog.save(options as unknown as SaveDialogOptions),
+                    readTextFile: (path) => fs.readTextFile(path),
+                    writeTextFile: (path, contents) => fs.writeTextFile(path, contents),
                 }),
             );
         })();
@@ -140,7 +149,23 @@ export function App() {
         };
     }, []);
 
-    /** Open a `.shadergraph` through the host (path → UTF-8 → core reader). */
+    /**
+     * Replace the session around a newly authoritative document (a file
+     * open or a text load): the document becomes current and every
+     * derivative of the previous one is invalidated — the diagnostic
+     * focus, the emission preview (a stale build result is never
+     * current), and the operation notes — while the saved-text pane shows
+     * the new document's canonical serialization.
+     */
+    const replaceDocumentSession = (next: ShaderGraphDocument): void => {
+        setDocument(next);
+        setFocus(null);
+        setEmission(null);
+        setOperationNotes([]);
+        setSavedText(serializeShaderGraphDocument(next));
+    };
+
+    /** Open a `.shadergraph` through the host (path → scoped UTF-8 → core reader). */
     const openDocument = async (): Promise<void> => {
         const channel = fileChannel;
         if (channel === null) {
@@ -154,9 +179,8 @@ export function App() {
             const text = await channel.readText(path);
             const parsed = parseShaderGraphDocument(text);
             if (parsed.ok && parsed.value !== null) {
-                setDocument(parsed.value);
+                replaceDocumentSession(parsed.value);
                 setDocumentPath(path);
-                setSavedText(serializeShaderGraphDocument(parsed.value));
                 setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: `Opened ${path}; the session state was restored.` });
                 requestAnimationFrame(() => fitRef.current?.());
                 return;
@@ -326,7 +350,7 @@ export function App() {
     const onLoad = (): void => {
         const parsed = parseShaderGraphDocument(savedText);
         if (parsed.ok && parsed.value !== null) {
-            setDocument(parsed.value);
+            replaceDocumentSession(parsed.value);
             setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: "The saved document loaded; the session state was restored." });
             requestAnimationFrame(() => fitRef.current?.());
             return;

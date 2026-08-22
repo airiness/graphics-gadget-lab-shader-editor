@@ -1181,4 +1181,27 @@ describe("descriptor panel: host file-open injection (desktop)", () => {
         expect(states[0]).toMatchObject({ kind: "rejected" });
         unmount();
     });
+
+    it("a host IO failure (file vanished after the dialog) is an explicit rejected state, not an unhandled rejection", async () => {
+        const states: DescriptorPanelState[] = [];
+        const { unmount } = render(
+            <DescriptorPanel
+                state={{ kind: "empty" }}
+                onStateChange={(state) => states.push(state)}
+                openDescriptorFile={async () => {
+                    throw new Error("Access to the scoped file is denied by the host");
+                }}
+            />,
+        );
+        const button = screen.getByRole("button", { name: /open descriptor file/i });
+        await act(async () => {
+            void button.click();
+        });
+        expect(states).toHaveLength(1);
+        expect(states[0]).toMatchObject({ kind: "rejected", diagnosticCode: "IO" });
+        if (states[0] !== undefined && (states[0] as { kind?: string }).kind === "rejected") {
+            expect((states[0] as { diagnosticMessage: string }).diagnosticMessage).toContain("denied");
+        }
+        unmount();
+    });
 });
