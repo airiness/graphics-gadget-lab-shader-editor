@@ -58,9 +58,9 @@ export function DescriptorPanel(props: DescriptorPanelProps) {
             <p className="gglab-panel-hint">
                 The profile contract is consumed as a serialized data document (parsed by the core's strict reader), never a C++ ABI or header import.
             </p>
-            {/* Primary action of the profile panel: solid affordance, icon,
-                hover/pressed/focus states from the chrome kit. */}
-            <Button variant="primary" className="self-start" onClick={() => fileInputRef.current?.click()}>
+            {/* A clear ordinary action: neutral raised button, file icon,
+                hover/pressed/focus states from the button design language. */}
+            <Button variant="secondary" className="self-start" onClick={() => fileInputRef.current?.click()}>
                 <FileIcon />
                 Open descriptor file…
             </Button>

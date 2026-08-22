@@ -39,7 +39,6 @@ import {
     parseShaderGraphDocument,
     resolveGraphTypes,
     validateShaderGraph,
-    type GraphType,
     type HlslEmission,
     type ShaderGraphDocument,
     type ShaderGraphDiagnostic,
@@ -184,18 +183,16 @@ export function App() {
 
     const onDropRequest = (payload: AuthoringDropPayload, position: { x: number; y: number }): void => {
         // Palette → canvas drop: the coordinate came from the flow adapter
-        // (screen → flow), the creation is the same core-judged authoring
-        // operation as a click, only seeded with the drop position.
+        // (screen → flow, resolved + guarded), the creation is the same
+        // core-judged authoring operation as a click, only seeded with the
+        // drop position. The payload's valueType is a GraphType by
+        // construction (validated at the decode boundary) — no cast.
         if (payload.kind === "node") {
             applyAuthoring(addNode(document, payload.nodeType, { position }));
             return;
         }
         applyAuthoring(
-            addParameter(
-                document,
-                { name: "New Parameter", class: payload.parameterClass, valueType: payload.valueType as GraphType },
-                { position },
-            ),
+            addParameter(document, { name: "New Parameter", class: payload.parameterClass, valueType: payload.valueType }, { position }),
         );
     };
 
@@ -280,8 +277,10 @@ export function App() {
                     )}
                 </aside>
                 <main className="gglab-canvas">
-                    <div className="gglab-canvas-actions">
-                        <Button variant="outline" size="sm" onClick={onAutoLayout} title="Lay the whole graph out (positions are session state)">
+                    {/* Canvas toolbar — one visual language for canvas
+                        actions (Auto Layout today; Fit View / Snap later). */}
+                    <div className="gglab-canvas-actions" role="toolbar" aria-label="Canvas actions">
+                        <Button variant="toolbar" onClick={onAutoLayout} title="Lay the whole graph out (positions are session state)">
                             <LayoutIcon />
                             Auto layout
                         </Button>
@@ -318,10 +317,10 @@ export function App() {
                             spellCheck={false}
                         />
                         <div className="gglab-doc-actions">
-                            <Button variant="outline" onClick={onSave}>
+                            <Button variant="ghost" onClick={onSave}>
                                 Save to text
                             </Button>
-                            <Button variant="primary" onClick={onLoad}>
+                            <Button variant="secondary" onClick={onLoad}>
                                 Load from text
                             </Button>
                         </div>
@@ -329,7 +328,7 @@ export function App() {
                     <section className="gglab-panel gglab-emission-block">
                         <h2 className="gglab-panel-title">Emission preview</h2>
                         <div className="gglab-emission-actions">
-                            <Button variant="outline" onClick={onEmit}>
+                            <Button variant="secondary" onClick={onEmit}>
                                 Generate HLSL (core)
                             </Button>
                         </div>

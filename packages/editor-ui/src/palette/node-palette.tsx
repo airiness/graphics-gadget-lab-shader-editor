@@ -19,8 +19,9 @@
  * judge the result.
  */
 import { useState, type DragEvent, type ReactNode } from "react";
-import { NODE_DEFINITIONS, type GraphType, type NodeCategory, type SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
+import { isGraphType, NODE_DEFINITIONS, type GraphType, type NodeCategory, type SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
 import { Button } from "../components/ui/button.js";
+import { ChevronsDownIcon, ChevronsUpIcon } from "../components/icons.js";
 import { CollapsibleContent, CollapsibleSection } from "../components/ui/collapsible.js";
 import { portKind, type PortKind } from "../flow/flow-adapter.js";
 import { AUTHORING_DROP_MIME, encodeAuthoringDrop, type AuthoringDropPayload, type ParameterRequest } from "../session/authoring-operations.js";
@@ -86,8 +87,8 @@ export function parameterChoices(descriptor: SurfaceProfileDescriptor | null): r
     return [...active, ...deferred];
 }
 
-function kind(valueType: string): PortKind {
-    return portKind([valueType as GraphType]);
+function kind(valueType: GraphType): PortKind {
+    return portKind([valueType]);
 }
 
 /** Chevron marker for a section header (presentation only). */
@@ -205,27 +206,21 @@ export function NodePalette(props: NodePaletteProps) {
     return (
         <nav className="gglab-palette" aria-label="Node library">
             <div className="gglab-library-head">
-                <h2 className="gglab-library-title">
-                    Node Library
+                <h2 className="gglab-library-title">Node Library</h2>
+                {/* Compact icon controls — no text wrapping in the narrow
+                    sidebar; the names live in label/title. */}
+                <div className="gglab-library-bulk" role="group" aria-label="Library controls">
+                    <Button variant="icon" size="icon" aria-label="Collapse all sections" title="Collapse all sections" onClick={() => setAll(true)}>
+                        <ChevronsDownIcon />
+                    </Button>
+                    <Button variant="icon" size="icon" aria-label="Expand all sections" title="Expand all sections" onClick={() => setAll(false)}>
+                        <ChevronsUpIcon />
+                    </Button>
                     {props.onCollapseLibrary !== undefined && (
-                        <button
-                            type="button"
-                            className="gglab-icobtn"
-                            aria-label="Collapse the node library"
-                            title="Collapse library"
-                            onClick={() => props.onCollapseLibrary?.()}
-                        >
+                        <Button variant="icon" size="icon" aria-label="Collapse the node library" title="Collapse library" onClick={() => props.onCollapseLibrary?.()}>
                             <PanelCloseIcon />
-                        </button>
+                        </Button>
                     )}
-                </h2>
-                <div className="gglab-library-bulk">
-                    <Button variant="ghost" size="sm" onClick={() => setAll(true)}>
-                        Collapse all
-                    </Button>
-                    <Button variant="ghost" size="sm" onClick={() => setAll(false)}>
-                        Expand all
-                    </Button>
                 </div>
             </div>
             <p className="gglab-palette-hint gglab-palette-usage">
@@ -248,14 +243,14 @@ export function NodePalette(props: NodePaletteProps) {
                         {choice.deferred ? (
                             <span className="gglab-palette-deferred-note">named by the descriptor's deferred set — not authorable</span>
                         ) : (
-                            choice.valueTypes.map((valueType) => (
+                            choice.valueTypes.filter(isGraphType).map((valueType) => (
                                 <button
                                     key={valueType}
                                     type="button"
                                     className="gglab-palette-entry gglab-palette-value gglab-palette-draggable"
                                     draggable
                                     onDragStart={startDrag({ kind: "parameter", parameterClass: choice.class, valueType })}
-                                    onClick={() => props.onAddParameter({ name: "New Parameter", class: choice.class, valueType: valueType as GraphType })}
+                                    onClick={() => props.onAddParameter({ name: "New Parameter", class: choice.class, valueType })}
                                     title={`Drag to the canvas, or click — add a ${choice.class} (valueType ${valueType})`}
                                 >
                                     <span aria-hidden className={`gglab-dot gglab-dot-${kind(valueType)}`} />

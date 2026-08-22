@@ -20,6 +20,28 @@ export function LayoutIcon(props: IconProps = {}) {
     );
 }
 
+/** Double downward chevron (collapse all sections). */
+export function ChevronsDownIcon(props: IconProps = {}) {
+    const size = props.size ?? 13;
+    return (
+        <svg width={size} height={size} viewBox="0 0 13 13" aria-hidden>
+            <path d="M2.5 3l4 3.5L10.5 3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M2.5 7.5L6.5 11l4-3.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+    );
+}
+
+/** Double upward chevron (expand all sections). */
+export function ChevronsUpIcon(props: IconProps = {}) {
+    const size = props.size ?? 13;
+    return (
+        <svg width={size} height={size} viewBox="0 0 13 13" aria-hidden>
+            <path d="M2.5 10L6.5 6.5 10.5 10" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M2.5 5.5L6.5 2l4 3.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+    );
+}
+
 /** Document glyph (open a descriptor file). */
 export function FileIcon(props: IconProps = {}) {
     const size = props.size ?? 14;

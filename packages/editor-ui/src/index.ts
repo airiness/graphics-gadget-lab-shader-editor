@@ -40,6 +40,7 @@ export {
     AUTHORING_DROP_MIME,
     encodeAuthoringDrop,
     decodeAuthoringDrop,
+    resolveDropCoordinate,
 } from "./session/authoring-operations.js";
 export type { AuthoringResult, AuthoringRefusal, ParameterRequest, AuthoringDropPayload } from "./session/authoring-operations.js";
 export { withNodePosition } from "./session/node-position.js";

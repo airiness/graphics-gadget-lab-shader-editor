@@ -33,6 +33,10 @@
     --color-destructive-foreground: #1a0b0b;
     --color-border: var(--border);
     --color-border-soft: var(--border-soft);
+    --color-border-hi: var(--border-hi);
+    /* raised interactive surfaces (buttons): one and two steps above panel */
+    --color-raised: var(--panel-hi);
+    --color-raised-hi: var(--border-soft);
     --color-input: var(--bg);
     --color-ring: var(--accent);
     --font-sans: var(--font-ui);
@@ -768,8 +772,12 @@ button.gglab-btn {
     font-size: 10.5px;
 }
 
+/* One integrated port per row (Unity-style): the side cell is the
+   Handle's positioning context (position: relative), so the socket sits
+   at the row center and straddles the card border; the rows themselves
+   own no side padding (the cells indent their labels). */
 .gglab-node-rows {
-    padding: 0 var(--gglab-geom-pad-right, 12px) var(--gglab-geom-rows-pad, 10px) var(--gglab-geom-pad-left, 15px);
+    padding: 0 0 var(--gglab-geom-rows-pad, 10px);
 }
 
 .gglab-port-row {
@@ -780,20 +788,24 @@ button.gglab-btn {
 }
 
 .gglab-port {
-    display: inline-flex;
+    position: relative;
+    display: flex;
     align-items: center;
     gap: 6px;
     min-width: 0;
     font-size: 12px;
     color: var(--muted);
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    padding: 0 2px;
+    overflow: visible;
+}
+
+.gglab-port-in {
+    padding-left: 11px;
 }
 
 .gglab-port-out {
     justify-content: flex-end;
+    padding-right: 11px;
 }
 
 .gglab-port-focus {
@@ -801,7 +813,7 @@ button.gglab-btn {
     font-weight: 650;
 }
 
-/* data-category dots (port labels) — colors from the tokens above */
+/* data-category socket colors (Handle + palette dots) — tokens above */
 .gglab-dot {
     width: 7px;
     height: 7px;

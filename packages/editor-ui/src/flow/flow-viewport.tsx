@@ -34,7 +34,7 @@ import { getNodeDefinition } from "@gglab/shader-graph-core";
 import "@xyflow/react/dist/style.css";
 import type { ShaderFlowNode, ShaderNodeData } from "./flow-adapter.js";
 import { FLOW_NODE_TYPE, flowGeometryCssVars, handleStyle } from "./flow-adapter.js";
-import { AUTHORING_DROP_MIME, decodeAuthoringDrop, type AuthoringDropPayload } from "../session/authoring-operations.js";
+import { AUTHORING_DROP_MIME, decodeAuthoringDrop, resolveDropCoordinate, type AuthoringDropPayload } from "../session/authoring-operations.js";
 
 export { ReactFlowProvider };
 
@@ -66,40 +66,41 @@ export function ShaderNode(props: NodeProps<ShaderNodeT>) {
                 {data.knownToCatalog === false && <div className="gglab-node-flag">unknown to the node catalog — preserved, not replaced</div>}
             </div>
             <div className="gglab-node-rows">
-                {/* The Handle on the card edge is the port's only socket
-                    glyph (type/category color + focus state). The labels
-                    share the same row center line — no second dot. */}
-                {rows.map((row) => (
+                {/* Unity-style integrated ports: each PortRow IS one
+                    visual port — the real React Flow Handle (the sole
+                    socket glyph, carrying the data-category color and the
+                    focus state) and the semantic label share the row.
+                    The row cell is the Handle's positioning context:
+                    row center = socket center = edge anchor. */}
+                {rows.map((row, index) => (
                     <div className="gglab-port-row" key={row.key}>
                         <span className={`gglab-port gglab-port-in${data.focusedPorts.includes(row.inputId ?? "") ? " gglab-port-focus" : ""}`}>
+                            {row.inputId !== undefined && (
+                                <Handle
+                                    id={row.inputId}
+                                    type="target"
+                                    position={Position.Left}
+                                    style={handleStyle("input")}
+                                    className={`gglab-handle-kind-${data.inputPortKinds[index] ?? "generic"}${data.focusedPorts.includes(row.inputId) ? " gglab-handle-focus" : ""}`}
+                                />
+                            )}
                             {row.inputId ?? ""}
                         </span>
                         <span className={`gglab-port gglab-port-out${data.focusedPorts.includes(row.outputId ?? "") ? " gglab-port-focus" : ""}`}>
                             {row.outputId ?? ""}
+                            {row.outputId !== undefined && (
+                                <Handle
+                                    id={row.outputId}
+                                    type="source"
+                                    position={Position.Right}
+                                    style={handleStyle("output")}
+                                    className={`gglab-handle-kind-${data.outputPortKinds[index] ?? "generic"}${data.focusedPorts.includes(row.outputId) ? " gglab-handle-focus" : ""}`}
+                                />
+                            )}
                         </span>
                     </div>
                 ))}
             </div>
-            {data.inputPorts.map((portId, index) => (
-                <Handle
-                    key={`in:${portId}`}
-                    id={portId}
-                    type="target"
-                    position={Position.Left}
-                    style={handleStyle("input", index)}
-                    className={`gglab-handle-kind-${data.inputPortKinds[index] ?? "generic"}${data.focusedPorts.includes(portId) ? " gglab-handle-focus" : ""}`}
-                />
-            ))}
-            {data.outputPorts.map((portId, index) => (
-                <Handle
-                    key={`out:${portId}`}
-                    id={portId}
-                    type="source"
-                    position={Position.Right}
-                    style={handleStyle("output", index)}
-                    className={`gglab-handle-kind-${data.outputPortKinds[index] ?? "generic"}${data.focusedPorts.includes(portId) ? " gglab-handle-focus" : ""}`}
-                />
-            ))}
         </div>
     );
 }
@@ -200,13 +201,14 @@ export function FlowViewport(props: FlowViewportProps) {
         if (payload === null) {
             return;
         }
-        const instance = flowInstanceRef.current;
-        // React Flow owns the coordinate system: screen point → flow point.
-        const point =
-            instance === null || instance.screenToFlowPosition === undefined
-                ? { x: 0, y: 0 }
-                : instance.screenToFlowPosition({ x: event.clientX, y: event.clientY });
-        props.onDropRequest?.(payload, { x: Math.round(point.x), y: Math.round(point.y) });
+        // React Flow owns the coordinate system (screen point → flow point).
+        // If the instance is not ready there is NO coordinate — and a drop
+        // without a coordinate is a no-op, never a silent creation at (0,0).
+        const position = resolveDropCoordinate(flowInstanceRef.current, { x: event.clientX, y: event.clientY });
+        if (position === null) {
+            return;
+        }
+        props.onDropRequest?.(payload, position);
     };
 
     return (

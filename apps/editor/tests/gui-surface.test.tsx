@@ -37,6 +37,7 @@ import {
     portRowTop,
     portTop,
     readDescriptorText,
+    resolveDropCoordinate,
     textureSignatureSerialized,
     DiagnosticsPanel,
     NodePalette,
@@ -283,9 +284,10 @@ describe("port layout (ShaderNode)", () => {
             for (const portName of ["RGBA", "RGB", "R", "G", "B", "A"]) {
                 expect(html).toContain(portName);
             }
-            // Six source handles + two target handles (texture, uv), each with its own top.
-            const handleTops = [...html.matchAll(/top:\s*(\d+(?:\.\d+)?)px/g)].map((match) => Number(match[1]));
-            expect(new Set(handleTops).size).toBeGreaterThanOrEqual(6);
+            // Six output sockets + two input sockets (texture, uv) — the
+            // real Handles, rendered one per port by the row itself.
+            expect((html.match(/react-flow__handle-right/g) ?? []).length).toBe(6);
+            expect((html.match(/react-flow__handle-left/g) ?? []).length).toBe(2);
         }
     });
 });
@@ -385,6 +387,41 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(html).toContain("gglab-node-cat-output");
             // Port labels are plain text now — one visual dot per port, not two.
             expect(html).not.toContain("gglab-dot-");
+            // And the count matches exactly: one Handle per input port.
+            const handles = html.match(/class="[^"]*react-flow__handle[^"]*"/g) ?? [];
+            expect(handles.length).toBe(5);
+        }
+    });
+
+    it("every node renders exactly one Handle per port (no orphan or duplicate sockets)", () => {
+        const document = loaded(textureV2Document());
+        const projection = documentToFlow(document);
+        const textureParameter = projection.nodes.find((node) => node.data.nodeType === "Texture2DParameter");
+        const float = projection.nodes.find((node) => node.data.nodeType === "Float");
+        expect(textureParameter !== undefined).toBe(true);
+        expect(float !== undefined).toBe(true);
+        if (textureParameter !== undefined && float !== undefined) {
+            const vp = renderToString(
+                <ReactFlowProvider>
+                    <ShaderNode {...(textureParameter as unknown as Parameters<typeof ShaderNode>[0])} />
+                </ReactFlowProvider>,
+            );
+            // One output port ("value") → exactly one socket.
+            expect((vp.match(/class="[^"]*react-flow__handle[^"]*"/g) ?? []).length).toBe(1);
+            // Input side: no port, no socket.
+            expect(vp).not.toContain("react-flow__handle-left");
+            const f = renderToString(
+                <ReactFlowProvider>
+                    <ShaderNode {...(float as unknown as Parameters<typeof ShaderNode>[0])} />
+                </ReactFlowProvider>,
+            );
+            // Float (catalog: zero inputs, one output) → exactly one socket,
+            // on the output side only.
+            expect((f.match(/class="[^"]*react-flow__handle[^"]*"/g) ?? []).length).toBe(1);
+            expect(f).not.toContain("react-flow__handle-left");
+            expect(f).toContain("react-flow__handle-right");
+            // No second socket glyph of any kind.
+            expect(f).not.toContain("gglab-dot-");
         }
     });
 });
@@ -898,6 +935,30 @@ describe("palette → canvas drag and drop", () => {
         expect(html).toContain("Drag an entry onto the canvas");
     });
 
+    it("rejects a parameter payload whose valueType is outside the core's GraphType vocabulary", () => {
+        // The runtime string boundary is closed at the decode boundary,
+        // with the core's own authority (isGraphType): no downstream cast
+        // can turn an untrusted string into a GraphType.
+        const bad = JSON.stringify({ kind: "parameter", parameterClass: "ScalarParameter", valueType: "banana" });
+        expect(decodeAuthoringDrop(bad)).toBeNull();
+        // A legal vocabulary member decodes and stays typed.
+        const good = JSON.stringify({ kind: "parameter", parameterClass: "ScalarParameter", valueType: "float" });
+        const decoded = decodeAuthoringDrop(good);
+        expect(decoded).not.toBeNull();
+        if (decoded !== null && decoded.kind === "parameter") {
+            expect(decoded.valueType).toBe("float");
+        }
+    });
+
+    it("a drop with no ready flow instance is a no-op (never a silent (0,0) creation)", () => {
+        // Instance not ready / transform unavailable → no coordinate.
+        expect(resolveDropCoordinate(null, { x: 400, y: 300 })).toBeNull();
+        expect(resolveDropCoordinate({} as { screenToFlowPosition?: (point: { x: number; y: number }) => { x: number; y: number } }, { x: 400, y: 300 })).toBeNull();
+        // A ready instance resolves through its own transform, rounded to int.
+        const instance = { screenToFlowPosition: (point: { x: number; y: number }) => ({ x: point.x / 2 + 0.4, y: point.y / 2 - 0.6 }) };
+        expect(resolveDropCoordinate(instance, { x: 400, y: 300 })).toEqual({ x: 200, y: 149 });
+    });
+
     it("a node drop seeds the initial position in editorMetadata (atomic, core-judged)", () => {
         const base = loaded(validV1Document());
         // Seed pre-existing editor-state metadata on an unrelated node…
@@ -990,14 +1051,18 @@ describe("position patching preserves existing editor metadata", () => {
 // --- action affordance (chrome kit) -----------------------------------------
 
 describe("action affordance (chrome kit)", () => {
-    it("the descriptor panel's Open file is a solid primary action with an icon", () => {
+    it("the descriptor panel's Open file is a clear neutral action (secondary, icon, pressed/focus states)", () => {
         const html = renderToString(<DescriptorPanel state={{ kind: "empty" }} onStateChange={() => {}} />);
         const button = html.match(/<button[^>]*>[\s\S]*?Open descriptor file/);
         expect(button).not.toBeNull();
         const tag = button !== null && button[0] !== undefined ? button[0].slice(0, button[0].indexOf(">") + 1) : "";
-        expect(tag).toContain("bg-primary");
+        // Secondary raised surface — deliberately NOT a saturated-CTA primary.
+        expect(tag).toContain("bg-raised");
+        expect(tag).toContain("border-border");
+        // Physical + keyboard affordance from the button design language.
         expect(tag).toContain("active:translate-y-px");
-        // Icon glyph is present in the action.
+        expect(tag).toContain("focus-visible:outline-ring");
+        // Icon glyph present in the action.
         expect(html).toContain("<svg");
     });
 });

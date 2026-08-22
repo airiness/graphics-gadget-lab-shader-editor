@@ -64,13 +64,25 @@ root):
   through a full layout pass with pre-existing unknown metadata).
 - **Palette → canvas DnD is intent + coordinate, never semantics** — the
   palette shapes a transient drag payload (node type, or the descriptor's
-  `(class, valueType)` choice) from core/catalog/descriptor facts; the flow
-  viewport contributes only the screen→flow coordinate
-  (`instance.screenToFlowPosition`) and a shape-guarded decode
-  (`decodeAuthoringDrop`); the creation is the same core-judged authoring
+  `(class, valueType)` choice) from core/catalog/descriptor facts; the
+  parameter `valueType` is a `GraphType` in the payload TYPE, and
+  `decodeAuthoringDrop` closes the runtime string boundary with the core's
+  own `isGraphType` authority (an unknown vocabulary word decodes to
+  `null` — never a cast downstream). The flow viewport contributes only
+  the screen→flow coordinate through `resolveDropCoordinate`, and a drop
+  with an unready instance (no coordinate) is a no-op, never a silent
+  (0,0) creation. The creation is the same core-judged authoring
   operation as a click — `addNode(…, { position })` or the atomic
   `addParameter(…, { position })` (parameter entry + node + initial
-  placement in one operation; a refusal returns the unchanged input whole).
+  placement in one operation; a refusal returns the unchanged input
+  whole).
+- **Unity-style integrated port anatomy** — a PortRow is one visual port:
+  the row itself renders its real React Flow Handle (the sole socket
+  glyph, type-category color + focus state) next to the semantic label.
+  The row cell is the Handle's positioning context, so the shared
+  invariant holds by construction: PortRow visual center = Handle center
+  = React Flow edge anchor (sizes/insets from `FLOW_GEOMETRY`). No inner
+  fake dot, no external invisible handle.
 - **Chrome kit, node language stays dedicated** — the editor chrome
   (buttons, status badges, inputs, collapsible sections, separators) uses
   a small shadcn-style kit (`components/ui/`) themed from the app's design

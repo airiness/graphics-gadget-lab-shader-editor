@@ -21,17 +21,22 @@ import type {
     GraphType,
     ShaderGraphDocument,
 } from "@gglab/shader-graph-core";
-import { createNode, getNodeDefinition } from "@gglab/shader-graph-core";
+import { createNode, getNodeDefinition, isGraphType } from "@gglab/shader-graph-core";
 import { withNodePosition } from "./node-position.js";
 
 /**
  * The transient palette → canvas drag payload (UI state only; serialized
  * for the HTML5 dataTransfer). React Flow supplies the drop coordinate;
  * the core's authoring operations decide whether the creation holds.
+ *
+ * The parameter `valueType` is a `GraphType` at the TYPE level: the
+ * decode path validates it with the core's own `isGraphType` runtime
+ * authority, so a decoded payload is already legal — no downstream cast
+ * can re-introduce an untrusted string.
  */
 export type AuthoringDropPayload =
     | { readonly kind: "node"; readonly nodeType: string }
-    | { readonly kind: "parameter"; readonly parameterClass: string; readonly valueType: string };
+    | { readonly kind: "parameter"; readonly parameterClass: string; readonly valueType: GraphType };
 
 /** MIME type for the authoring drag payload (presentation-owned vocabulary). */
 export const AUTHORING_DROP_MIME = "application/x-gglab-authoring";
@@ -40,8 +45,11 @@ export function encodeAuthoringDrop(payload: AuthoringDropPayload): string {
     return JSON.stringify(payload);
 }
 
-/** Decode + shape-guard a drag payload; anything that is not one of the two
- * known payloads is `null` (never a silent reinterpretation). */
+/** Decode + guard a drag payload against the core's authorities: unknown
+ * shapes are `null` (never a silent reinterpretation), and a parameter
+ * `valueType` outside the core's GraphType vocabulary is `null` — the
+ * runtime string boundary is closed here, once.
+ */
 export function decodeAuthoringDrop(raw: string): AuthoringDropPayload | null {
     if (raw === "") {
         return null;
@@ -64,11 +72,31 @@ export function decodeAuthoringDrop(raw: string): AuthoringDropPayload | null {
         typeof candidate.parameterClass === "string" &&
         candidate.parameterClass !== "" &&
         typeof candidate.valueType === "string" &&
-        candidate.valueType !== ""
+        isGraphType(candidate.valueType)
     ) {
         return { kind: "parameter", parameterClass: candidate.parameterClass, valueType: candidate.valueType };
     }
     return null;
+}
+
+/**
+ * Resolve a drop's client point to a canvas coordinate using the flow
+ * instance's own transform. Returns `null` when the instance is not
+ * ready (or cannot transform): a drop with no coordinate is a NO-OP —
+ * never a silent creation at (0, 0).
+ */
+export function resolveDropCoordinate(
+    instance: { screenToFlowPosition?: (point: { x: number; y: number }) => { x: number; y: number } } | null,
+    client: { x: number; y: number },
+): { x: number; y: number } | null {
+    if (instance === null || typeof instance.screenToFlowPosition !== "function") {
+        return null;
+    }
+    const point = instance.screenToFlowPosition(client);
+    if (typeof point.x !== "number" || typeof point.y !== "number") {
+        return null;
+    }
+    return { x: Math.round(point.x), y: Math.round(point.y) };
 }
 
 export interface AuthoringRefusal {

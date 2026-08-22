@@ -49,18 +49,27 @@ export function portTop(index: number): number {
     return handleTop(index);
 }
 
-/** Inline style pinning a Handle dot to its port row (left/right set per side). */
-export function handleStyle(side: "input" | "output", rowIndex: number): Record<string, string | number> {
+/**
+ * Inline style for a port's Handle, positioned RELATIVE TO ITS OWN PORT
+ * ROW (the row cell is `position: relative`): `top: 50%` + centering
+ * transform puts the socket dead-center on the row, and the negative
+ * left/right inset makes it straddle the card border. Size and inset come
+ * from the single geometry source, so the socket center still sits exactly
+ * on the shared `portCenterY` axis — the row layout establishes the
+ * position relation (no node-root index→top mapping for sockets).
+ */
+export function handleStyle(side: "input" | "output"): Record<string, string> {
     const g = FLOW_GEOMETRY;
     return {
-        top: handleTop(rowIndex),
-        width: g.handleSize,
-        height: g.handleSize,
-        minWidth: g.handleSize,
-        minHeight: g.handleSize,
+        top: "50%",
+        transform: side === "input" ? "translate(-50%, -50%)" : "translate(50%, -50%)",
+        width: `${g.handleSize}px`,
+        height: `${g.handleSize}px`,
+        minWidth: `${g.handleSize}px`,
+        minHeight: `${g.handleSize}px`,
         border: "2px solid #0f1319",
         borderRadius: "50%",
-        ...(side === "input" ? { left: -g.handleInset } : { right: -g.handleInset }),
+        ...(side === "input" ? { left: `${-g.handleInset}px` } : { right: `${-g.handleInset}px` }),
     };
 }
 
