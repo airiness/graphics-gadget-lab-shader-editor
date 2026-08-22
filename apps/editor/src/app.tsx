@@ -267,11 +267,10 @@ export function App() {
     useEffect(() => {
         saveRef.current = saveDocument;
     });
-    // The close guard's live inputs (dirty is the session's rule; bypass
-    // lets a confirmed "Don't Save" close actually happen).
-    const closeGuard = useRef({ bypass: false, dirty: false });
+    // The close guard's live dirty state (the session's rule).
+    const dirtyRef = useRef(dirty);
     useEffect(() => {
-        closeGuard.current.dirty = dirty;
+        dirtyRef.current = dirty;
     });
     // The in-page close confirmation (Save / Don't Save / Cancel): the
     // overlay is app state; the pending close decision resolves through
@@ -307,16 +306,25 @@ export function App() {
         };
     }, [session, dirty]);
 
-    // Unsaved close guard (registered once): while the session is dirty,
-    // a close attempt is prevented and the app shows its own
-    // Save / Don't Save / Cancel surface (an in-page overlay — the native
-    // message dialog proved to hang on real desktop runs, and every step
-    // of this flow is visible in the UI). The pure decision
-    // (choice + save outcome → close or stay) is the session's rule,
+    // Unsaved close guard (registered once). The verified Tauri 2.11.5
+    // close model (read from the core + api sources):
+    //
+    //   X or close()  →  core AUTO-prevents whenever a JS close
+    //                    listener is registered (manager/window.rs)
+    //                    →  the event reaches this handler
+    //   the api's onCloseRequested wrapper, AFTER this handler
+    //            resolves:  if the handler did NOT call
+    //            preventDefault() → the api DESTROYS the window
+    //            (core:window:allow-destroy is the close path);
+    //            if it did → the window stays.
+    //
+    // So "close" is expressed by NOT preventing, and "stay" by
+    // preventing. The handler therefore decides FIRST and only
+    // prevents when the session must stay — every branch resolves the
+    // handler (choice, timeout, or save outcome), so no close attempt
+    // can ever be left pending. The pure decision
+    // (choice + save outcome → close/stay) is the session's rule,
     // exercised by the tests without any window.
-    // NOTE: a close attempt that is intercepted LEAVES THE PENDING
-    // DECISION ON THE NATIVE SIDE — the handler MUST resolve it (choice
-    // or timeout), never hang, or the window becomes uncloseable.
     useEffect(() => {
         if (!isDesktopHost(globalThis)) {
             return;
@@ -328,19 +336,15 @@ export function App() {
             if (disposed) {
                 return;
             }
-            const win = getCurrentWindow();
-            unlisten = await win.onCloseRequested(async (event) => {
-                const guard = closeGuard.current;
-                if (!guard.dirty || guard.bypass) {
-                    guard.bypass = false;
-                    return; // clean session, or a confirmed "Don't Save"
+            unlisten = await getCurrentWindow().onCloseRequested(async (event) => {
+                if (!dirtyRef.current) {
+                    setOperationNotes((previous) => [...previous, "Close guard: clean session — closing."]);
+                    return; // not prevented → the api wrapper destroys the window
                 }
-                event.preventDefault();
                 setOperationNotes((previous) => [...previous, "Close guard: close attempt intercepted — the session has unsaved changes."]);
                 // Await the user's choice from the in-page surface. A 10s
                 // no-interaction timeout resolves it as Cancel (STAY —
-                // never a silent discard), so the pending decision can
-                // never hang.
+                // never a silent discard).
                 const choice: CloseChoice = await new Promise<CloseChoice>((resolve) => {
                     resolveRef.current = resolve;
                     setClosePrompt(true);
@@ -355,21 +359,19 @@ export function App() {
                     }, 10000);
                 });
                 setClosePrompt(false);
-                setOperationNotes((previous) => [...previous, `Close guard: choice = ${choice}.`]);
                 let saveSucceeded = false;
                 if (choice === "save") {
                     saveSucceeded = await saveRef.current(false);
-                    if (!saveSucceeded) {
-                        setOperationNotes((previous) => [...previous, "Close guard: the save did not complete — the session STAYED open."]);
-                        return;
-                    }
                 }
-                if (closeAction(choice, saveSucceeded) !== "close") {
-                    return; // cancel — STAY
+                setOperationNotes((previous) => [...previous, `Close guard: choice = ${choice}(; save ${saveSucceeded ? "completed" : "not attempted/failed"}).`]);
+                if (closeAction(choice, saveSucceeded) === "stay") {
+                    event.preventDefault(); // stay — the session is kept
+                    setOperationNotes((previous) => [...previous, choice === "cancel" ? "Close guard: STAYED (Cancel)." : "Close guard: STAYED (the save did not complete)."]);
+                    return;
                 }
-                guard.bypass = true;
+                // discard (or a completed save) — NOT prevented, so the
+                // api wrapper destroys the window and the close happens.
                 setOperationNotes((previous) => [...previous, choice === "discard" ? "Close guard: closing (unsaved changes discarded, as chosen)." : "Close guard: closing (changes saved)."]);
-                await win.close();
             });
         })();
         return () => {

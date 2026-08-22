@@ -178,8 +178,12 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         }
         // This is the security boundary for file access — assert the
         // exact set (sorted), not a subset or a prefix match.
+        // core:window:allow-destroy is the CLOSE PATH in Tauri 2.11.5:
+        // with a JS close listener registered, the core auto-prevents
+        // every close and the api's onCloseRequested wrapper destroys
+        // the window when the handler does not preventDefault().
         expect([...caps.permissions].sort()).toEqual(
-            ["core:default", "core:window:allow-close", "core:window:allow-set-title", "dialog:allow-open", "dialog:allow-save", "fs:allow-read-text-file", "fs:allow-write-text-file"].sort(),
+            ["core:default", "core:window:allow-destroy", "core:window:allow-set-title", "dialog:allow-open", "dialog:allow-save", "fs:allow-read-text-file", "fs:allow-write-text-file"].sort(),
         );
     });
 

@@ -293,24 +293,24 @@ Behavior:
 - **Ctrl/⌘+S** saves, **Ctrl/⌘+Shift+S** saves-as — classified by the
   pure `saveShortcutOf` authority (browser builds keep their native
   defaults);
-- **unsaved close guard** — while dirty, a close attempt is prevented
-  (the window's `onCloseRequested` + `preventDefault()`) and the app
-  shows its own **in-page** Save / Don't Save / Cancel surface (a React
-  overlay — on a real Windows run the native message dialog never
-  became visible and its invoke never settled, wedging the window;
-  the in-page surface is deterministic, fully visible, and needs no
-  extra permission). A 10-second no-interaction timeout resolves the
-  pending decision as Cancel (STAY — never a silent discard), because
-  an intercepted close attempt must never be left hanging: the pending
-  decision lives on the native side and a hung handler makes the
-  window uncloseable. Save closes only on success; a failed save STAYS
-  with the error reported in-app. Every step is recorded in the
+- **unsaved close guard** — Tauri 2.11.5's close model (verified in the
+  core + api sources): with a JS close listener registered, EVERY close
+  attempt (`X` or `close()`) is auto-prevented by the core and the
+  api's `onCloseRequested` wrapper destroys the window after the
+  handler resolves **only if the handler did not call
+  `preventDefault()`**. The guard therefore decides FIRST (an in-page
+  Save / Don't Save / Cancel overlay — deterministic, always visible,
+  no dialog permission needed) and only prevents when the session must
+  STAY (Cancel, or a save that did not complete). A 10-second
+  no-interaction timeout resolves as Cancel (never a silent discard).
+  Clean sessions simply return without preventing, so the wrapper's
+  destroy completes the close. Every branch resolves the handler (no
+  attempt can be left pending), and every step is recorded in the
   operation notes. The decision (`choice + save outcome → close/stay`)
   is the pure `closeAction` rule, tested without any window;
-- the title/close surface needs `core:window:allow-set-title` +
-  `core:window:allow-close`; the guard itself needs no dialog
-  permission (the in-page overlay replaced the native message call);
-  all are part of the exact capability set.
+- the window surface needs `core:window:allow-set-title` (title) +
+  `core:window:allow-destroy` (the actual close path, invoked by the
+  api wrapper); all are part of the exact capability set.
 
 Known boundary (deliberate, recorded): a document established from
 text (Load from text / the seeded document) takes its content as the
@@ -333,7 +333,7 @@ Layout:
   limited to the IPC origin — plus the dev preamble and HMR WebSocket
   origin in `devCsp`);
 - `src-tauri/capabilities/default.json` — exactly `core:default` +
-  `core:window:allow-close`/`core:window:allow-set-title` +
+  `core:window:allow-destroy`/`core:window:allow-set-title` +
   `dialog:allow-open`/`dialog:allow-save` +
   `fs:allow-read-text-file`/`fs:allow-write-text-file`;
 - `src-tauri/icons/` — self-generated flat motif (two linked node cards,
