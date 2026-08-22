@@ -201,13 +201,21 @@ Layout:
   resource compiler on this machine rejects PNG-compressed ICOs) plus the
   same pixels as `icon.png`.
 
-Known pitfalls (both locked by config + comments in the code):
+Known pitfalls (all locked by config + comments in the code):
 
 - the Vite dev watcher must stay out of `src-tauri/` (and any cargo
   `target/`): watching cargo-owned files in parallel crashes the dev
   server with `EBUSY`. Handled in `vite.config.ts` via
   `server.watch.ignored` (chokidar **v4** spells it `ignored`, not
   `ignore` — the v3 spelling is silently ignored);
+- **native drag & drop is disabled on the window**
+  (`dragDropEnabled: false`): the editor's palette → canvas authoring is
+  HTML5 DnD, and Tauri's default native drag-drop target on Windows
+  intercepts the WebView's `dragover`/`drop` (presenting a forbidden
+  cursor) — upstream Tauri documents that HTML5 drag and drop on the
+  frontend **requires** it off. No native OS file drop is needed in this
+  slice (later desktop file flows use native dialogs, not drop targets);
+  this is a desktop-host-only setting — the browser build is unaffected;
 - Rust/cargo is a build-time-only requirement (never bundled); the web
   build stays standalone.
 
