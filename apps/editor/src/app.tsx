@@ -47,6 +47,7 @@ import {
     type SurfaceProfileDescriptor,
 } from "@gglab/shader-graph-core";
 import { createDesktopFileChannel, isDesktopHost, type FileChannel } from "./host-io.js";
+import { provenanceFromImport, provenanceFromFile, saveTarget, type DocumentProvenance } from "./document-session.js";
 // Type-only (erased at compile time): the official dialog option shapes,
 // used for the single documented boundary cast below. Runtime functions
 // are dynamically imported inside the desktop effect only.
@@ -113,7 +114,10 @@ export function App() {
     // Desktop slice 1: native document I/O channel (absent in the browser
     // — the web build keeps the text save/load surface only).
     const [fileChannel, setFileChannel] = useState<FileChannel | null>(null);
-    const [documentPath, setDocumentPath] = useState<string | null>(null);
+    // Where the current document came from (file path, or no path at
+    // all) — the Save target is derived from THIS, never from leftover
+    // state of a previous document.
+    const [provenance, setProvenance] = useState<DocumentProvenance>(() => provenanceFromImport());
     useEffect(() => {
         let cancelled = false;
         void (async () => {
@@ -157,8 +161,9 @@ export function App() {
      * current), and the operation notes — while the saved-text pane shows
      * the new document's canonical serialization.
      */
-    const replaceDocumentSession = (next: ShaderGraphDocument): void => {
+    const replaceDocumentSession = (next: ShaderGraphDocument, source: DocumentProvenance): void => {
         setDocument(next);
+        setProvenance(source);
         setFocus(null);
         setEmission(null);
         setOperationNotes([]);
@@ -179,8 +184,9 @@ export function App() {
             const text = await channel.readText(path);
             const parsed = parseShaderGraphDocument(text);
             if (parsed.ok && parsed.value !== null) {
-                replaceDocumentSession(parsed.value);
-                setDocumentPath(path);
+                // A file-opened document OWNS that path — from now on a
+                // plain Save targets exactly it.
+                replaceDocumentSession(parsed.value, provenanceFromFile(path));
                 setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: `Opened ${path}; the session state was restored.` });
                 requestAnimationFrame(() => fitRef.current?.());
                 return;
@@ -199,8 +205,11 @@ export function App() {
     /**
      * Save via the host: the BYTES are the core's canonical .shadergraph
      * serialization (the disk format authority); the host only writes
-     * UTF-8 bytes to the chosen path. Save = the current path when one
-     * exists; Save As always re-asks.
+     * scoped UTF-8 bytes to a user-chosen path. The TARGET comes from
+     * the current document's provenance — Save reuses the owned path
+     * when one exists, otherwise (and always for Save As) the dialog
+     * asks. An imported document can therefore never overwrite a file
+     * from a previous session of a different document.
      */
     const saveDocument = async (as: boolean): Promise<void> => {
         const channel = fileChannel;
@@ -209,15 +218,16 @@ export function App() {
         }
         try {
             const text = serializeShaderGraphDocument(document);
-            let path = as === false && documentPath !== null ? documentPath : null;
+            let path = saveTarget(provenance, as);
             if (path === null) {
-                path = await channel.pickSavePath(documentPath !== null ? basenameOf(documentPath) : "shadergraph");
+                const defaultName = provenance.kind === "file" ? basenameOf(provenance.path) : "Untitled.shadergraph";
+                path = await channel.pickSavePath(defaultName);
                 if (path === null) {
                     return; // user cancelled
                 }
             }
             await channel.writeText(path, text);
-            setDocumentPath(path);
+            setProvenance(provenanceFromFile(path));
             setSavedText(text);
             setOperationNotes((previous) => [...previous, `Saved ${path} as the core's canonical .shadergraph bytes.`]);
         } catch (error) {
@@ -350,7 +360,10 @@ export function App() {
     const onLoad = (): void => {
         const parsed = parseShaderGraphDocument(savedText);
         if (parsed.ok && parsed.value !== null) {
-            replaceDocumentSession(parsed.value);
+            // An imported (text) document owns NO file path — a later
+            // Save must ask for a destination instead of touching a file
+            // path left over from any earlier document.
+            replaceDocumentSession(parsed.value, provenanceFromImport());
             setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: "The saved document loaded; the session state was restored." });
             requestAnimationFrame(() => fitRef.current?.());
             return;
@@ -474,7 +487,7 @@ export function App() {
                                     Save As…
                                 </Button>
                             </div>
-                            {documentPath !== null && <p className="gglab-panel-hint mono">{documentPath}</p>}
+                            {provenance.kind === "file" && <p className="gglab-panel-hint mono">{provenance.path}</p>}
                         </section>
                     )}
                     <section className="gglab-panel gglab-document-io">

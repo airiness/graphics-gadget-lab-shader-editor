@@ -247,10 +247,18 @@ as the web path and the copy-to-clipboard path):
   the invalidated derivatives (diagnostic focus, the emission preview,
   the operation notes) are cleared — a stale build result is never
   current;
-- **Save** — the core's canonical `.shadergraph` serialization written to
-  the current path (asked again when none exists);
+- **Save** — the core's canonical `.shadergraph` serialization written
+  to the path owned by the CURRENT document (a file-opened one); a
+  pathless document (seeded or text-imported) instead gets the save
+  dialog (default name `Untitled.shadergraph`);
 - **Save As…** — native save dialog → same canonical bytes to the new
-  path;
+  path, which the document then owns;
+
+The Save target is derived from **document provenance** (owned in
+`src/document-session.ts`): a file-opened document owns its path; a
+text-imported document owns none — so an imported document can never
+silently overwrite a file opened earlier, and a replaced session never
+inherits a previous document's path.
 - **descriptor Open** — the panel receives an optional host file-open
   injection (native dialog → UTF-8 text → the core's strict descriptor
   reader); without one it falls back to the browser file input. Cancel

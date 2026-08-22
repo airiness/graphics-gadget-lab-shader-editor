@@ -166,7 +166,7 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         expect(windows[0]?.["title"]).toBe("GGLab Shader Graph Editor");
     });
 
-    it("grants exactly the scoped surface: core + dialog open/save + scoped fs text read/write", async () => {
+    it("grants exactly the scoped surface (EXACT set — any extra or missing permission fails)", async () => {
         const caps = (JSON.parse(await readFile(resolve(tauriDir, "capabilities/default.json"), "utf8")) as Array<{
             identifier: string;
             windows: string[];
@@ -176,13 +176,9 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         if (caps === undefined) {
             return;
         }
-        expect(caps.permissions).toEqual(
-            expect.arrayContaining(["core:default", "dialog:allow-open", "dialog:allow-save", "fs:allow-read-text-file", "fs:allow-write-text-file"]),
-        );
-        // Only official-plugin ACL ids — no custom-command, no semantic surface.
-        for (const permission of caps.permissions) {
-            expect(permission.startsWith("core:") || permission.startsWith("dialog:") || permission.startsWith("fs:")).toBe(true);
-        }
+        // This is the security boundary for file access — assert the
+        // exact set (sorted), not a subset or a prefix match.
+        expect([...caps.permissions].sort()).toEqual(["core:default", "dialog:allow-open", "dialog:allow-save", "fs:allow-read-text-file", "fs:allow-write-text-file"].sort());
     });
 
     it("keeps the host custom-command-free (official plugins only, no arbitrary-path commands)", async () => {
