@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { saveShortcutOf } from "../src/shortcuts.js";
 
-const KEYS = { ctrlKey: false, metaKey: false, shiftKey: false, key: "s" };
+const KEYS = { ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, key: "s" };
 
 describe("save shortcut classification", () => {
     it("Ctrl+S saves", () => {
@@ -20,6 +20,12 @@ describe("save shortcut classification", () => {
     it("Cmd variants are included (one rule, both modifiers)", () => {
         expect(saveShortcutOf({ ...KEYS, metaKey: true })).toBe("save");
         expect(saveShortcutOf({ ...KEYS, metaKey: true, shiftKey: true })).toBe("save-as");
+    });
+
+    it("Alt (and AltGr-style ctrl+alt combos) is never a save shortcut", () => {
+        expect(saveShortcutOf({ ...KEYS, altKey: true })).toBeNull();
+        expect(saveShortcutOf({ ...KEYS, ctrlKey: true, altKey: true })).toBeNull();
+        expect(saveShortcutOf({ ...KEYS, ctrlKey: true, shiftKey: true, altKey: true })).toBeNull();
     });
 
     it("everything else is not a save shortcut", () => {

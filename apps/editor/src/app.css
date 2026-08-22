@@ -235,6 +235,46 @@ body {
     font-family: var(--font-mono);
 }
 
+/* ---- unsaved-close confirmation ------------------------------------------
+   The in-page surface shown while a close attempt is pending. */
+
+.gglab-close-prompt {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--bg) 55%, transparent);
+}
+
+.gglab-close-prompt-card {
+    width: min(420px, calc(100vw - 48px));
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: calc(var(--r-1) + 4px);
+    padding: 20px 22px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+}
+
+.gglab-close-prompt-title {
+    margin: 0 0 6px;
+    font-size: 15px;
+    color: var(--text);
+}
+
+.gglab-close-prompt-text {
+    margin: 0 0 16px;
+    font-size: 12.5px;
+    color: var(--muted);
+}
+
+.gglab-close-prompt-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
 /* ---- primitives -----------------------------------------------------------
    Button / Field / Chip / Panel / Fact — the shared language. */
 

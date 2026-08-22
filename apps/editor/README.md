@@ -294,17 +294,34 @@ Behavior:
   pure `saveShortcutOf` authority (browser builds keep their native
   defaults);
 - **unsaved close guard** — while dirty, a close attempt is prevented
-  (the window's `onCloseRequested` + `preventDefault()`) and the native
-  dialog
-  offers **Save / Don't Save / Cancel** (the dialog's custom buttons,
-  matched on their labels — an ambiguous dismissal is treated as Cancel,
-  never discard). Save closes only on success; a failed save STAYS with
-  the error reported in-app. Don't Save closes; the guard records the
-  confirmation so it fires only once. The decision
-  (`choice + save outcome → close/stay`) is the pure `closeAction` rule,
-  tested without any window;
+  (the window's `onCloseRequested` + `preventDefault()`) and the app
+  shows its own **in-page** Save / Don't Save / Cancel surface (a React
+  overlay — on a real Windows run the native message dialog never
+  became visible and its invoke never settled, wedging the window;
+  the in-page surface is deterministic, fully visible, and needs no
+  extra permission). A 10-second no-interaction timeout resolves the
+  pending decision as Cancel (STAY — never a silent discard), because
+  an intercepted close attempt must never be left hanging: the pending
+  decision lives on the native side and a hung handler makes the
+  window uncloseable. Save closes only on success; a failed save STAYS
+  with the error reported in-app. Every step is recorded in the
+  operation notes. The decision (`choice + save outcome → close/stay`)
+  is the pure `closeAction` rule, tested without any window;
 - the title/close surface needs `core:window:allow-set-title` +
-  `core:window:allow-close` — both are part of the exact capability set.
+  `core:window:allow-close`; the guard itself needs no dialog
+  permission (the in-page overlay replaced the native message call);
+  all are part of the exact capability set.
+
+Known boundary (deliberate, recorded): a document established from
+text (Load from text / the seeded document) takes its content as the
+clean baseline — a never-persisted `Untitled` document is not "dirty"
+and closing it does not prompt. This matches the
+`dirty = modified since the established state` rule but not some
+desktop editors' "Untitled content is unsaved" semantics. When a real
+New / Import / Recovery surface exists, the session should grow a
+persistent-backing/needs-save axis (`savedBaseline` +
+`hasPersistentBacking`, or an explicit "needs save" state for imports)
+instead of relying on the import-as-baseline shortcut.
 
 Layout:
 

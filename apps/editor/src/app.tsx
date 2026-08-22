@@ -273,6 +273,20 @@ export function App() {
     useEffect(() => {
         closeGuard.current.dirty = dirty;
     });
+    // The in-page close confirmation (Save / Don't Save / Cancel): the
+    // overlay is app state; the pending close decision resolves through
+    // this ref (chosen by a button, or by the 10s safety timeout).
+    const [closePrompt, setClosePrompt] = useState(false);
+    const resolveRef = useRef<((choice: CloseChoice) => void) | null>(null);
+    const chooseCloseChoice = (choice: CloseChoice): void => {
+        setClosePrompt(false);
+        const resolve = resolveRef.current;
+        if (resolve === null) {
+            return;
+        }
+        resolveRef.current = null;
+        resolve(choice);
+    };
 
     // Native window title — the session's single title rule (name + the
     // dirty star), the same string the status bar shows.
@@ -294,10 +308,15 @@ export function App() {
     }, [session, dirty]);
 
     // Unsaved close guard (registered once): while the session is dirty,
-    // a close attempt is prevented and the native dialog offers
-    // Save / Don't Save / Cancel. The pure decision (choice + save
-    // outcome → close or stay) is the session's rule, exercised by the
-    // tests without any window.
+    // a close attempt is prevented and the app shows its own
+    // Save / Don't Save / Cancel surface (an in-page overlay — the native
+    // message dialog proved to hang on real desktop runs, and every step
+    // of this flow is visible in the UI). The pure decision
+    // (choice + save outcome → close or stay) is the session's rule,
+    // exercised by the tests without any window.
+    // NOTE: a close attempt that is intercepted LEAVES THE PENDING
+    // DECISION ON THE NATIVE SIDE — the handler MUST resolve it (choice
+    // or timeout), never hang, or the window becomes uncloseable.
     useEffect(() => {
         if (!isDesktopHost(globalThis)) {
             return;
@@ -305,7 +324,7 @@ export function App() {
         let disposed = false;
         let unlisten: (() => void) | undefined;
         void (async () => {
-            const [{ getCurrentWindow }, { message }] = await Promise.all([import("@tauri-apps/api/window"), import("@tauri-apps/plugin-dialog")]);
+            const { getCurrentWindow } = await import("@tauri-apps/api/window");
             if (disposed) {
                 return;
             }
@@ -316,28 +335,40 @@ export function App() {
                     guard.bypass = false;
                     return; // clean session, or a confirmed "Don't Save"
                 }
-                // Keep the window: the unsaved-close dialog follows.
                 event.preventDefault();
-                const result = await message("Unsaved changes.", {
-                    title: "Unsaved changes",
-                    kind: "warning",
-                    buttons: {
-                        yes: "Save",
-                        no: "Don't Save",
-                        cancel: "Cancel",
-                    },
+                setOperationNotes((previous) => [...previous, "Close guard: close attempt intercepted — the session has unsaved changes."]);
+                // Await the user's choice from the in-page surface. A 10s
+                // no-interaction timeout resolves it as Cancel (STAY —
+                // never a silent discard), so the pending decision can
+                // never hang.
+                const choice: CloseChoice = await new Promise<CloseChoice>((resolve) => {
+                    resolveRef.current = resolve;
+                    setClosePrompt(true);
+                    window.setTimeout(() => {
+                        if (resolveRef.current !== resolve) {
+                            return;
+                        }
+                        resolveRef.current = null;
+                        setClosePrompt(false);
+                        setOperationNotes((previous) => [...previous, "Close guard: no choice was made in time — treated as Cancel (the session was kept)."]);
+                        resolve("cancel");
+                    }, 10000);
                 });
-                // Anything that is not a positive choice is a cancel (an
-                // ambiguous dismissal must never discard work).
-                const choice: CloseChoice = result === "Save" ? "save" : result === "Don't Save" ? "discard" : "cancel";
+                setClosePrompt(false);
+                setOperationNotes((previous) => [...previous, `Close guard: choice = ${choice}.`]);
                 let saveSucceeded = false;
                 if (choice === "save") {
                     saveSucceeded = await saveRef.current(false);
+                    if (!saveSucceeded) {
+                        setOperationNotes((previous) => [...previous, "Close guard: the save did not complete — the session STAYED open."]);
+                        return;
+                    }
                 }
                 if (closeAction(choice, saveSucceeded) !== "close") {
-                    return; // cancel, or save failed — STAY
+                    return; // cancel — STAY
                 }
                 guard.bypass = true;
+                setOperationNotes((previous) => [...previous, choice === "discard" ? "Close guard: closing (unsaved changes discarded, as chosen)." : "Close guard: closing (changes saved)."]);
                 await win.close();
             });
         })();
@@ -635,6 +666,25 @@ export function App() {
                     </section>
                 </aside>
             </div>
+            {closePrompt && (
+                <div className="gglab-close-prompt" role="alertdialog" aria-label="Unsaved changes">
+                    <div className="gglab-close-prompt-card">
+                        <h2 className="gglab-close-prompt-title">Unsaved changes</h2>
+                        <p className="gglab-close-prompt-text">The current session has changes that are not saved as a file yet.</p>
+                        <div className="gglab-close-prompt-actions">
+                            <Button variant="primary" onClick={() => chooseCloseChoice("save")}>
+                                Save
+                            </Button>
+                            <Button variant="secondary" onClick={() => chooseCloseChoice("discard")}>
+                                Don't Save
+                            </Button>
+                            <Button variant="ghost" onClick={() => chooseCloseChoice("cancel")}>
+                                Cancel
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
             <footer className="gglab-statusbar">
                 <div className="gglab-status-group">
                     {/* The document name + the dirty star — the same rule
