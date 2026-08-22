@@ -9,7 +9,7 @@
  */
 export { documentToFlow, authoredPosition, portTop, handleStyle, FLOW_NODE_TYPE, FLOW_LAYOUT } from "./flow/flow-adapter.js";
 export type { ShaderNodeData, ShaderFlowNode, CanvasFocus } from "./flow/flow-adapter.js";
-export { FlowViewport, ShaderNode, ReactFlowProvider } from "./flow/flow-viewport.js";
+export { FlowViewport, ShaderNode, ReactFlowProvider, useSyncedFlowNodes } from "./flow/flow-viewport.js";
 export type { ConnectionRequest, FlowViewportProps } from "./flow/flow-viewport.js";
 export { NodePalette, nodeCatalogGroups, parameterChoices } from "./palette/node-palette.js";
 export type { NodePaletteProps, ParameterChoice } from "./palette/node-palette.js";

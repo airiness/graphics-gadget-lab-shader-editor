@@ -10,7 +10,8 @@
  * constants the adapter exposes — six channel outputs are six distinct,
  * individually grabbable points, each labeled by its catalog name.
  */
-import { Handle, Position, ReactFlow, ReactFlowProvider, type Connection, type NodeProps } from "@xyflow/react";
+import { useEffect, useRef } from "react";
+import { Handle, Position, ReactFlow, ReactFlowProvider, useNodesState, type Connection, type NodeProps } from "@xyflow/react";
 
 /** Re-exported so consumers can wrap standalone custom nodes that use Handle. */
 export { ReactFlowProvider };
@@ -88,12 +89,38 @@ export interface FlowViewportProps {
     readonly onNodePlaced?: (nodeId: string, position: { x: number; y: number }) => void;
 }
 
+/**
+ * The viewport's transient node state — the owned half of the control
+ * loop. The projection (document + focus) is the source of truth; local
+ * nodes follow it, and they also follow the mouse: React Flow's position
+ * changes are consumed here in real time (no teleport on release), while
+ * the document is only written once, on drag stop, as session state.
+ *
+ * Transient state (positions mid-drag, selection) never leaves this
+ * component; a new projection (document edit, load, focus change) replaces
+ * it.
+ */
+export function useSyncedFlowNodes(sourceNodes: readonly ShaderFlowNode[]) {
+    const [nodes, setNodes, onNodesChange] = useNodesState<ShaderNodeT>([...sourceNodes]);
+    const syncedFrom = useRef(sourceNodes);
+    useEffect(() => {
+        if (syncedFrom.current !== sourceNodes) {
+            syncedFrom.current = sourceNodes;
+            // Re-commit the projection to the transient state.
+            setNodes([...sourceNodes]);
+        }
+    }, [sourceNodes, setNodes]);
+    return { nodes, onNodesChange };
+}
+
 export function FlowViewport(props: FlowViewportProps) {
     const nodeTypes = { [FLOW_NODE_TYPE]: ShaderNode };
+    const { nodes, onNodesChange } = useSyncedFlowNodes(props.nodes);
     return (
         <div className="gglab-viewport">
             <ReactFlow<ShaderNodeT>
-                nodes={[...props.nodes]}
+                nodes={nodes}
+                onNodesChange={onNodesChange}
                 edges={[...props.edges]}
                 nodeTypes={nodeTypes}
                 fitView

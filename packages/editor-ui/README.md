@@ -17,10 +17,15 @@ Rules this slice implements (mirrored in `apps/editor`'s composition
 root):
 
 - **React Flow v12 (`@xyflow/react`) is a presentation/interaction
-  adapter** — the core's `ShaderGraphDocument` is the persisted model; the
-  flow nodes/edges are a deterministic one-way projection of it (ports
-  come from the core node catalog; unknown node types are rendered as
-  explicit "unknown" cards, never silently dropped).
+  adapter, and dragging is controlled end-to-end** — the core's
+  `ShaderGraphDocument` is the persisted model; the flow projection is
+  the source of truth, and the viewport's transient node state follows
+  both the projection (on commit / load / focus change) and the mouse
+  (drag position changes are consumed in real time, so there is no
+  teleport-on-release). The document is written exactly once, on drag
+  stop, as session state — never per frame (ports come from the
+  core node catalog; unknown node types are rendered as explicit
+  "unknown" cards, never silently dropped).
 - **Ports are the UI unit** — each port (name / direction / order from the
   catalog) renders on its own labeled row at its own handle position. The
   UI owns only layout (rows, offsets, grid slots); it owns no port
@@ -35,11 +40,14 @@ root):
   conformance verdict are asked of the core, not inferred from version
   numbers here. Authoring operations are atomic: a refusal returns the
   unchanged input.
-- **Diagnostic navigation is anchor-resolved** — the canvas target of a
-  selected diagnostic comes from its `dataPath` (`$.nodes[K]`,
-  `$.connections[K]`) via the document, and a port is highlighted only when
-  the message names it verifiably against the core catalog; anchors
-  without a canvas target resolve to an explicit no-target.
+- **Diagnostic navigation is strict-structured** — the canvas target of a
+  selected diagnostic comes from its `dataPath` (`$.nodes[K]` → the node;
+  `$.connections[K]` → the edge plus the endpoint ports that are fields of
+  the structured connection itself). Nothing is parsed from the
+  human-readable message — it is a display surface, not a contract — and
+  port-accurate navigation for node-anchored diagnostics waits for a
+  structured diagnostic target. Anchors without a canvas target resolve
+  to an explicit no-target.
 - **Session state is session state** — canvas placement lands in
   `editorMetadata` and never changes generated HLSL (a core invariant the
   tests lock at the GUI boundary).

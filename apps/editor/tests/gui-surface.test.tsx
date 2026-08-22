@@ -12,6 +12,7 @@
  *     compile preserves the HLSL bytes and the generated-source identity,
  *     and canvas placement never changes them.
  */
+import { act, renderHook } from "@testing-library/react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
@@ -29,6 +30,8 @@ import {
     NodePalette,
     ReactFlowProvider,
     ShaderNode,
+    useSyncedFlowNodes,
+    type ShaderFlowNode,
 } from "@gglab/editor-ui";
 import {
     checkProfileConformance,
@@ -271,24 +274,71 @@ describe("port layout (ShaderNode)", () => {
     });
 });
 
-// --- diagnostic → canvas navigation (dataPath anchor, catalog-checked port) ----
+// --- controlled dragging: transient nodes own the drag; the projection syncs ----
+
+function flowNodeAt(x: number, y: number): readonly ShaderFlowNode[] {
+    return [
+        {
+            id: "n1",
+            type: "gglab",
+            position: { x, y },
+            data: { label: "n1", nodeType: "Float", inputPorts: [], outputPorts: ["value"], knownToCatalog: true, focused: false, focusedPorts: [] },
+        },
+    ];
+}
+
+describe("viewport node state (controlled dragging)", () => {
+    it("consumes drag position changes in real time — the node follows the mouse (no teleport on release)", () => {
+        const projection = flowNodeAt(0, 0);
+        const { result } = renderHook(() => useSyncedFlowNodes(projection));
+        expect(result.current.nodes[0]?.position).toEqual({ x: 0, y: 0 });
+        // This is exactly the change stream React Flow emits while dragging.
+        act(() => {
+            result.current.onNodesChange([{ id: "n1", type: "position", position: { x: 120, y: 60 } }]);
+        });
+        expect(result.current.nodes[0]?.position).toEqual({ x: 120, y: 60 });
+    });
+
+    it("re-syncs from a new projection after the commit (drag stop → editorMetadata → projection)", () => {
+        const before = flowNodeAt(0, 0);
+        const { result, rerender } = renderHook((nodes: readonly ShaderFlowNode[]) => useSyncedFlowNodes(nodes), { initialProps: before });
+        // A transient drag moves the local node...
+        act(() => {
+            result.current.onNodesChange([{ id: "n1", type: "position", position: { x: 120, y: 60 } }]);
+        });
+        expect(result.current.nodes[0]?.position).toEqual({ x: 120, y: 60 });
+        // ...and the commit produces a document with that position. The new
+        // projection (same place) must take over transient state 1:1.
+        const after = flowNodeAt(120, 60);
+        rerender(after);
+        expect(result.current.nodes[0]?.position).toEqual({ x: 120, y: 60 });
+        // A document that moves the node elsewhere (e.g. a load) wins too.
+        const loaded = flowNodeAt(500, 400);
+        rerender(loaded);
+        expect(result.current.nodes[0]?.position).toEqual({ x: 500, y: 400 });
+    });
+});
+
+// --- diagnostic → canvas navigation (strict mode: structured only) ------------
 
 function makeDiagnostic(code: string, message: string, dataPath: string): ShaderGraphDiagnostic {
     return { code, severity: "error", message, dataPath };
 }
 
-describe("diagnostic → canvas navigation", () => {
-    it("resolves a node anchor (dataPath index) to the document's own stable id, port catalog-verified", () => {
+describe("diagnostic → canvas navigation (strict mode: structured data only)", () => {
+    it("resolves a node anchor to the node — and does not mine ports from the message prose", () => {
         const document = loaded(validV1Document());
-        // In this fixture nodes[4] = n.out (SurfaceOutput); "BaseColor" is a real catalog input.
+        // nodes[4] = n.out (SurfaceOutput). The message names "BaseColor"
+        // in quotes — a real catalog input — but the target must still be
+        // the node only: prose is a display surface, not a contract.
         const focus = diagnosticFocus(document, makeDiagnostic("MISSING_REQUIRED_INPUT", 'Node "n.out" (SurfaceOutput) has required input "BaseColor" without a connection.', "$.nodes[4]"));
         expect(focus).toEqual({
-            nodeHighlights: [{ nodeId: "n.out", portIds: ["BaseColor"] }],
+            nodeHighlights: [{ nodeId: "n.out", portIds: [] }],
             connectionHighlights: [],
         });
     });
 
-    it("resolves a connection anchor to the edge and both endpoint ports", () => {
+    it("resolves a connection anchor to the edge and both endpoint ports (all structured data)", () => {
         const document = loaded(validV1Document());
         // connections[0] = c1: n.c.value → n.out.BaseColor.
         const focus = diagnosticFocus(document, makeDiagnostic("TYPE_MISMATCH", 'Connection "c1" carries an incompatible value to input "BaseColor".', "$.connections[0]"));
@@ -301,7 +351,7 @@ describe("diagnostic → canvas navigation", () => {
         });
     });
 
-    it("names a quoted port only when the catalog confirms it — never fabricates one", () => {
+    it("a node anchor with a quoted unknown port in the message still resolves to the node only (no prose dependency at all)", () => {
         const document = loaded(validV1Document());
         const focus = diagnosticFocus(document, makeDiagnostic("UNKNOWN_PORT", 'Connection "c9" references unknown port "NoSuchPort" on node "n.out".', "$.nodes[4]"));
         expect(focus).toEqual({ nodeHighlights: [{ nodeId: "n.out", portIds: [] }], connectionHighlights: [] });

@@ -1,17 +1,22 @@
 /**
- * Diagnostic → canvas navigation. The target is resolved against the
- * document from the diagnostic's structured `dataPath` anchors
- * (`$.nodes[K]`, `$.connections[K]` — authoritative, never parsed from
- * message prose), then translated to stable node/connection ids.
+ * Diagnostic → canvas navigation — strict mode (structured data only).
  *
- * Port narrowing is applied only when catalog-verified: a quoted token in
- * the message becomes a highlighted port only if it is a real port id of
- * that node in the core's node catalog — never otherwise. Anchors without
- * a canvas target (e.g. profile-level `"$"`, `$.parameters[K]`) resolve to
- * `null`: the panel still shows the diagnostic; the canvas is simply not
- * where it lives.
+ * The target is resolved from the diagnostic's structured `dataPath`
+ * anchors against the document; the endpoint ports of a connection
+ * anchor come from the `GraphConnection` entry itself. Nothing here is
+ * read from the human-readable `message`: message prose is a display
+ * surface, not a contract, and machine behavior must not depend on it.
+ *
+ * Therefore:
+ *   - `$.nodes[K]`    → highlight the node (port-level precision for
+ *     node-anchored diagnostics waits for a structured diagnostic target;
+ *     inventing it by parsing prose would just move the brittleness);
+ *   - `$.connections[K]` → highlight the edge and its two endpoint ports
+ *     (both are facts already present in structured data);
+ *   - anchors with no canvas home (`"$"`, `$.parameters[K]`) → `null`
+ *     (an explicit no-target, never a fake one).
  */
-import { getNodeDefinition, type ShaderGraphDiagnostic, type ShaderGraphDocument } from "@gglab/shader-graph-core";
+import type { ShaderGraphDiagnostic, ShaderGraphDocument } from "@gglab/shader-graph-core";
 import type { CanvasFocus } from "../flow/flow-adapter.js";
 
 export function diagnosticFocus(document: ShaderGraphDocument, diagnostic: ShaderGraphDiagnostic): CanvasFocus | null {
@@ -26,7 +31,9 @@ export function diagnosticFocus(document: ShaderGraphDocument, diagnostic: Shade
         if (node === undefined) {
             return null;
         }
-        return nodeFocus(document, node.id, diagnostic.message);
+        // Node anchor: the node itself. A port name is not structured
+        // data on this path, and must not be mined from the message.
+        return { nodeHighlights: [{ nodeId: node.id, portIds: [] }], connectionHighlights: [] };
     }
     const connectionMatch = /^\$\.connections\[(\d+)\](?:\.|$)/.exec(dataPath);
     if (connectionMatch !== null) {
@@ -35,6 +42,8 @@ export function diagnosticFocus(document: ShaderGraphDocument, diagnostic: Shade
         if (connection === undefined) {
             return null;
         }
+        // Connection anchor: edge + endpoints, all read from the
+        // structured connection entry.
         return {
             nodeHighlights: [
                 { nodeId: connection.from.nodeId, portIds: [connection.from.portId] },
@@ -44,23 +53,4 @@ export function diagnosticFocus(document: ShaderGraphDocument, diagnostic: Shade
         };
     }
     return null;
-}
-
-/** Highlight one node; narrow to its catalog port(s) when the message names one verifiably. */
-function nodeFocus(document: ShaderGraphDocument, nodeId: string, message: string): CanvasFocus {
-    const node = document.nodes.find((candidate) => candidate.id === nodeId);
-    const portIds: string[] = [];
-    if (node !== undefined) {
-        const definition = getNodeDefinition(node.type);
-        if (definition !== undefined) {
-            const catalogPortIds = new Set<string>([...definition.inputs.map((port) => port.id), ...definition.outputs.map((port) => port.id)]);
-            for (const match of message.matchAll(/"([^"]+)"/g)) {
-                const token = match[1];
-                if (token !== undefined && catalogPortIds.has(token)) {
-                    portIds.push(token);
-                }
-            }
-        }
-    }
-    return { nodeHighlights: [{ nodeId, portIds }], connectionHighlights: [] };
 }

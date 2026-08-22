@@ -19,7 +19,10 @@ shader compilation, or backend target policy.
   node's six channel outputs are six distinct, individually grabbable
   points. Connecting two ports is an interaction intent; the core's
   validation and port-level type services decide whether it holds, and
-  their structured diagnostics are what renders.
+  their structured diagnostics are what renders. Dragging is controlled
+  end-to-end: the viewport owns transient node state that follows the
+  mouse in real time, and the document is written exactly once, on drag
+  stop, as session state (never per frame).
 - **Node palette + parameters** — the node section is the core's node
   catalog (no UI-side registry). The parameter section is a **pure
   projection of the loaded descriptor instance**: classes and their full
@@ -32,12 +35,16 @@ shader compilation, or backend target policy.
   from the core's `createNode` (the single authority for what a new node
   of a type carries; a future CLI asks the same service). The GUI owns
   no default values.
-- **Diagnostics → canvas navigation** — each side-panel entry is
-  selectable; the target is resolved from the entry's `dataPath` anchor
-  (`$.nodes[K]`, `$.connections[K]`) against the document, and a port is
-  highlighted only when the message names it verifiably against the
-  catalog. Anchors without a canvas target (profile-level, parameter
-  level) stay in the panel.
+- **Diagnostics → canvas navigation (strict mode: structured data only)** —
+  each side-panel entry is selectable; the target comes from the entry's
+  `dataPath` anchor resolved against the document. A node anchor
+  (`$.nodes[K]`) highlights the node; a connection anchor
+  (`$.connections[K]`) highlights the edge and both endpoint ports —
+  those ports are fields of the structured connection itself. Nothing is
+  mined from the human-readable message (it is a display surface, not a
+  contract); port-accurate navigation for node-anchored diagnostics waits
+  for a structured diagnostic target. Anchors without a canvas target
+  (profile-level, parameter level) stay in the panel.
 - **Descriptor instance panel** — loads one frozen Surface Profile
   Descriptor through the core's strict reader (serialized data document —
   never a C++ ABI or header import); compatibility and conformance are the
@@ -73,9 +80,14 @@ pnpm build      # production bundle (dist/)
   constants;
 - ports are the UI unit: every port renders on its own row at a distinct
   position (six channel outputs, six distinguishable points);
-- diagnostic navigation resolves its target from the `dataPath` anchor and
-  names a port only when the catalog confirms it; anchors without a
-  canvas target resolve to an explicit no-target, never a fake one;
+- diagnostic navigation targets come from the `dataPath` anchor alone
+  (node → node; connection → edge + structured endpoint ports); a
+  node-anchored diagnostic never highlights a port mined from the
+  message; anchors without a canvas target resolve to an explicit
+  no-target, never a fake one;
+- viewport node state is transient and controlled: drag position changes
+  are consumed in real time and a fresh projection (commit, load, focus)
+  re-syncs it in 1:1;
 - save → load → compile preserves the generated HLSL bytes and the
   generated-source identity;
 - canvas placement (session state) never changes generated HLSL or its
