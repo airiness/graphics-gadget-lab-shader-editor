@@ -19,7 +19,7 @@
  */
 import type { Edge, Node } from "@xyflow/react";
 import type { ShaderGraphDocument } from "@gglab/shader-graph-core";
-import { getNodeDefinition, type GraphType } from "@gglab/shader-graph-core";
+import { getNodeDefinition, resolveGraphTypes, type GraphType } from "@gglab/shader-graph-core";
 import { FLOW_GEOMETRY, handleTop } from "./flow-geometry.js";
 
 export { FLOW_GEOMETRY, portCenterY, portRowCount, portRowTop, handleTop, nodeCardHeight, flowGeometryCssVars } from "./flow-geometry.js";
@@ -112,6 +112,18 @@ export type ShaderNodeData = {
     readonly outputPorts: readonly string[];
     readonly inputPortKinds: readonly PortKind[];
     readonly outputPortKinds: readonly PortKind[];
+    /**
+     * Per-port DISPLAY type strings, aligned with the port arrays above.
+     * The values are core-owned facts, never UI guesses: an unresolved or
+     * unconnected port shows the catalog's DECLARED type set for that
+     * port (its `NodePortDefinition.types`); a connection-resolved port
+     * shows the core type resolver's concrete type (output ports via
+     * `resolveGraphTypes().typeAt`, input ports via the connection's
+     * source, which is document data). `undefined` = no catalog fact
+     * available (unknown node type) — the row shows no type.
+     */
+    readonly inputPortTypes: readonly (string | undefined)[];
+    readonly outputPortTypes: readonly (string | undefined)[];
     readonly nodeCategory: string | undefined;
     readonly knownToCatalog: boolean;
     readonly focused: boolean;
@@ -136,14 +148,38 @@ function kindsFor(definition: ReturnType<typeof getNodeDefinition>): { inputKind
     };
 }
 
+/**
+ * Per-port display type strings — presentation formatting over core
+ * facts ONLY: the concrete type (core type resolver, via its own
+ * `typeAt`) wins; otherwise the catalog's DECLARED type set for that
+ * port (`NodePortDefinition.types`). Nothing here is keyed on the port
+ * id — the UI never guesses a port's type.
+ */
+function displayPortTypes(
+    ports: readonly { readonly id: string }[],
+    declared: readonly { readonly id: string; readonly types: readonly string[] }[],
+    concreteTypeAt: (portId: string) => string | undefined,
+): (string | undefined)[] {
+    return ports.map((port) => concreteTypeAt(port.id) ?? declared.find((entry) => entry.id === port.id)?.types.join("/"));
+}
+
 export function documentToFlow(document: ShaderGraphDocument, focus: CanvasFocus | null = null): {
     readonly nodes: readonly ShaderFlowNode[];
     readonly edges: readonly Edge[];
 } {
+    // The core type resolver (document scope = authoring scope) is the
+    // single concrete-type authority for the display projection.
+    const resolvedTypes = resolveGraphTypes(document);
     const nodes: ShaderFlowNode[] = document.nodes.map((node, index) => {
         const definition = getNodeDefinition(node.type);
         const highlight = focus?.nodeHighlights.find((entry) => entry.nodeId === node.id);
         const { inputKinds, outputKinds } = kindsFor(definition);
+        // Input ports take their concrete type from the connection's
+        // source (document data) as resolved by the core resolver.
+        const inputConcrete = (portId: string): string | undefined => {
+            const source = document.connections.find((connection) => connection.to.nodeId === node.id && connection.to.portId === portId)?.from;
+            return source !== undefined ? resolvedTypes.typeAt(source.nodeId, source.portId) : undefined;
+        };
         const data: ShaderNodeData = {
             label: node.label ?? definition?.displayName ?? node.type,
             nodeType: node.type,
@@ -151,6 +187,12 @@ export function documentToFlow(document: ShaderGraphDocument, focus: CanvasFocus
             outputPorts: definition?.outputs.map((port) => port.id) ?? [],
             inputPortKinds: inputKinds,
             outputPortKinds: outputKinds,
+            inputPortTypes: displayPortTypes(definition?.inputs ?? [], definition?.inputs ?? [], inputConcrete),
+            outputPortTypes: displayPortTypes(
+                definition?.outputs ?? [],
+                definition?.outputs ?? [],
+                (portId) => resolvedTypes.typeAt(node.id, portId),
+            ),
             nodeCategory: definition?.category,
             knownToCatalog: definition !== undefined,
             focused: highlight !== undefined,

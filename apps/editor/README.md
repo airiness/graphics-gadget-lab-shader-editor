@@ -53,7 +53,17 @@ shader compilation, or backend target policy.
 - **Unity-style integrated port** — a PortRow IS one visual port: the
   real React Flow Handle (the sole socket glyph, carrying the
   data-category color, the connection state, and the focus state) and
-  its semantic label share the same row. The row cell is the Handle's
+  the port's semantic name. The port TYPE is **on-demand** (Unreal-style
+  hover tooltip: `name — type`): the card width belongs to the names,
+  type is never a permanent second column. **The type string is a
+  core-owned fact, never a UI guess**: the core type resolver's concrete
+  type where the graph resolves one (`resolveGraphTypes().typeAt` —
+  outputs directly, inputs via the document connection's source), else
+  the catalog's DECLARED set for that port (`NodePortDefinition.types`);
+  nothing is keyed on the port id. The type strings live in the display
+  DTO (`inputPortTypes` / `outputPortTypes`) so richer hover surfaces
+  can reuse them. The projection test re-derives every display string
+  from the core's own authorities and requires equality. The row cell is the Handle's
   positioning context (`position: relative`; `top: 50%` + centering
   transform; the inset = half the socket + the card's 1px border puts
   the socket OUTSIDE the card with its inner edge exactly tangent to

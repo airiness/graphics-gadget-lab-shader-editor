@@ -61,7 +61,9 @@ import {
     checkProfileDescriptorCompatibility,
     DiagnosticCode,
     emitHlsl,
+    getNodeDefinition,
     parseShaderGraphDocument,
+    resolveGraphTypes,
     parseSurfaceProfileDescriptor,
     serializeShaderGraphDocument,
     validateShaderGraph,
@@ -309,7 +311,7 @@ function flowNodeAt(x: number, y: number): readonly ShaderFlowNode[] {
             id: "n1",
             type: "gglab",
             position: { x, y },
-            data: { label: "n1", nodeType: "Float", inputPorts: [], outputPorts: ["value"], inputPortKinds: [], outputPortKinds: ["scalar"], nodeCategory: "constant", knownToCatalog: true, focused: false, focusedPorts: [] },
+            data: { label: "n1", nodeType: "Float", inputPorts: [], outputPorts: ["value"], inputPortKinds: [], outputPortKinds: ["scalar"], inputPortTypes: [], outputPortTypes: ["float"], nodeCategory: "constant", knownToCatalog: true, focused: false, focusedPorts: [] },
         },
     ];
 }
@@ -399,6 +401,61 @@ describe("typed port presentation (core types → data categories)", () => {
             // And the count matches exactly: one Handle per input port.
             const handles = html.match(/class="[^"]*react-flow__handle[^"]*"/g) ?? [];
             expect(handles.length).toBe(5);
+        }
+    });
+
+    it("port rows carry the core's type facts — resolved concrete type, else the declared set; never a UI guess", () => {
+        const document = loaded(textureV2Document());
+        const projection = documentToFlow(document);
+        // Independent re-derivation from the core's own authorities
+        // (resolver + catalog declaration + document connections): the
+        // projection's display strings must EQUAL these exactly.
+        const resolved = resolveGraphTypes(document);
+        for (const node of projection.nodes) {
+            const docNode = document.nodes.find((candidate) => candidate.id === node.id);
+            const definition = docNode !== undefined ? getNodeDefinition(docNode.type) : undefined;
+            if (docNode === undefined || definition === undefined) {
+                continue;
+            }
+            for (let index = 0; index < node.data.outputPorts.length; index += 1) {
+                const portId = node.data.outputPorts[index];
+                if (portId === undefined) {
+                    continue;
+                }
+                const declared = definition.outputs.find((port) => port.id === portId)?.types.join("/") ?? "";
+                const expected = resolved.typeAt(node.id, portId) ?? declared;
+                expect(node.data.outputPortTypes[index]).toBe(expected);
+            }
+            for (let index = 0; index < node.data.inputPorts.length; index += 1) {
+                const portId = node.data.inputPorts[index];
+                if (portId === undefined) {
+                    continue;
+                }
+                const source = document.connections.find((connection) => connection.to.nodeId === node.id && connection.to.portId === portId)?.from;
+                const sourceType = source !== undefined ? resolved.typeAt(source.nodeId, source.portId) : undefined;
+                const declared = definition.inputs.find((port) => port.id === portId)?.types.join("/") ?? "";
+                const expected = sourceType ?? declared;
+                expect(node.data.inputPortTypes[index]).toBe(expected);
+            }
+        }
+        // The core's own channel facts surface verbatim (SampleTexture2D:
+        // RGB is float3, the B channel is float).
+        const sampler = projection.nodes.find((node) => node.data.nodeType === "SampleTexture2D");
+        expect(sampler !== undefined).toBe(true);
+        if (sampler !== undefined) {
+            const data = sampler.data;
+            expect(data.outputPortTypes[data.outputPorts.indexOf("RGB")]).toBe("float3");
+            expect(data.outputPortTypes[data.outputPorts.indexOf("B")]).toBe("float");
+            const html = renderToString(
+                <ReactFlowProvider>
+                    <ShaderNode {...(sampler as unknown as Parameters<typeof ShaderNode>[0])} />
+                </ReactFlowProvider>,
+            );
+            // No permanent type column — the names keep the row; the type
+            // is on-demand in the port's hover tooltip (core string).
+            expect(html).not.toContain("gglab-port-type");
+            expect(html).toContain("title=\"RGB — float3\"");
+            expect(html).toContain("title=\"B — float\"");
         }
     });
 

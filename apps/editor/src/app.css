@@ -813,12 +813,20 @@ body {
 }
 
 .gglab-port-in {
-    padding-left: 11px;
+    padding-left: 16px;
 }
 
 .gglab-port-out {
     justify-content: flex-end;
-    padding-right: 11px;
+    padding-right: 16px;
+}
+
+/* Port name: the only permanent text on the row; the port TYPE is
+   on-demand (hover tooltip) — the card width belongs to the names. */
+.gglab-port-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .gglab-port-focus {

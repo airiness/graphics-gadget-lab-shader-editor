@@ -81,34 +81,47 @@ export function ShaderNode(props: NodeProps<ShaderNodeT>) {
                     focus state) and the semantic label share the row.
                     The row cell is the Handle's positioning context:
                     row center = socket center = edge anchor. */}
-                {rows.map((row, index) => (
-                    <div className="gglab-port-row" key={row.key}>
-                        <span className={`gglab-port gglab-port-in${data.focusedPorts.includes(row.inputId ?? "") ? " gglab-port-focus" : ""}`}>
-                            {row.inputId !== undefined && (
-                                <Handle
-                                    id={row.inputId}
-                                    type="target"
-                                    position={Position.Left}
-                                    style={handleStyle("input")}
-                                    className={`gglab-handle-kind-${data.inputPortKinds[index] ?? "generic"}${socketClass("input", row.inputId)}${data.focusedPorts.includes(row.inputId) ? " gglab-handle-focus" : ""}`}
-                                />
-                            )}
-                            {row.inputId ?? ""}
-                        </span>
-                        <span className={`gglab-port gglab-port-out${data.focusedPorts.includes(row.outputId ?? "") ? " gglab-port-focus" : ""}`}>
-                            {row.outputId ?? ""}
-                            {row.outputId !== undefined && (
-                                <Handle
-                                    id={row.outputId}
-                                    type="source"
-                                    position={Position.Right}
-                                    style={handleStyle("output")}
-                                    className={`gglab-handle-kind-${data.outputPortKinds[index] ?? "generic"}${socketClass("output", row.outputId)}${data.focusedPorts.includes(row.outputId) ? " gglab-handle-focus" : ""}`}
-                                />
-                            )}
-                        </span>
-                    </div>
-                ))}
+                {rows.map((row, index) => {
+                    // The type is ON-DEMAND info (Unreal-style): named + typed
+                    // in the hover tooltip, never a permanent second text
+                    // column — the card width belongs to the names.
+                    const typeTitle = (name: string | undefined, type: string | undefined): string | undefined =>
+                        name !== undefined && type !== undefined ? `${name} — ${type}` : undefined;
+                    return (
+                        <div className="gglab-port-row" key={row.key}>
+                            <span
+                                className={`gglab-port gglab-port-in${data.focusedPorts.includes(row.inputId ?? "") ? " gglab-port-focus" : ""}`}
+                                title={typeTitle(row.inputId, data.inputPortTypes[index])}
+                            >
+                                {row.inputId !== undefined && (
+                                    <Handle
+                                        id={row.inputId}
+                                        type="target"
+                                        position={Position.Left}
+                                        style={handleStyle("input")}
+                                        className={`gglab-handle-kind-${data.inputPortKinds[index] ?? "generic"}${socketClass("input", row.inputId)}${data.focusedPorts.includes(row.inputId) ? " gglab-handle-focus" : ""}`}
+                                    />
+                                )}
+                                <span className="gglab-port-name">{row.inputId ?? ""}</span>
+                            </span>
+                            <span
+                                className={`gglab-port gglab-port-out${data.focusedPorts.includes(row.outputId ?? "") ? " gglab-port-focus" : ""}`}
+                                title={typeTitle(row.outputId, data.outputPortTypes[index])}
+                            >
+                                <span className="gglab-port-name">{row.outputId ?? ""}</span>
+                                {row.outputId !== undefined && (
+                                    <Handle
+                                        id={row.outputId}
+                                        type="source"
+                                        position={Position.Right}
+                                        style={handleStyle("output")}
+                                        className={`gglab-handle-kind-${data.outputPortKinds[index] ?? "generic"}${socketClass("output", row.outputId)}${data.focusedPorts.includes(row.outputId) ? " gglab-handle-focus" : ""}`}
+                                    />
+                                )}
+                            </span>
+                        </div>
+                    );
+                })}
             </div>
         </div>
     );
