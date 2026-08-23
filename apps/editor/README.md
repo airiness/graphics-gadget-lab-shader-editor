@@ -56,6 +56,18 @@ shader compilation, or backend target policy.
    rail alone, or both together, maximize the canvas (composed
    `gglab-body-*-collapsed` grid states). The state is app-level layout
    state; the sections reappear unchanged on re-open.
+- **Undo / Redo (document history)** — the session owns a bounded
+   (50-step) history of the document; the app keeps the document AS
+   `history.present`, so undo/redo and the authoring path are the same
+   state transition. Rules: one user intent = one labeled step ("removed
+   connection c3", "automatic layout"); a single auto-layout pass is ONE
+   step (not node by node); a REFUSED operation is never recorded (undo
+   must never "undo nothing"); opening/importing a document RESETS the
+   line (provenance is not undoable); the shared text-field guard keeps
+   Ctrl+Z inside the library search / JSON viewport for that field's own
+   editor; dirty stays derived (undoing back to the baseline un-dirties).
+   Undo/Redo land as a disabled-aware toolbar pair (Ctrl+Z / Ctrl+Y /
+   Ctrl+Shift+Z) and clear the canvas selection, which may become stale.
 - **One fact, one color (owner decision, locked)** — a connected input
    socket is colored by the type it ACTUALLY carries (the concrete
    resolved type of its incoming wire), so the socket, the wire, and the

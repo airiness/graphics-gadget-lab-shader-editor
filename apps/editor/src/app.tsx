@@ -14,6 +14,14 @@ import {
     removeConnectionsAtPort,
     reconnectConnection,
     isEditingTextTarget,
+    createHistory,
+    recordHistory,
+    undoHistory,
+    redoHistory,
+    canUndoHistory,
+    canRedoHistory,
+    UndoIcon,
+    RedoIcon,
     addNode,
     addParameter,
     autoLayout,
@@ -103,7 +111,12 @@ export function App() {
     // instance so the baseline is exactly that document's canonical
     // bytes.
     const [seed] = useState(() => seedDocument());
-    const [document, setDocument] = useState<ShaderGraphDocument>(seed);
+    // The document lives INSIDE the history (present), so undo/redo and
+    // the "authoring result" path are the SAME state transition — no
+    // second source of truth to drift. Provenance changes (open / import)
+    // do not append: they RESET the history around the new document.
+    const [history, setHistory] = useState(() => createHistory(seed));
+    const document = history.present;
     const [operationNotes, setOperationNotes] = useState<readonly string[]>([]);
     const [descriptorState, setDescriptorState] = useState<DescriptorPanelState>({ kind: "empty" });
     const [savedText, setSavedText] = useState(() => SEED_DOCUMENT_TEXT);
@@ -188,7 +201,8 @@ export function App() {
      * the new document's canonical serialization.
      */
     const replaceDocumentSession = (next: ShaderGraphDocument, source: DocumentProvenance): void => {
-        setDocument(next);
+        // A new document is a NEW history line, not an undoable step.
+        setHistory(createHistory(next));
         // A new document becomes the new baseline — the session is not
         // dirty merely because its text was imported or a file was
         // opened.
@@ -460,13 +474,18 @@ export function App() {
         ];
     }, [document, descriptor]);
 
-    function applyAuthoring(result: AuthoringResult): void {
+    function applyAuthoring(result: AuthoringResult, label: string): void {
         if (result.applied) {
-            setDocument(result.document);
+            // One user intent = one history step (the label names it);
+            // the before/after pair is exactly what undo/redo restore.
+            setHistory((previous) => recordHistory(previous, result.document, label));
             setOperationNotes([]);
             setFocus(null); // the document changed — any highlighted target would be stale
             return;
         }
+        // A REFUSED operation is not a change: it is exposed (the note
+        // below) but never entered the history — undo must never "undo
+        // nothing".
         const reason = result.refusal !== undefined ? result.refusal.reason : "The operation was not applied.";
         setOperationNotes((previous) => [...previous, reason]);
     }
@@ -478,13 +497,16 @@ export function App() {
     }
 
     const onAddNode = (type: string): void => {
-        applyAuthoring(addNode(document, type));
+        applyAuthoring(addNode(document, type), `added a ${type} node`);
     };
     const onAddParameter = (request: ParameterRequest): void => {
-        applyAuthoring(addParameter(document, request));
+        applyAuthoring(addParameter(document, request), `added a ${request.class} parameter`);
     };
     const onConnectRequest = (request: ConnectionRequest): void => {
-        applyAuthoring(addConnection(document, request.from, request.to));
+        applyAuthoring(
+            addConnection(document, request.from, request.to),
+            `connected ${request.from.nodeId}.${request.from.portId} to ${request.to.nodeId}.${request.to.portId}`,
+        );
     };
 
     // ---- connection selection + removal (session state, core semantics) ----
@@ -510,10 +532,36 @@ export function App() {
     // serialization ride the same transaction). A stale id is refused by the
     // core and surfaces as an operation note — never silently swallowed.
     const applyRemoveConnection = (connectionId: string): void => {
-        applyAuthoring(removeConnection(document, connectionId));
+        applyAuthoring(removeConnection(document, connectionId), `removed connection ${connectionId}`);
         setSelectedConnectionId(null);
         setEdgeMenu(null);
         setReconnectArmed(null);
+    };
+
+    // ---- undo / redo — history is session state; the document follows ----
+    // (The document IS history.present: one transition, no drift. The
+    // dirty star stays derived — undoing to the saved baseline simply
+    // un-dirties, no extra bookkeeping.)
+    const clearCanvasSelection = (): void => {
+        // Stepping back/forward can leave the current selection pointing
+        // at something that no longer exists: clear it, always.
+        setSelectedConnectionId(null);
+        setReconnectArmed(null);
+        setEdgeMenu(null);
+    };
+    const onUndo = (): void => {
+        if (canUndoHistory(history) === false) {
+            return;
+        }
+        setHistory((previous) => undoHistory(previous));
+        clearCanvasSelection();
+    };
+    const onRedo = (): void => {
+        if (canRedoHistory(history) === false) {
+            return;
+        }
+        setHistory((previous) => redoHistory(previous));
+        clearCanvasSelection();
     };
 
     // ---- advanced gestures (port disconnect + reconnect) ------------------
@@ -530,7 +578,7 @@ export function App() {
             // (the core's atomic port removal — the fan-out of an output,
             // the incoming of an input, both-side honest). The selection
             // may now be stale: clear it either way.
-            applyAuthoring(removeConnectionsAtPort(document, activation.nodeId, activation.portId));
+            applyAuthoring(removeConnectionsAtPort(document, activation.nodeId, activation.portId), `disconnected ${activation.nodeId}.${activation.portId}`);
             setSelectedConnectionId(null);
             setReconnectArmed(null);
             return;
@@ -547,6 +595,7 @@ export function App() {
                     nodeId: activation.nodeId,
                     portId: activation.portId,
                 }),
+                `reconnected ${reconnectArmed}`,
             );
             setReconnectArmed(null);
             // The selection intentionally STAYS on the same connection id:
@@ -569,6 +618,30 @@ export function App() {
                 setReconnectArmed(null);
                 return;
             }
+            // Ctrl+Z / Ctrl+Y (and Ctrl+Shift+Z) — the editor's undo/redo.
+            // The shared text-field guard runs FIRST: inside the library
+            // search or the JSON viewport the shortcut belongs to the field's
+            // own editor history, never to the graph.
+            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+                if (isEditingTextTarget(event.target)) {
+                    return;
+                }
+                event.preventDefault();
+                if (event.shiftKey) {
+                    onRedo();
+                } else {
+                    onUndo();
+                }
+                return;
+            }
+            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
+                if (isEditingTextTarget(event.target)) {
+                    return;
+                }
+                event.preventDefault();
+                onRedo();
+                return;
+            }
             if ((event.key === "Delete" || event.key === "Backspace") && selectedConnectionId !== null) {
                 if (isEditingTextTarget(event.target)) {
                     return;
@@ -579,12 +652,13 @@ export function App() {
         };
         window.addEventListener("keydown", onKeyDown);
         return () => window.removeEventListener("keydown", onKeyDown);
-    }, [selectedConnectionId, document]);
+    }, [selectedConnectionId, document, onUndo, onRedo]);
     const onNodePlaced = (nodeId: string, position: { x: number; y: number }): void => {
         // Session state (canvas layout): the shared position-patch helper
         // updates ONLY the position, preserving the node's existing
-        // editor-state metadata (unknownFields, future presentation fields).
-        setDocument((previous) => withNodePosition(previous, nodeId, position));
+        // editor-state metadata (unknownFields, future presentation
+        // fields). One drag stop = one intent = one history step.
+        setHistory((previous) => recordHistory(previous, withNodePosition(previous.present, nodeId, position), `placed ${nodeId}`));
     };
 
     const onAutoLayout = (): void => {
@@ -592,17 +666,18 @@ export function App() {
         // patch them into editorMetadata (session state) one node at a time
         // through the shared helper — never dropping metadata it doesn't
         // own. The core services are re-asked as usual; placement never
-        // changes emitted HLSL.
-        setDocument((previous) => {
-            const layout = autoLayout(previous);
+        // changes emitted HLSL. ONE layout pass = ONE intent = ONE history
+        // step (undo reverts the whole pass, not node by node).
+        setHistory((previous) => {
+            const layout = autoLayout(previous.present);
             if (layout.nodeCount === 0) {
                 return previous;
             }
-            let placed = previous;
+            let placed = previous.present;
             for (const [id, position] of Object.entries(layout.positions)) {
                 placed = withNodePosition(placed, id, position);
             }
-            return placed;
+            return recordHistory(previous, placed, "automatic layout");
         });
         // Fit once the projection has picked up the new positions.
         requestAnimationFrame(() => fitRef.current?.());
@@ -615,11 +690,12 @@ export function App() {
         // drop position. The payload's valueType is a GraphType by
         // construction (validated at the decode boundary) — no cast.
         if (payload.kind === "node") {
-            applyAuthoring(addNode(document, payload.nodeType, { position }));
+            applyAuthoring(addNode(document, payload.nodeType, { position }), `added a ${payload.nodeType} node`);
             return;
         }
         applyAuthoring(
             addParameter(document, { name: "New Parameter", class: payload.parameterClass, valueType: payload.valueType }, { position }),
+            `added a ${payload.parameterClass} parameter`,
         );
     };
 
@@ -714,6 +790,17 @@ export function App() {
                     {/* Canvas toolbar — one visual language for canvas
                         actions (Auto Layout today; Fit View / Snap later). */}
                     <div className="gglab-canvas-actions" role="toolbar" aria-label="Canvas actions">
+                        {/* Undo / Redo — the session's document history
+                            (one step per user intent; refused operations
+                            never enter; disabled while nothing to step). */}
+                        <Button variant="toolbar" onClick={onUndo} disabled={!canUndoHistory(history)} title="Undo the last change (Ctrl+Z)" aria-label="Undo">
+                            <UndoIcon />
+                            Undo
+                        </Button>
+                        <Button variant="toolbar" onClick={onRedo} disabled={!canRedoHistory(history)} title="Redo the last undone change (Ctrl+Y)" aria-label="Redo">
+                            <RedoIcon />
+                            Redo
+                        </Button>
                         <Button variant="toolbar" onClick={onAutoLayout} title="Lay the whole graph out (positions are session state)">
                             <LayoutIcon />
                             Auto layout

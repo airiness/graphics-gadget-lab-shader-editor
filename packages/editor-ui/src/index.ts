@@ -49,7 +49,9 @@ export {
 export type { AuthoringResult, AuthoringRefusal, ParameterRequest, AuthoringDropPayload } from "./session/authoring-operations.js";
 export { withNodePosition } from "./session/node-position.js";
 export { isEditingTextTarget } from "./session/keyboard-guard.js";
-export { LayoutIcon, FileIcon, PanelCloseIcon, PanelOpenIcon } from "./components/icons.js";
+export { createHistory, recordHistory, undoHistory, redoHistory, canUndoHistory, canRedoHistory, HISTORY_LIMIT } from "./session/history.js";
+export type { DocumentHistory, HistoryEntry } from "./session/history.js";
+export { LayoutIcon, FileIcon, PanelCloseIcon, PanelOpenIcon, UndoIcon, RedoIcon } from "./components/icons.js";
 export { diagnosticFocus } from "./session/diagnostic-focus.js";
 export { autoLayout } from "./session/auto-layout.js";
 export type { AutoLayoutResult } from "./session/auto-layout.js";

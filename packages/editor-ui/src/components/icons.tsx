@@ -53,6 +53,28 @@ export function PanelCloseIcon(props: IconProps = {}) {
     );
 }
 
+/** Undo glyph — a curved arrow bending back toward the start. */
+export function UndoIcon(props: IconProps = {}) {
+    const size = props.size ?? 14;
+    return (
+        <svg width={size} height={size} viewBox="0 0 14 14" aria-hidden>
+            <path d="M5.5 2.6L2.2 5.9 5.5 9.2" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M2.2 5.9H9.2a3.4 3.4 0 0 1 0 6.8H8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+        </svg>
+    );
+}
+
+/** Redo glyph — a curved arrow bending forward again (the mirror of undo). */
+export function RedoIcon(props: IconProps = {}) {
+    const size = props.size ?? 14;
+    return (
+        <svg width={size} height={size} viewBox="0 0 14 14" aria-hidden>
+            <path d="M8.5 2.6L11.8 5.9 8.5 9.2" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M11.8 5.9H4.8a3.4 3.4 0 0 0 0 6.8H6" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+        </svg>
+    );
+}
+
 /** Side panel expand glyph (panel divider + outward arrow). */
 export function PanelOpenIcon(props: IconProps = {}) {
     const size = props.size ?? 13;

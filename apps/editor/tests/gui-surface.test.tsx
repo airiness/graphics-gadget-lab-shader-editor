@@ -51,6 +51,13 @@ import {
     removeConnectionsAtPort,
     reconnectConnection,
     resolveDropCoordinate,
+    createHistory,
+    recordHistory,
+    undoHistory,
+    redoHistory,
+    canUndoHistory,
+    canRedoHistory,
+    HISTORY_LIMIT,
     textureSignatureSerialized,
     DiagnosticsPanel,
     NodePalette,
@@ -685,7 +692,8 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(app).toMatch(/event\.key === "Delete" \|\| event\.key === "Backspace"/);
             // The deletion always rides the core's operation through the
             // authoring path — never `edges.filter`.
-            expect(app).toMatch(/applyAuthoring\(removeConnection\(document, connectionId\)\)/);
+            expect(app).toContain("applyAuthoring(removeConnection(document, connectionId),");
+            expect(app).toMatch(/removed connection \$\{connectionId\}/); // the step is labeled with the intent
             expect(app).not.toMatch(/setEdges\(/);
             // Selection is session state; the projection receives it.
             expect(app).toMatch(/documentToFlow\(document, focus, selectedConnectionId\)/);
@@ -826,6 +834,68 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(barrel).toContain("removeConnectionsAtPort");
             expect(barrel).toContain("reconnectConnection");
             expect(barrel).toContain("PortActivation");
+        });
+    });
+
+    // ---- undo / redo (document history) -----------------------------------
+    describe("undo and redo", () => {
+        it("steps exactly one user intent: record, undo back to the SAME instance, redo forward", () => {
+            const doc0 = loaded(validV1Document());
+            let history = createHistory(doc0);
+            expect(canUndoHistory(history)).toBe(false);
+            expect(canRedoHistory(history)).toBe(false);
+            const doc1 = addNode(doc0, "Float").document;
+            history = recordHistory(history, doc1, "added a Float node");
+            expect(canUndoHistory(history)).toBe(true);
+            expect(history.present).toBe(doc1);
+            const back = undoHistory(history);
+            expect(back.present).toBe(doc0); // the exact previous instance
+            expect(back.past).toHaveLength(0);
+            expect(back.future[0]?.label).toBe("added a Float node"); // the step moved to the future, intact
+            expect(canRedoHistory(back)).toBe(true);
+            const again = redoHistory(back);
+            expect(again.present).toBe(doc1);
+            expect(again.future).toHaveLength(0);
+        });
+
+        it("keeps the stack bounded by the shared deterministic cap, dropping the OLDEST first", () => {
+            let history = createHistory("a", 3);
+            for (let index = 1; index <= 6; index += 1) {
+                history = recordHistory(history, `n${index}`, `op ${index}`);
+            }
+            expect(history.present).toBe("n6");
+            expect(history.past.map((entry) => entry.label)).toEqual(["op 4", "op 5", "op 6"]);
+            expect(HISTORY_LIMIT).toBe(50); // the app's default cap
+        });
+
+        it("discards the redo branch when a new intent is recorded after an undo", () => {
+            let history = createHistory("a");
+            history = recordHistory(history, "b", "first");
+            history = recordHistory(history, "c", "second");
+            const undone = undoHistory(history);
+            const branched = recordHistory(undone, "z", "diverging");
+            expect(branched.future).toHaveLength(0); // "second" is gone, not restorable
+            expect(branched.present).toBe("z");
+        });
+
+        it("wires the app: history-owned document, refused ops OUT, provenance changes RESET, guarded keys, disabled buttons", () => {
+            const app = read("../src/app.tsx");
+            // The document IS history.present (no second source of truth).
+            expect(app).toMatch(/const \[history, setHistory\] = useState\(\(\) => createHistory\(seed\)\)/);
+            expect(app).toMatch(/const document = history\.present;/);
+            // Applied changes record one labeled step; refused ones note but
+            // never record.
+            expect(app).toMatch(/function applyAuthoring\(result: AuthoringResult, label: string\)/);
+            expect(app).toMatch(/if \(result\.applied\) \{[\s\S]{0,300}?recordHistory\(previous, result\.document, label\)/);
+            // Provenance transitions (open / import) reset the line.
+            expect(app).toMatch(/const replaceDocumentSession[\s\S]*?setHistory\(createHistory\(next\)\)/);
+            // Keyboard: the guard predicate runs BEFORE the graph shortcut.
+            expect(app).toMatch(/event\.key\.toLowerCase\(\) === "z"[\s\S]*?isEditingTextTarget\(event\.target\)/);
+            expect(app).toMatch(/if \(event\.shiftKey\) \{\s*onRedo\(\);\s*\} else \{\s*onUndo\(\);/);
+            // Toolbar: the pair is disabled by the store's own can-facts.
+            expect(app).toMatch(/title="Undo the last change \(Ctrl\+Z\)"/);
+            expect(app).toMatch(/disabled=\{!canUndoHistory\(history\)\}/);
+            expect(app).toMatch(/disabled=\{!canRedoHistory\(history\)\}/);
         });
     });
 
