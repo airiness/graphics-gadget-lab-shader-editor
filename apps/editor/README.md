@@ -140,6 +140,52 @@ everything else in the sheet references the tokens.
   anywhere in the sheet (the same exact-boundary discipline as the
   capability set).
 
+### Buttons
+
+The GGLab Tool Button Language is **one component kit** (`Button` +
+`ButtonGroup` in `@gglab/editor-ui`) — there are no button classes in
+the app sheet, and no parallel button vocabulary anywhere.
+
+- **Variants (frozen set of six)** — `primary` (the single strong main
+  action of a context, e.g. the Save in the unsaved-changes dialog),
+  `secondary` (ordinary actions: Open, Save, Save As, Generate),
+  `toolbar` (canvas/tool actions: Auto Layout, future Fit/Snap),
+  `ghost` (low-priority: Cancel, auxiliary), `icon` (26×26 square
+  controls, e.g. library bulk controls), `destructive` (the danger
+  slot — defined and available, not yet adopted by any surface).
+- **Frozen geometry** — 28px text buttons / 26×26 icon buttons, the
+  `--r-1` radius, 10px horizontal padding, 6px icon gap, 14px icons,
+  nowrap; control text sits on the type scale (`--type-body` /
+  `--weight-strong` — 12px/600). **ONE uniform 1px neutral edge on
+  every variant** — a border-color difference reads as a width
+  difference, so the edge never encodes the variant; variants are
+  distinguished by fill/brightness (ghost is the darkest raised fill,
+  secondary the mid, primary the accent fill).
+- **Five states, all explicit** — rest (raised off the panel with a
+  visible border: **a button must read as a button in a still
+  screenshot, never only on hover**), hover (brighter background +
+  border + text), pressed (1px sink + inset shadow), focus-visible
+  (2px ring, keyboard), disabled (no pointer response, 50% opacity).
+  ONE focus ring everywhere: a global rule guarantees the kit's ring
+  values on every raw control too, so the user-agent default focus
+  frame can never leak through a non-kit button.
+- **Optical centering** — CJK line metrics (the rendered UI families)
+  reserve a large descent region, so the Latin cap band of a
+  flex-centered natural line box sits above the optical center; labels
+  carry the measured correction (1.5px down — the midpoint of the
+  candidate families' 1.0–2.4px band), applied in ONE place in the
+  kit.
+- **Dialog order** — the unsaved-changes footer reads
+  `[Save] [Don't Save] [Cancel]` (primary first, right-aligned).
+- **Group** — `ButtonGroup` is one action unit (fixed 8px spacing,
+  shared alignment): document I/O, dialog footers. A row of buttons
+  can never degrade into loose inline text; order and the
+  primary/secondary/ghost hierarchy belong to the caller (see the
+  Dialog order bullet).
+- **Lock** — the button-kit regression test freezes the variant set,
+  the geometry baseline, the scale typography, the five states, and
+  asserts that no parallel button language survives in the app sheet.
+
 ## Current surface (authoring loop)
 
 - **Canvas** — the document projected into React Flow v12

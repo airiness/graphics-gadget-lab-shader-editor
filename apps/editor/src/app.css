@@ -124,6 +124,16 @@
     box-sizing: border-box;
 }
 
+/* ONE focus language for every interactive control: the kit's ring,
+   guaranteed here so the user-agent default focus frame can never leak
+   through a raw <button> (section heads, rail controls, list rows).
+   The kit's own focus-visible classes carry the same values. */
+button:focus-visible,
+[role="button"]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
 html,
 body,
 #gglab-root {
@@ -303,71 +313,10 @@ body {
     color: var(--muted);
 }
 
-.gglab-close-prompt-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-}
-
 /* ---- primitives -----------------------------------------------------------
-   Button / Field / Chip / Panel / Fact — the shared language. */
-
-.gglab-btn {
-    appearance: none;
-    background: var(--panel-hi);
-    border: 1px solid var(--border);
-    color: var(--text);
-    border-radius: var(--r-1);
-    padding: 6px 12px;
-    font-family: var(--font-ui);
-    font-size: var(--type-body);
-    font-weight: var(--weight-strong);
-    cursor: pointer;
-    transition:
-        background-color 0.12s ease,
-        border-color 0.12s ease;
-}
-
-.gglab-btn:hover {
-    border-color: var(--border-hi);
-    background: #243043;
-}
-
-.gglab-btn:active {
-    transform: translateY(1px);
-}
-
-.gglab-btn:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 1px;
-}
-
-.gglab-btn-primary {
-    background: var(--accent);
-    border-color: #6fb4ff;
-    color: #0b1220;
-}
-
-.gglab-btn-primary:hover {
-    background: #74b8ff;
-    border-color: #74b8ff;
-}
-
-.gglab-btn-ghost {
-    background: transparent;
-    border-color: transparent;
-    color: var(--muted);
-}
-
-.gglab-btn-ghost:hover {
-    color: var(--text);
-    border-color: var(--border-hi);
-    background: var(--panel-hi);
-}
-
-button.gglab-btn {
-    align-self: auto;
-}
+   Field / Chip / Panel / Fact — the shared language. The button language
+   lives in the editor-ui Button kit (one base, six variants, five states);
+   there are no button classes in this sheet. */
 
 .gglab-field {
     width: 100%;
@@ -554,26 +503,6 @@ button.gglab-btn {
     color: var(--muted);
 }
 
-.gglab-icobtn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    padding: 0;
-    background: transparent;
-    color: var(--faint);
-    border: 1px solid transparent;
-    border-radius: var(--r-1);
-    cursor: pointer;
-}
-
-.gglab-icobtn:hover {
-    color: var(--text);
-    border-color: var(--border-hi);
-    background: var(--panel-hi);
-}
-
 .gglab-section-head {
     display: flex;
     align-items: center;
@@ -699,11 +628,6 @@ button.gglab-btn {
 .gglab-palette-entry:hover {
     border-color: var(--border-hi);
     background: var(--panel-2);
-}
-
-.gglab-palette-entry:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 1px;
 }
 
 .gglab-palette-name {
@@ -1084,11 +1008,6 @@ button.gglab-diagnostics-item:hover {
     background: var(--panel-hi);
 }
 
-button.gglab-diagnostics-item:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 1px;
-}
-
 .gglab-diagnostics-head {
     display: flex;
     flex-wrap: wrap;
@@ -1146,16 +1065,6 @@ button.gglab-diagnostics-item:focus-visible {
     font-size: var(--type-body);
     line-height: var(--lh-body);
     margin: 4px 0;
-}
-
-.gglab-document-io .gglab-doc-actions {
-    display: flex;
-    gap: 8px;
-    margin-top: 10px;
-}
-
-.gglab-emission-block .gglab-emission-actions {
-    margin-bottom: 10px;
 }
 
 .gglab-emission-identity code {

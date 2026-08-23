@@ -16,6 +16,7 @@ import {
     Badge,
     BadgeDot,
     Button,
+    ButtonGroup,
     DescriptorPanel,
     DiagnosticsPanel,
     diagnosticFocus,
@@ -633,7 +634,7 @@ export function App() {
                             <p className="gglab-panel-hint">
                                 Native open, save, save-as (the host moves path + UTF-8 bytes; bytes are the core's canonical .shadergraph serialization).
                             </p>
-                            <div className="gglab-doc-actions" role="toolbar" aria-label="Document I/O">
+                            <ButtonGroup role="toolbar" aria-label="Document I/O">
                                 <Button variant="secondary" onClick={() => void openDocument()}>
                                     <FileIcon />
                                     Open…
@@ -644,7 +645,7 @@ export function App() {
                                 <Button variant="ghost" onClick={() => void saveDocument(true)}>
                                     Save As…
                                 </Button>
-                            </div>
+                            </ButtonGroup>
                             {session.provenance.kind === "file" && <p className="gglab-panel-hint mono">{session.provenance.path}</p>}
                         </section>
                     )}
@@ -657,22 +658,22 @@ export function App() {
                             rows={12}
                             spellCheck={false}
                         />
-                        <div className="gglab-doc-actions">
+                        <ButtonGroup className="mt-2.5">
                             <Button variant="ghost" onClick={onSave}>
                                 Save to text
                             </Button>
                             <Button variant="secondary" onClick={onLoad}>
                                 Load from text
                             </Button>
-                        </div>
+                        </ButtonGroup>
                     </section>
                     <section className="gglab-panel gglab-emission-block">
                         <h2 className="gglab-panel-title">Emission preview</h2>
-                        <div className="gglab-emission-actions">
+                        <ButtonGroup className="mb-2.5">
                             <Button variant="secondary" onClick={onEmit}>
                                 Generate HLSL (core)
                             </Button>
-                        </div>
+                        </ButtonGroup>
                         {emission !== null && <EmissionPreview emission={emission} />}
                     </section>
                 </aside>
@@ -682,7 +683,7 @@ export function App() {
                     <div className="gglab-close-prompt-card">
                         <h2 className="gglab-close-prompt-title">Unsaved changes</h2>
                         <p className="gglab-close-prompt-text">The current session has changes that are not saved as a file yet.</p>
-                        <div className="gglab-close-prompt-actions">
+                        <ButtonGroup className="flex justify-end">
                             <Button variant="primary" onClick={() => chooseCloseChoice("save")}>
                                 Save
                             </Button>
@@ -692,7 +693,7 @@ export function App() {
                             <Button variant="ghost" onClick={() => chooseCloseChoice("cancel")}>
                                 Cancel
                             </Button>
-                        </div>
+                        </ButtonGroup>
                     </div>
                 </div>
             )}

@@ -51,6 +51,7 @@ export type { AutoLayoutResult } from "./session/auto-layout.js";
 export { cn } from "./components/ui/cn.js";
 export { Button, buttonVariants } from "./components/ui/button.js";
 export type { ButtonProps } from "./components/ui/button.js";
+export { ButtonGroup } from "./components/ui/button-group.js";
 export { Badge, BadgeDot, badgeVariants } from "./components/ui/badge.js";
 export type { BadgeProps } from "./components/ui/badge.js";
 export { Input } from "./components/ui/input.js";
