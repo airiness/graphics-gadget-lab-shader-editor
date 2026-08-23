@@ -82,8 +82,42 @@
     --r-2: 8px;
     --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
     --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45), 0 1px 0 rgba(255, 255, 255, 0.03) inset;
-    --font-ui: "Segoe UI", "Inter", system-ui, sans-serif;
-    --font-mono: "Cascadia Code", "JetBrains Mono", ui-monospace, Consolas, monospace;
+
+    /* ---- typography -------------------------------------------------------
+       ONE family stack, one mono stack, and a fixed role scale. Every
+       font-size / weight / line-height in the app MUST come from these
+       tokens (enforced by the typography lock test).
+
+       The UI stack is a single unified family — Noto Sans CJK first
+       (one family covers Latin + CJK when installed), then CJK-capable
+       local faces (real registered names), then the Latin system face.
+       CJK-capable faces stay AHEAD of pure-Latin ones so a missing
+       Noto never re-introduces a random cross-family CJK fallback.
+       When the UI gains real localization, this is the single place to
+       branch per language (e.g. :lang(zh-CN) → SC-first stack). */
+    --font-ui:
+        "Noto Sans CJK JP", "Noto Sans JP", "Noto Sans",
+        "BIZ UDGothic", "Microsoft YaHei",
+        "Segoe UI", system-ui, sans-serif;
+    /* Mono: equal-width Latin first (Cascadia → Consolas), the CJK
+       fallback AFTER Consolas (a proportional CJK face in front of the
+       mono Latin would break code alignment), then the generic tail. */
+    --font-mono:
+        "Cascadia Mono", "Cascadia Code", "Consolas",
+        "Microsoft YaHei", ui-monospace, monospace;
+
+    /* role scale — six sizes, three semantic weights, two line heights */
+    --type-micro: 10.5px;  /* category tags, flags, micro meta */
+    --type-meta: 11px;     /* chips, hints, meta text, micro-caps titles, status bar */
+    --type-body: 12px;     /* UI body: panels, buttons, list entries, node body */
+    --type-code: 11.5px;   /* mono: type ids, diagnostic code, paths, code blocks */
+    --type-node: 13.5px;   /* node title (the canvas's headline voice) */
+    --type-display: 15px;  /* dialog / overlay headings */
+    --weight-strong: 600;  /* buttons, emphasized body (node title, port focus) */
+    --weight-heading: 700; /* micro-caps panel titles, diagnostic code */
+    --lh-body: 1.5;
+    --lh-code: 1.6;
+    --tracking-caps: 0.09em;
 }
 
 * {
@@ -101,7 +135,7 @@ body {
     background: var(--bg);
     color: var(--text);
     font-family: var(--font-ui);
-    font-size: 13px;
+    font-size: var(--type-body);
     -webkit-font-smoothing: antialiased;
 }
 
@@ -149,15 +183,15 @@ body {
 }
 
 .gglab-brand {
-    font-size: 13px;
-    font-weight: 650;
+    font-size: var(--type-body);
+    font-weight: var(--weight-strong);
     letter-spacing: 0.01em;
     white-space: nowrap;
 }
 
 .gglab-brand-sub {
     color: var(--faint);
-    font-size: 11px;
+    font-size: var(--type-meta);
     white-space: nowrap;
 }
 
@@ -212,7 +246,7 @@ body {
     background: var(--panel);
     border-top: 1px solid var(--border-soft);
     color: var(--muted);
-    font-size: 11.5px;
+    font-size: var(--type-meta);
 }
 
 .gglab-status-group {
@@ -259,13 +293,13 @@ body {
 
 .gglab-close-prompt-title {
     margin: 0 0 6px;
-    font-size: 15px;
+    font-size: var(--type-display);
     color: var(--text);
 }
 
 .gglab-close-prompt-text {
     margin: 0 0 16px;
-    font-size: 12.5px;
+    font-size: var(--type-body);
     color: var(--muted);
 }
 
@@ -285,7 +319,9 @@ body {
     color: var(--text);
     border-radius: var(--r-1);
     padding: 6px 12px;
-    font: 600 12.5px var(--font-ui);
+    font-family: var(--font-ui);
+    font-size: var(--type-body);
+    font-weight: var(--weight-strong);
     cursor: pointer;
     transition:
         background-color 0.12s ease,
@@ -340,7 +376,8 @@ button.gglab-btn {
     color: var(--text);
     border-radius: var(--r-1);
     padding: 7px 10px;
-    font: 13px var(--font-ui);
+    font-family: var(--font-ui);
+    font-size: var(--type-body);
 }
 
 .gglab-field::placeholder {
@@ -354,8 +391,9 @@ button.gglab-btn {
 }
 
 .gglab-field-mono {
-    font: 12px var(--font-mono);
-    line-height: 1.55;
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+    line-height: var(--lh-code);
     resize: vertical;
     tab-size: 4;
 }
@@ -369,7 +407,7 @@ button.gglab-btn {
     border-radius: 999px;
     background: var(--panel-2);
     color: var(--muted);
-    font-size: 11px;
+    font-size: var(--type-meta);
     white-space: nowrap;
 }
 
@@ -420,9 +458,9 @@ button.gglab-btn {
 
 .gglab-panel-title {
     margin: 0 0 8px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.09em;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-heading);
+    letter-spacing: var(--tracking-caps);
     text-transform: uppercase;
     color: var(--muted);
 }
@@ -430,14 +468,14 @@ button.gglab-btn {
 .gglab-panel-hint {
     margin: 0 0 10px;
     color: var(--faint);
-    font-size: 11.5px;
-    line-height: 1.5;
+    font-size: var(--type-meta);
+    line-height: var(--lh-body);
 }
 
 .gglab-panel-status {
     margin: 8px 0 0;
-    font-size: 12px;
-    line-height: 1.5;
+    font-size: var(--type-body);
+    line-height: var(--lh-body);
     color: var(--muted);
 }
 
@@ -447,7 +485,8 @@ button.gglab-btn {
 
 .gglab-panel-code {
     font-family: var(--font-mono);
-    font-weight: 700;
+    font-size: var(--type-code);
+    font-weight: var(--weight-heading);
 }
 
 .gglab-facts {
@@ -462,7 +501,7 @@ button.gglab-btn {
     gap: 10px;
     padding: 4px 0;
     border-bottom: 1px solid var(--border-soft);
-    font-size: 12px;
+    font-size: var(--type-body);
 }
 
 .gglab-fact:last-child {
@@ -471,7 +510,7 @@ button.gglab-btn {
 
 .gglab-fact dt {
     color: var(--faint);
-    font-size: 11px;
+    font-size: var(--type-meta);
 }
 
 .gglab-fact dd {
@@ -508,9 +547,9 @@ button.gglab-btn {
     align-items: center;
     gap: 8px;
     margin: 0;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.09em;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-heading);
+    letter-spacing: var(--tracking-caps);
     text-transform: uppercase;
     color: var(--muted);
 }
@@ -558,9 +597,9 @@ button.gglab-btn {
 
 .gglab-section-title {
     margin: 0;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.09em;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-heading);
+    letter-spacing: var(--tracking-caps);
     text-transform: uppercase;
 }
 
@@ -607,9 +646,9 @@ button.gglab-btn {
 
 .gglab-rail-text {
     writing-mode: vertical-rl;
-    font-size: 11px;
-    font-weight: 650;
-    letter-spacing: 0.08em;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-strong);
+    letter-spacing: var(--tracking-caps);
     text-transform: uppercase;
 }
 
@@ -635,8 +674,8 @@ button.gglab-btn {
 .gglab-palette-hint {
     margin: 0 0 8px;
     color: var(--faint);
-    font-size: 11.5px;
-    line-height: 1.5;
+    font-size: var(--type-meta);
+    line-height: var(--lh-body);
 }
 
 .gglab-palette-entry {
@@ -652,7 +691,8 @@ button.gglab-btn {
     border: 1px solid transparent;
     border-radius: var(--r-1);
     cursor: pointer;
-    font: 12.5px var(--font-ui);
+    font-family: var(--font-ui);
+    font-size: var(--type-body);
     text-align: left;
 }
 
@@ -671,7 +711,8 @@ button.gglab-btn {
 }
 
 .gglab-palette-tag {
-    font: 10px var(--font-mono);
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
     color: var(--faint);
     white-space: nowrap;
 }
@@ -689,18 +730,19 @@ button.gglab-btn {
 
 .gglab-palette-value {
     padding: 3px 8px;
-    font: 12px var(--font-ui);
+    font-family: var(--font-ui);
+    font-size: var(--type-body);
 }
 
 .gglab-palette-deferred {
     color: var(--warn);
-    font-size: 10.5px;
+    font-size: var(--type-micro);
     text-transform: lowercase;
 }
 
 .gglab-palette-deferred-note {
     display: block;
-    font-size: 11px;
+    font-size: var(--type-meta);
     color: var(--faint);
     margin: 2px 0 4px;
 }
@@ -779,8 +821,8 @@ button.gglab-btn {
 }
 
 .gglab-node-title {
-    font-weight: 650;
-    font-size: 13.5px;
+    font-weight: var(--weight-strong);
+    font-size: var(--type-node);
     letter-spacing: 0.01em;
     white-space: nowrap;
     overflow: hidden;
@@ -795,12 +837,13 @@ button.gglab-btn {
 
 .gglab-node-type {
     color: var(--faint);
-    font: 10.5px var(--font-mono);
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
 }
 
 .gglab-node-category {
     color: var(--muted);
-    font-size: 10px;
+    font-size: var(--type-micro);
     text-transform: lowercase;
     background: var(--panel-hi);
     padding: 1px 6px;
@@ -809,7 +852,7 @@ button.gglab-btn {
 
 .gglab-node-flag {
     color: var(--warn);
-    font-size: 10.5px;
+    font-size: var(--type-micro);
 }
 
 /* One integrated port per row (Unity-style): the side cell is the
@@ -833,7 +876,7 @@ button.gglab-btn {
     align-items: center;
     gap: 6px;
     min-width: 0;
-    font-size: 12px;
+    font-size: var(--type-body);
     color: var(--muted);
     white-space: nowrap;
     overflow: visible;
@@ -850,7 +893,7 @@ button.gglab-btn {
 
 .gglab-port-focus {
     color: var(--text);
-    font-weight: 650;
+    font-weight: var(--weight-strong);
 }
 
 /* data-category socket colors (Handle + palette dots) — tokens above */
@@ -1010,9 +1053,9 @@ button.gglab-btn {
 
 .gglab-diagnostics h2 {
     margin: 0 0 8px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.09em;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-heading);
+    letter-spacing: var(--tracking-caps);
     text-transform: uppercase;
     color: var(--muted);
 }
@@ -1020,7 +1063,7 @@ button.gglab-btn {
 .gglab-diagnostics-passed {
     color: var(--ok);
     margin: 4px 0;
-    font-size: 12px;
+    font-size: var(--type-body);
 }
 
 .gglab-diagnostics-item {
@@ -1051,12 +1094,13 @@ button.gglab-diagnostics-item:focus-visible {
     flex-wrap: wrap;
     gap: 6px;
     align-items: baseline;
-    font-size: 11.5px;
+    font-size: var(--type-meta);
 }
 
 .gglab-diagnostics-code {
     font-family: var(--font-mono);
-    font-weight: 700;
+    font-size: var(--type-code);
+    font-weight: var(--weight-heading);
 }
 
 .gglab-diagnostics-severity-error .gglab-diagnostics-code {
@@ -1070,13 +1114,13 @@ button.gglab-diagnostics-item:focus-visible {
 .gglab-diagnostics-message {
     display: block;
     margin: 2px 0;
-    line-height: 1.45;
+    line-height: var(--lh-body);
 }
 
 .gglab-diagnostics-path {
     color: var(--faint);
     font-family: var(--font-mono);
-    font-size: 10.5px;
+    font-size: var(--type-code);
 }
 
 /* ---- notes / document io / emission ----------------------------------------- */
@@ -1091,16 +1135,16 @@ button.gglab-diagnostics-item:focus-visible {
 
 .gglab-notes h2 {
     margin: 0 0 8px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.09em;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-heading);
+    letter-spacing: var(--tracking-caps);
     text-transform: uppercase;
     color: var(--warn);
 }
 
 .gglab-notes p {
-    font-size: 12px;
-    line-height: 1.5;
+    font-size: var(--type-body);
+    line-height: var(--lh-body);
     margin: 4px 0;
 }
 
@@ -1116,7 +1160,7 @@ button.gglab-diagnostics-item:focus-visible {
 
 .gglab-emission-identity code {
     font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-size: var(--type-code);
     color: var(--muted);
     word-break: break-all;
 }
@@ -1128,17 +1172,19 @@ button.gglab-diagnostics-item:focus-visible {
     border: 1px solid var(--border-soft);
     border-radius: var(--r-1);
     overflow-x: auto;
-    font: 11.5px/1.6 var(--font-mono);
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+    line-height: var(--lh-code);
     color: var(--text);
     white-space: pre;
 }
 
 .gglab-emission-problem.gglab-emission-severity-error {
     color: var(--error);
-    font-size: 12px;
+    font-size: var(--type-body);
 }
 
 .gglab-emission-problem.gglab-emission-severity-warning {
     color: var(--warn);
-    font-size: 12px;
+    font-size: var(--type-body);
 }

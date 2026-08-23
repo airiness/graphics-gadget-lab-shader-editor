@@ -111,6 +111,35 @@ shader compilation, or backend target policy.
 - **Library search** — a pure case-insensitive string filter over display
   names in the palette; presentation convenience, never a semantic fact.
 
+### Typography
+
+One unified family stack, one mono stack, and a fixed role scale —
+everything else in the sheet references the tokens.
+
+- **Families** — the UI stack is ONE family (Noto Sans CJK first: one
+  family covers Latin + CJK), then CJK-capable local faces
+  (`BIZ UDGothic`, `Microsoft YaHei`), then the Latin system face —
+  CJK-capable faces stay **ahead** of pure-Latin ones, so a missing Noto
+  never re-introduces a random cross-family CJK fallback. When the UI
+  gains real localization this is the single place to branch per
+  language (e.g. `:lang(zh-CN)` → an SC-first stack).
+- **Mono** — equal-width Latin first (`Cascadia Mono` → `Consolas`), the
+  CJK fallback **after** the mono Latin (a proportional CJK face in front
+  of them would break code alignment), then the generic tail. Used for
+  code, paths, node/type IDs, and diagnostic code — never for prose.
+- **Role scale** — six sizes (`--type-micro` 10.5 / `--type-meta` 11 /
+  `--type-body` 12 / `--type-code` 11.5 / `--type-node` 13.5 /
+  `--type-display` 15), two semantic weights (`--weight-strong` 600,
+  `--weight-heading` 700), two line heights (`--lh-body` 1.5,
+  `--lh-code` 1.6), one caps tracking (`--tracking-caps` 0.09em).
+  Every surface in the app — UI body, panel titles, node titles, port
+  labels, secondary/meta text, diagnostic code, status bar — is on this
+  scale.
+- **Lock** — the typography regression test verifies the token values,
+  the family ordering, and that no stray literal font metric survives
+  anywhere in the sheet (the same exact-boundary discipline as the
+  capability set).
+
 ## Current surface (authoring loop)
 
 - **Canvas** — the document projected into React Flow v12
