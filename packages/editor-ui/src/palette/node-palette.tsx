@@ -215,7 +215,7 @@ export function NodePalette(props: NodePaletteProps) {
                         const allCollapsed = sectionKeys.length > 0 && sectionKeys.every((key) => collapsed[key] === true);
                         const label = allCollapsed ? "Expand all sections" : "Collapse all sections";
                         return (
-                            <Button variant="icon" size="icon" aria-label={label} title={label} onClick={() => setAll(allCollapsed)}>
+                            <Button variant="icon" size="icon" aria-label={label} title={label} onClick={() => setAll(!allCollapsed)}>
                                 {allCollapsed ? <ChevronsUpIcon /> : <ChevronsDownIcon />}
                             </Button>
                         );
