@@ -1,3 +1,5 @@
+// Role: REGRESSION EVIDENCE — the button kit's computed language
+// (size, radius, border, shared surface, label tone, state set).
 // CDP probe (Node's built-in WebSocket, no deps): verifies the kit
 // button optics in the real renderer — label/icon optical transform and
 // the computed background of every variant.

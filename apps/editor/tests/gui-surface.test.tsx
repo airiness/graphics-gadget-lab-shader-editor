@@ -211,6 +211,59 @@ function textureV2Document(): string {
     });
 }
 
+function scalarMultiplyDocument(): string {
+    return JSON.stringify({
+        schemaVersion: 1,
+        graphId: "graph.gui-mul-s",
+        profile: "gglab.surface",
+        profileVersion: 1,
+        parameters: [],
+        nodes: [
+            { id: "n.f1", type: "Float", version: 1, properties: { value: 1 } },
+            { id: "n.f2", type: "Float", version: 1, properties: { value: 1 } },
+            { id: "n.m", type: "Multiply", version: 1, properties: {} },
+        ],
+        connections: [
+            { id: "c1", from: { nodeId: "n.f1", portId: "value" }, to: { nodeId: "n.m", portId: "a" } },
+            { id: "c2", from: { nodeId: "n.f2", portId: "value" }, to: { nodeId: "n.m", portId: "b" } },
+        ],
+        editorMetadata: { nodes: {} },
+    });
+}
+
+function vectorMultiplyDocument(): string {
+    return JSON.stringify({
+        schemaVersion: 1,
+        graphId: "graph.gui-mul-v",
+        profile: "gglab.surface",
+        profileVersion: 1,
+        parameters: [],
+        nodes: [
+            { id: "n.v1", type: "Float3", version: 1, properties: { value: [1, 1, 1] } },
+            { id: "n.v2", type: "Float3", version: 1, properties: { value: [1, 0, 0] } },
+            { id: "n.m", type: "Multiply", version: 1, properties: {} },
+        ],
+        connections: [
+            { id: "c1", from: { nodeId: "n.v1", portId: "value" }, to: { nodeId: "n.m", portId: "a" } },
+            { id: "c2", from: { nodeId: "n.v2", portId: "value" }, to: { nodeId: "n.m", portId: "b" } },
+        ],
+        editorMetadata: { nodes: {} },
+    });
+}
+
+function loneMultiplyDocument(): string {
+    return JSON.stringify({
+        schemaVersion: 1,
+        graphId: "graph.gui-mul-0",
+        profile: "gglab.surface",
+        profileVersion: 1,
+        parameters: [],
+        nodes: [{ id: "n.m", type: "Multiply", version: 1, properties: {} }],
+        connections: [],
+        editorMetadata: { nodes: {} },
+    });
+}
+
 function loaded(text: string) {
     const parsed = parseShaderGraphDocument(text);
     if (!parsed.ok || parsed.value === null) {
@@ -351,11 +404,15 @@ describe("viewport node state (controlled dragging)", () => {
 // --- typed port presentation + node library filter (visual foundation) -----------
 
 describe("typed port presentation (core types → data categories)", () => {
-    it("maps the catalog's type lists to scalar / vector / texture / generic", () => {
+    it("classifies type sets honestly: pure sets map to their family, crossing sets map to generic", () => {
         expect(portKind(["float"])).toBe("scalar");
         expect(portKind(["float2"])).toBe("vector");
-        expect(portKind(["float3", "float"])).toBe("vector");
-        expect(portKind(["float", "float2", "float3", "float4"])).toBe("vector");
+        expect(portKind(["float2", "float3", "float4"])).toBe("vector");
+        // Crossing scalar AND vector: the port accepts either, so neither
+        // family may be forced — a concrete type never hits this case
+        // (a single type is a pure set).
+        expect(portKind(["float3", "float"])).toBe("generic");
+        expect(portKind(["float", "float2", "float3", "float4"])).toBe("generic");
         expect(portKind(["Texture2D"])).toBe("texture");
         expect(portKind([])).toBe("generic");
     });
@@ -379,6 +436,62 @@ describe("typed port presentation (core types → data categories)", () => {
         // Edges carry their data category (from the producer port's core types).
         expect(projection.edges.some((edge) => edge.className?.includes("gglab-edge-kind-texture"))).toBe(true);
         expect(projection.edges.some((edge) => edge.className?.includes("gglab-edge-kind-vector"))).toBe(true);
+    });
+
+    it("colors follow the RESOLVED concrete type — tooltip, socket, and edge always tell one story", () => {
+        const valueIndex = (nodeData: { readonly outputPorts: readonly string[] }) => nodeData.outputPorts.indexOf("value");
+        // Multiply fed by two scalar constants: value resolves to float →
+        // scalar everywhere (tooltip "float", scalar socket, scalar edge).
+        const scalar = documentToFlow(loaded(scalarMultiplyDocument()));
+        const m1 = scalar.nodes.find((node) => node.data.nodeType === "Multiply");
+        expect(m1 !== undefined).toBe(true);
+        if (m1 !== undefined) {
+            expect(m1.data.outputPortTypes[valueIndex(m1.data)]).toBe("float");
+            expect(m1.data.outputPortKinds[valueIndex(m1.data)]).toBe("scalar");
+        }
+        expect(scalar.edges.every((edge) => edge.className?.includes("gglab-edge-kind-scalar"))).toBe(true);
+        // Same node fed by float3 constants: everything flips to vector.
+        const vector = documentToFlow(loaded(vectorMultiplyDocument()));
+        const m2 = vector.nodes.find((node) => node.data.nodeType === "Multiply");
+        expect(m2 !== undefined).toBe(true);
+        if (m2 !== undefined) {
+            expect(m2.data.outputPortTypes[valueIndex(m2.data)]).toBe("float3");
+            expect(m2.data.outputPortKinds[valueIndex(m2.data)]).toBe("vector");
+        }
+        expect(vector.edges.every((edge) => edge.className?.includes("gglab-edge-kind-vector"))).toBe(true);
+        // Unresolved: the crossing declared set is honestly NEUTRAL (generic),
+        // not a forced vector — matching its own tooltip union.
+        const lone = documentToFlow(loaded(loneMultiplyDocument()));
+        const m0 = lone.nodes.find((node) => node.data.nodeType === "Multiply");
+        expect(m0 !== undefined).toBe(true);
+        if (m0 !== undefined) {
+            expect(m0.data.inputPortKinds).toEqual(["generic", "generic"]);
+            expect(m0.data.inputPortTypes).toEqual(["float/float2/float3/float4", "float/float2/float3/float4"]);
+            expect(m0.data.outputPortKinds).toEqual(["generic"]);
+            expect(m0.data.outputPortTypes).toEqual(["float/float2/float3/float4"]);
+        }
+    });
+
+    it("per-port invariant: the socket kind equals the classification of the tooltip string", () => {
+        // The exact self-contradiction guard: for every port in the seed
+        // graph, re-derive the kind from the DISPLAY string alone and
+        // require it to equal the carried kind — tooltip and color can
+        // never disagree.
+        const projection = documentToFlow(loaded(textureV2Document()));
+        for (const node of projection.nodes) {
+            for (let index = 0; index < node.data.inputPortKinds.length; index += 1) {
+                const display = node.data.inputPortTypes[index];
+                if (display !== undefined) {
+                    expect(node.data.inputPortKinds[index]).toBe(portKind(display.split("/")));
+                }
+            }
+            for (let index = 0; index < node.data.outputPortKinds.length; index += 1) {
+                const display = node.data.outputPortTypes[index];
+                if (display !== undefined) {
+                    expect(node.data.outputPortKinds[index]).toBe(portKind(display.split("/")));
+                }
+            }
+        }
     });
 
     it("renders the Handle as the port's sole socket glyph — type-colored, and no second dot in the card", () => {

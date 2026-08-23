@@ -19,7 +19,7 @@
  */
 import type { Edge, Node } from "@xyflow/react";
 import type { ShaderGraphDocument } from "@gglab/shader-graph-core";
-import { getNodeDefinition, resolveGraphTypes, type GraphType } from "@gglab/shader-graph-core";
+import { getNodeDefinition, resolveGraphTypes, type GraphType, type ResolvedGraphTypes } from "@gglab/shader-graph-core";
 import { FLOW_GEOMETRY, handleTop } from "./flow-geometry.js";
 
 export { FLOW_GEOMETRY, portCenterY, portRowCount, portRowTop, handleTop, nodeCardHeight, flowGeometryCssVars } from "./flow-geometry.js";
@@ -77,24 +77,43 @@ export function handleStyle(side: "input" | "output"): Record<string, string> {
 }
 
 /**
- * A port's data category, taken from the core catalog's own type list.
- * Presentation only: the UI colors by category; the vocabulary (which
- * types exist) is core-owned. `generic` covers anything unmapped so no
- * port is silently forced into a wrong family.
+ * A port's data category — presentation classification over the core's
+ * OWN type sets (resolver concrete type or catalog declaration); the
+ * vocabulary (which types exist) is core-owned. Classification rule:
+ * a PURE set maps to its family (only `float` → scalar, only
+ * `float2/3/4` → vector, `Texture2D` → texture); a set that CROSSES
+ * scalar and vector (e.g. `float | float2 | float3 | float4`) is
+ * `generic` — the port honestly accepts either, so neither family may
+ * be forced. A concrete type is a pure set, so it always classifies to
+ * its own family. Nothing here may ever key on a port id.
  */
 export type PortKind = "scalar" | "vector" | "texture" | "generic";
 
-export function portKind(types: readonly GraphType[]): PortKind {
+export function portKind(types: readonly string[]): PortKind {
     if (types.includes("Texture2D")) {
         return "texture";
     }
-    if (types.includes("float2") || types.includes("float3") || types.includes("float4")) {
-        return "vector";
-    }
-    if (types.includes("float")) {
+    const hasScalar = types.includes("float");
+    const hasVector = types.includes("float2") || types.includes("float3") || types.includes("float4");
+    if (hasScalar && !hasVector) {
         return "scalar";
     }
+    if (hasVector && !hasScalar) {
+        return "vector";
+    }
     return "generic";
+}
+
+/**
+ * One port's presentation facts — a SINGLE shared source per port so
+ * the tooltip and the socket/edge color can never disagree: the core
+ * type resolver's concrete type (when the graph resolves one) wins and
+ * BOTH the display string and the kind derive from it; otherwise the
+ * port's own catalog declaration drives both.
+ */
+function portPresentation(declared: readonly GraphType[], concreteType: GraphType | undefined): { readonly display: string | undefined; readonly kind: PortKind } {
+    const types = concreteType !== undefined ? [concreteType] : declared;
+    return { display: types.length > 0 ? types.join("/") : undefined, kind: portKind(types) };
 }
 
 /** Diagnostic navigation target: what the canvas should highlight. */
@@ -138,29 +157,25 @@ function gridPosition(documentIndex: number): { x: number; y: number } {
     return { x: FLOW_LAYOUT.startX + column * FLOW_LAYOUT.columnWidth, y: FLOW_LAYOUT.startY + row * FLOW_LAYOUT.rowHeight };
 }
 
-function kindsFor(definition: ReturnType<typeof getNodeDefinition>): { inputKinds: PortKind[]; outputKinds: PortKind[] } {
-    if (definition === undefined) {
-        return { inputKinds: [], outputKinds: [] };
-    }
-    return {
-        inputKinds: definition.inputs.map((port) => portKind(port.types)),
-        outputKinds: definition.outputs.map((port) => portKind(port.types)),
-    };
-}
-
 /**
- * Per-port display type strings — presentation formatting over core
- * facts ONLY: the concrete type (core type resolver, via its own
- * `typeAt`) wins; otherwise the catalog's DECLARED type set for that
- * port (`NodePortDefinition.types`). Nothing here is keyed on the port
- * id — the UI never guesses a port's type.
+ * One side of a node as per-port presentation facts (display string +
+ * kind). Each port's TWO surfaces derive from the SAME core fact —
+ * resolver concrete type when the graph resolves one, else the
+ * catalog's declared set — so the tooltip and the socket/edge color
+ * can never contradict each other. Nothing is keyed on the port id.
  */
-function displayPortTypes(
-    ports: readonly { readonly id: string }[],
-    declared: readonly { readonly id: string; readonly types: readonly string[] }[],
-    concreteTypeAt: (portId: string) => string | undefined,
-): (string | undefined)[] {
-    return ports.map((port) => concreteTypeAt(port.id) ?? declared.find((entry) => entry.id === port.id)?.types.join("/"));
+function portFacts(ports: readonly { readonly id: string; readonly types: readonly GraphType[] }[], concreteTypeAt: (portId: string) => GraphType | undefined): {
+    readonly displays: (string | undefined)[];
+    readonly kinds: PortKind[];
+} {
+    const displays: (string | undefined)[] = [];
+    const kinds: PortKind[] = [];
+    for (const port of ports) {
+        const facts = portPresentation(port.types, concreteTypeAt(port.id));
+        displays.push(facts.display);
+        kinds.push(facts.kind);
+    }
+    return { displays, kinds };
 }
 
 export function documentToFlow(document: ShaderGraphDocument, focus: CanvasFocus | null = null): {
@@ -173,26 +188,24 @@ export function documentToFlow(document: ShaderGraphDocument, focus: CanvasFocus
     const nodes: ShaderFlowNode[] = document.nodes.map((node, index) => {
         const definition = getNodeDefinition(node.type);
         const highlight = focus?.nodeHighlights.find((entry) => entry.nodeId === node.id);
-        const { inputKinds, outputKinds } = kindsFor(definition);
         // Input ports take their concrete type from the connection's
         // source (document data) as resolved by the core resolver.
-        const inputConcrete = (portId: string): string | undefined => {
+        const inputConcrete = (portId: string): GraphType | undefined => {
             const source = document.connections.find((connection) => connection.to.nodeId === node.id && connection.to.portId === portId)?.from;
             return source !== undefined ? resolvedTypes.typeAt(source.nodeId, source.portId) : undefined;
         };
+        const outputConcrete = (portId: string): GraphType | undefined => resolvedTypes.typeAt(node.id, portId);
+        const inputs = definition !== undefined ? portFacts(definition.inputs, inputConcrete) : { displays: [], kinds: [] };
+        const outputs = definition !== undefined ? portFacts(definition.outputs, outputConcrete) : { displays: [], kinds: [] };
         const data: ShaderNodeData = {
             label: node.label ?? definition?.displayName ?? node.type,
             nodeType: node.type,
             inputPorts: definition?.inputs.map((port) => port.id) ?? [],
             outputPorts: definition?.outputs.map((port) => port.id) ?? [],
-            inputPortKinds: inputKinds,
-            outputPortKinds: outputKinds,
-            inputPortTypes: displayPortTypes(definition?.inputs ?? [], definition?.inputs ?? [], inputConcrete),
-            outputPortTypes: displayPortTypes(
-                definition?.outputs ?? [],
-                definition?.outputs ?? [],
-                (portId) => resolvedTypes.typeAt(node.id, portId),
-            ),
+            inputPortKinds: inputs.kinds,
+            outputPortKinds: outputs.kinds,
+            inputPortTypes: inputs.displays,
+            outputPortTypes: outputs.displays,
             nodeCategory: definition?.category,
             knownToCatalog: definition !== undefined,
             focused: highlight !== undefined,
@@ -211,7 +224,7 @@ export function documentToFlow(document: ShaderGraphDocument, focus: CanvasFocus
         const focused = focus?.connectionHighlights.includes(connection.id) ?? false;
         // Edge data category comes from the source (producer) port's type — the
         // same core fact the source handle is colored from.
-        const kind = edgeKind(document, connection.from.nodeId, connection.from.portId);
+        const kind = edgeKind(document, resolvedTypes, connection.from.nodeId, connection.from.portId);
         return {
             id: connection.id,
             source: connection.from.nodeId,
@@ -225,11 +238,19 @@ export function documentToFlow(document: ShaderGraphDocument, focus: CanvasFocus
     return { nodes, edges };
 }
 
-function edgeKind(document: ShaderGraphDocument, nodeId: string, portId: string): PortKind {
+/**
+ * The producer port's data category — the SAME core fact the source
+ * socket is colored from (resolver concrete type first, declared set
+ * otherwise), so an edge and its source socket always agree.
+ */
+function edgeKind(document: ShaderGraphDocument, resolvedTypes: ResolvedGraphTypes, nodeId: string, portId: string): PortKind {
     const node = document.nodes.find((candidate) => candidate.id === nodeId);
     const definition = node !== undefined ? getNodeDefinition(node.type) : undefined;
     const port = definition?.outputs.find((candidate) => candidate.id === portId);
-    return port !== undefined ? portKind(port.types) : "generic";
+    if (port === undefined) {
+        return "generic";
+    }
+    return portPresentation(port.types, resolvedTypes.typeAt(nodeId, portId)).kind;
 }
 
 /** Authored canvas positions of one node (session state, never semantics). */

@@ -1,3 +1,5 @@
+// Role: REGRESSION EVIDENCE — the node anatomy (card rect, full-height
+// category rail, header divider, port row rhythm, socket tangency).
 // CDP probe (Node's built-in WebSocket, no deps): reads the live node
 // anatomy in the rendered app — card rect, category rail rect, header
 // divider, port row rhythm, and socket tangency — for the first two

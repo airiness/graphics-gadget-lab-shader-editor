@@ -1,3 +1,6 @@
+// Role: ONE-SHOT EVIDENCE — the CJK cap-band offset measurement that
+// justified the 1.5px button label nudge (the nudge itself is now
+// locked by the button-kit test; re-run this only if fonts change).
 // Font line-metric probe — empirically locates the (ascent, descent,
 // x-height, cap-height) metric set inside each candidate font's OS/2
 // table (no hardcoded offsets): it requires a ratio-sane ascent/descent

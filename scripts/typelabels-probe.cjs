@@ -1,5 +1,8 @@
-// CDP probe (Node's built-in WebSocket, no deps): reads the rendered
-// port type chips in the live app (one per node, input + output sides).
+// Role: REGRESSION EVIDENCE — the chipless type contract (no permanent
+// type column; the type lives in the port's hover tooltip).
+// CDP probe (Node's built-in WebSocket, no deps): verifies the live app
+// renders NO permanent type chips (chipCount === 0) and that each
+// populated port cell carries the hover `title = "name — type"`.
 // Usage: launch Edge headless with --remote-debugging-port=PORT first.
 /* eslint-disable */
 const http = require("http");

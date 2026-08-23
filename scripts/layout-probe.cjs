@@ -1,3 +1,5 @@
+// Role: REGRESSION EVIDENCE — the canvas flow geometry (node size, port
+// row rhythm, fitView zoom clamp over the viewport).
 // Layout probe over CDP (Node's built-in WebSocket, no dependencies):
 // verifies the library section computes to a vertical stack (the
 // flex-col regression) and reports the action-group gap.

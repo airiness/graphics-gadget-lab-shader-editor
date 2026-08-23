@@ -1,6 +1,10 @@
+// Role: REGRESSION EVIDENCE — the socket contract (entirely outside the
+// card, inner edge tangent to the border line; hollow ring = unconnected,
+// solid = connected; category colors; size).
 // CDP probe (Node's built-in WebSocket, no deps): verifies the socket
-// geometry in the real renderer — the socket center sits ON the card
-// border line (straddling), the size, and the hollow/solid state colors.
+// geometry in the real renderer — the socket sits ENTIRELY OUTSIDE the
+// card with its inner edge tangent to the card border line (measured as
+// center offset minus half size), plus the size and hollow/solid state.
 // Usage: launch Edge headless with --remote-debugging-port=PORT first.
 /* eslint-disable */
 const http = require("http");
