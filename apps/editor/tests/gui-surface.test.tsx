@@ -17,7 +17,8 @@ import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { renderToString } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { AppErrorBoundary } from "../src/app-error-boundary.js";
 
 const uiRoot = join(dirname(fileURLToPath(import.meta.url)), "../../../packages/editor-ui/src");
 const appCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../src/app.css"), "utf8");
@@ -1525,6 +1526,52 @@ describe("flow geometry (single source of truth)", () => {
         // The geometry layer must not re-hardcode a legacy border color.
         const adapter = readFileSync(join(uiRoot, "flow/flow-adapter.ts"), "utf8");
         expect(adapter).not.toContain("2px solid #0f1319");
+    });
+});
+
+// --- application-level rendering error: the second line of defense -----------
+
+describe("application-level rendering error (the second line of defense)", () => {
+    function Breaks(): null {
+        throw new Error("the render tree is broken");
+    }
+
+    it("a render-path crash surfaces the recovery card — the window frame never goes blank", () => {
+        const reload = vi.fn();
+        const originalLocation = window.location;
+        Object.defineProperty(window, "location", { value: { ...originalLocation, reload }, configurable: true });
+        const view = render(
+            <AppErrorBoundary>
+                <Breaks />
+            </AppErrorBoundary>,
+        );
+        const unmount = () => view.unmount();
+        try {
+            // The card is the surface: titled, honest text, verbatim error
+            // line, one recovery action.
+            expect(screen.getByText("The editor hit a rendering error")).toBeTruthy();
+            expect(screen.getByText((content) => content !== null && content.includes("in-memory session"))).toBeTruthy();
+            expect(screen.getByText("the render tree is broken")).toBeTruthy();
+            const button = screen.getByRole("button", { name: "Reload the window to restore the shell" });
+            act(() => button.click());
+            expect(reload).toHaveBeenCalledTimes(1);
+        } finally {
+            unmount();
+            Object.defineProperty(window, "location", { value: originalLocation, configurable: true });
+        }
+    });
+
+    it("sits ABOVE the app root (main.tsx) so a crash can never take down the card itself", () => {
+        const entry = read("../src/main.tsx");
+        expect(entry).toMatch(/<AppErrorBoundary>[\s\S]*?<App \/?>[\s\S]*?<\/AppErrorBoundary>/);
+    });
+
+    it("ranks one step above the close prompt on the same ladder, on the same card recipe", () => {
+        const sheet = read("../src/app.css");
+        expect(sheet).toMatch(/\.gglab-error-veil[\s\S]*?z-index: 60/);
+        expect(sheet).toMatch(/\.gglab-close-prompt[\s\S]*?z-index: 50/);
+        expect(sheet).toMatch(/\.gglab-error-card[\s\S]*?background: var\(--panel-2\)/);
+        expect(sheet).toMatch(/\.gglab-error-line[\s\S]*?font-family: var\(--font-mono\)/);
     });
 });
 

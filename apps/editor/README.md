@@ -76,6 +76,16 @@ shader compilation, or backend target policy.
    the new document is a delete/reconnect hazard) plus the diagnostic
    focus and the emission preview, both of which are bound to the
    revision they were derived from.
+- **Rendering error — the second line of defense** — the
+  first line is "no session operation may throw" (the auto-layout
+  crash on the diagnostics scene was fixed exactly there). The
+  `AppErrorBoundary` wraps the app root in `main.tsx` so that the
+  bug class that is not known yet can never blank the window: a
+  render-path crash surfaces the topmost recovery card (one rank
+  above the close prompt on the same chrome ladder) that states the
+  honest consequence (the in-memory session was lost with the broken
+  render tree), shows the error's first line verbatim in a mono
+  slot, and offers the single action: **Reload the window**.
 - **Golden graphs — the fixed smoke scenes** — `…/tests/fixtures/
   SurfaceTextureGolden.shadergraph` (fully legal v2 surface: scalar,
   vector and texture parameters, UV, typed-channel sampling, the math

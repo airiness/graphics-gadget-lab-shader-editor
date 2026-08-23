@@ -372,6 +372,65 @@ body {
     color: var(--muted);
 }
 
+/* ---- application-level rendering error ------------------------------------
+   The second line of defense against an uncaught throw in the render path:
+   the window stays open, holding the topmost recovery card (one rank above
+   the close prompt on the same ladder). The in-memory session is gone by
+   definition (it lived in the dead render tree) — the card says so plainly
+   and offers the single recovery action. Same chrome-card recipe as the
+   close prompt: one stronger veil, the same ladder surface. */
+
+.gglab-error-veil {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--bg) 76%, transparent);
+}
+
+.gglab-error-card {
+    width: min(440px, calc(100vw - 48px));
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    padding: 18px 20px;
+    box-shadow: var(--shadow-2);
+}
+
+.gglab-error-title {
+    margin: 0 0 8px;
+    font-size: var(--type-display);
+    font-weight: var(--weight-strong);
+    letter-spacing: 0.01em;
+    color: var(--text);
+}
+
+.gglab-error-text {
+    margin: 0 0 14px;
+    font-size: var(--type-body);
+    line-height: var(--lh-body);
+    color: var(--muted);
+}
+
+/* The error's first line: verbatim, mono, undecorated — a diagnostic slot,
+   not a status chip. */
+.gglab-error-line {
+    display: block;
+    margin: 0 0 14px;
+    padding: 8px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-1);
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+    line-height: var(--lh-code);
+    color: var(--muted);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
 /* ---- primitives -----------------------------------------------------------
    Field / Chip / Panel / Fact — the shared language. The button language
    lives in the editor-ui Button kit (one base, six variants, five states);
