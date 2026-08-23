@@ -14,7 +14,15 @@ export function isEditingTextTarget(target: EventTarget | null | undefined): boo
     if (target instanceof HTMLElement === false) {
         return false;
     }
-    // Attribute-based contenteditable (any non-"false" value) as well as the
-    // plain form controls — one predicate, no per-control branching.
-    return target.closest("input, textarea, select, [contenteditable]") !== null;
+    if (target.closest("input, textarea, select") !== null) {
+        return true;
+    }
+    // A contenteditable region — but one that is actually EDITABLE. The
+    // attribute also exists with a "false" value (read-only rich text),
+    // and that is not an editing surface.
+    const region = target.closest("[contenteditable]");
+    if (region === null) {
+        return false;
+    }
+    return region.getAttribute("contenteditable") !== "false";
 }

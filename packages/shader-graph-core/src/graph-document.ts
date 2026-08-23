@@ -637,22 +637,44 @@ export function removeConnection(document: ShaderGraphDocument, connectionId: st
 }
 
 /**
- * Result of the core's port-disconnect service (remove every connection
- * attached to one node port, in EITHER direction — the fan-out of an
- * output, the incoming of an input, whatever actually exists in the data).
+ * A node port is a THREE-part identity: node + port id + SIDE. The
+ * catalog itself ships same-named input/output pairs (Saturate and
+ * OneMinus both expose `value` on BOTH sides), so the side is not a
+ * UI convenience — it is part of the port's identity, and it is what a
+ * disconnect operation is scoped to.
+ */
+export type PortSide = "input" | "output";
+
+export interface PortReference {
+    readonly nodeId: string;
+    readonly portId: string;
+    readonly side: PortSide;
+}
+
+/**
+ * Result of the core's port-disconnect service: remove every connection
+ * attached to exactly ONE side of a port — the incoming of an input, the
+ * fan-out of an output.
+ *
+ * Port identity is nodeId + portId + SIDE. The catalog carries same-named
+ * input/output ports (Saturate, OneMinus, ...), so dropping the side would
+ * make this service ambiguous and destructive: for OneMinus, `value` is
+ * legimately TWO different ports. The caller always knows which handle
+ * was clicked (a rendered handle has a side); the core never guesses the
+ * other one.
  *
  * Same strictness rules as the single-connection removal: the node must
  * exist (a missing node is an unresolved reference); for node types the
- * catalog knows, the port must be one of the type's ports (a typo in a
+ * catalog knows, the port must exist on the requested SIDE (a typo in a
  * rendered handle or a stale selection is an explicit UNKNOWN_PORT, never
  * a silent no-op that pretends to have worked); node types the catalog
  * does not know keep their data and are left to the port ids present in
  * the document. Removal is non-validating (a graph may end up missing a
  * required input — it reports that itself afterwards).
  *
- * Zero attachments is a genuine no-op: `ok`, the SAME document instance,
- * `removed` = 0 — callers that apply it change nothing (and nothing
- * dirties, because the canonical bytes are identical).
+ * Zero attachments on that side is a genuine no-op: `ok`, the SAME
+ * document instance, `removed` = 0 — callers that apply it change nothing
+ * (and nothing dirties, because the canonical bytes are identical).
  */
 export interface RemoveConnectionsAtPortResult {
     readonly ok: boolean;
@@ -663,44 +685,53 @@ export interface RemoveConnectionsAtPortResult {
 
 export function removeConnectionsAtPort(
     document: ShaderGraphDocument,
-    nodeId: string,
-    portId: string,
+    port: PortReference,
 ): RemoveConnectionsAtPortResult {
-    const node = document.nodes.find((candidate) => candidate.id === nodeId);
+    const node = document.nodes.find((candidate) => candidate.id === port.nodeId);
     if (node === undefined) {
         return {
             ok: false,
             document: null,
             removed: 0,
             diagnostics: [
-                errorAt("$.nodes", DiagnosticCode.UnresolvedNodeReference, `The port disconnect targets node "${nodeId}", which does not exist at this revision.`),
+                errorAt("$.nodes", DiagnosticCode.UnresolvedNodeReference, `The port disconnect targets node "${port.nodeId}", which does not exist at this revision.`),
             ],
         };
     }
     // Port existence is judged by the catalog — but only when the catalog
-    // knows this node type. Unknown types are retained data: their ports
-    // are whatever ids the document carries, so the removal proceeds.
+    // knows this node type, and only on the REQUESTED side ("value" is
+    // two distinct ports of OneMinus). Unknown types are retained data:
+    // their ports are whatever ids the document carries, so the removal
+    // proceeds.
     const definition = getNodeDefinition(node.type);
     if (definition !== undefined) {
-        const declared = [...definition.inputs, ...definition.outputs];
-        if (declared.some((port) => port.id === portId) === false) {
+        const declared = port.side === "input" ? definition.inputs : definition.outputs;
+        if (declared.some((candidate) => candidate.id === port.portId) === false) {
             return {
                 ok: false,
                 document: null,
                 removed: 0,
                 diagnostics: [
-                    errorAt(`$.nodes[id="${nodeId}"].ports`, DiagnosticCode.UnknownPort, `Port "${portId}" is not a port of the "${node.type}" node at this revision.`),
+                    errorAt(
+                        `$.nodes[id="${port.nodeId}"].ports`,
+                        DiagnosticCode.UnknownPort,
+                        `Port "${port.portId}" is not ${port.side === "input" ? "an input" : "an output"} of the "${node.type}" node at this revision.`,
+                    ),
                 ],
             };
         }
     }
-    const attached = document.connections.filter(
-        (connection) =>
-            (connection.from.nodeId === nodeId && connection.from.portId === portId) ||
-            (connection.to.nodeId === nodeId && connection.to.portId === portId),
-    );
+    // ONLY this side: an input holds target ends, an output holds source
+    // ends. The other side's same-named port is a different port and its
+    // attachments survive.
+    const isAttached = (connection: GraphConnection): boolean =>
+        port.side === "input"
+            ? connection.to.nodeId === port.nodeId && connection.to.portId === port.portId
+            : connection.from.nodeId === port.nodeId && connection.from.portId === port.portId;
+    const attached = document.connections.filter(isAttached);
     if (attached.length === 0) {
-        // Honest no-op: nothing attached, nothing to change, same instance.
+        // Honest no-op: nothing attached on this side, nothing to change,
+        // same instance.
         return { ok: true, document, removed: 0, diagnostics: [] };
     }
     const remaining = document.connections.filter((connection) => attached.includes(connection) === false);
@@ -752,13 +783,20 @@ export function reconnectConnection(
             ],
         };
     }
+    const previousEnd = change.side === "from" ? connection.from : connection.to;
+    // A no-op move (the endpoint already sits where the change sends it)
+    // returns the INPUT instance: nothing changed, nothing dirties, and
+    // callers see the canonical no-op contract.
+    if (previousEnd.nodeId === change.nodeId && previousEnd.portId === change.portId) {
+        return { ok: true, document, diagnostics: [] };
+    }
+    // Move the SAME endpoint: everything attached to it today survives
+    // (its unknownFields are forwarded-compat data that the serializer
+    // flattens back out — dropping them would break the round-trip
+    // preservation contract).
     const moved: GraphConnection = {
         ...connection,
-        [change.side]: {
-            nodeId: change.nodeId,
-            portId: change.portId,
-            unknownFields: {},
-        },
+        [change.side]: { ...previousEnd, nodeId: change.nodeId, portId: change.portId },
     };
     const index = document.connections.findIndex((candidate) => candidate.id === connectionId);
     const connections = [...document.connections.slice(0, index), moved, ...document.connections.slice(index + 1)];

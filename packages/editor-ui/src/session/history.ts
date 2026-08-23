@@ -11,6 +11,10 @@
  * - recording is EXPLICIT: a refused/failed authoring operation must not
  *   be recorded (recording a no-op would make the next undo "undo nothing"
  *   — exposed stale state is not a change);
+ * - a no-op NEVER records (recordHistory with the SAME instance returns
+ *   the history untouched — and, equally important, it does NOT clear
+ *   the redo branch: a change of zero magnitude must not throw away the
+ *   user's redo steps);
  * - bounded (HISTORY_LIMIT, one deterministic cap): the oldest steps drop
  *   first, deterministically, for identical input sequences;
  * - undoing/redoing swaps the exact previous/next document instances —
@@ -48,6 +52,12 @@ export function createHistory<T>(present: T, limit: number = HISTORY_LIMIT): Doc
  * after pair is exactly what undo/redo restore — the atomic documents.
  */
 export function recordHistory<T>(history: DocumentHistory<T>, next: T, label: string): DocumentHistory<T> {
+    // A no-op (the same instance) is not a change: nothing is recorded
+    // AND the existing redo branch is preserved — a zero-magnitude
+    // action must never discard the user's redo steps.
+    if (Object.is(history.present, next)) {
+        return history;
+    }
     const entry: HistoryEntry<T> = { before: history.present, after: next, label };
     let past: HistoryEntry<T>[] = [...history.past, entry];
     if (past.length > history.limit) {

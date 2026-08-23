@@ -16,6 +16,18 @@ export function withNodePosition(
     position: { x: number; y: number },
 ): ShaderGraphDocument {
     const previous = document.editorMetadata.nodes[nodeId];
+    // A no-op placement (the node already sits there — a zero-movement
+    // drag stop, a repeated auto-layout, ...) returns the INPUT instance:
+    // nothing changed, so nothing dirties and no history step is
+    // fabricated for it.
+    if (
+        previous !== undefined &&
+        previous.position !== undefined &&
+        previous.position.x === position.x &&
+        previous.position.y === position.y
+    ) {
+        return document;
+    }
     const state: NodeEditorState =
         previous === undefined ? { position, unknownFields: {} } : { ...previous, position };
     return {

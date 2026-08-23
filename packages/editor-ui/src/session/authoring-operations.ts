@@ -325,18 +325,21 @@ export function removeConnection(document: ShaderGraphDocument, connectionId: st
 }
 
 /**
- * Disconnect EVERY connection attached to one node port (both sides —
- * the fan-out of an output, the incoming of an input). The core owns the
- * strict semantics (node must exist, known-type ports must exist, zero
- * attachments is an honest no-op of the SAME document); the wrapper
- * keeps it on the authoring-result path like every other operation.
+ * Disconnect the connections attached to ONE side of a node port — the
+ * incoming of an input, the fan-out of an output. The port is passed as
+ * the core's full three-part identity (node + port + SIDE): the catalog
+ * ships same-named input/output ports (Saturate, OneMinus), so the side
+ * is part of identity, not convenience. The UI knows which handle was
+ * clicked and passes it through; the core owns the strict semantics
+ * (node must exist, the port must exist on THAT side, zero attachments
+ * is an honest no-op of the SAME document); the wrapper keeps it on the
+ * authoring-result path like every other operation.
  */
 export function removeConnectionsAtPort(
     document: ShaderGraphDocument,
-    nodeId: string,
-    portId: string,
+    port: { readonly nodeId: string; readonly portId: string; readonly side: "input" | "output" },
 ): AuthoringResult {
-    const result = removeConnectionsAtPortCore(document, nodeId, portId);
+    const result = removeConnectionsAtPortCore(document, port);
     if (result.ok === false || result.document === null) {
         const reason = result.diagnostics[0]?.message ?? "The port disconnect was not applied at this revision.";
         return { document, applied: false, refusal: { reason }, createdId: undefined };

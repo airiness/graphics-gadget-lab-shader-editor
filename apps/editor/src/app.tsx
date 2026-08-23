@@ -200,15 +200,33 @@ export function App() {
      * current), and the operation notes — while the saved-text pane shows
      * the new document's canonical serialization.
      */
+    function clearCanvasInteractionSession(): void {
+        // Connection ids are DOCUMENT-scoped: a stable id is meaningful
+        // inside one document and is NOT a cross-document identity. Any
+        // transition that changes which document is current (open/import,
+        // or a history step back/forward) MUST invalidate the canvas
+        // selection — a stale selection pointing at an id that happens to
+        // exist in the new document is an outright delete/reconnect
+        // hazard. The diagnostic focus and the emission preview are
+        // bound to the document revision they were derived from, so they
+        // go with the document change (conservative: generate again
+        // rather than show another revision's HLSL).
+        setSelectedConnectionId(null);
+        setReconnectArmed(null);
+        setEdgeMenu(null);
+        setFocus(null);
+        setEmission(null);
+    }
+
     const replaceDocumentSession = (next: ShaderGraphDocument, source: DocumentProvenance): void => {
-        // A new document is a NEW history line, not an undoable step.
+        // A new document is a NEW history line, not an undoable step —
+        // and every canvas state bound to the old document is stale.
         setHistory(createHistory(next));
+        clearCanvasInteractionSession();
         // A new document becomes the new baseline — the session is not
         // dirty merely because its text was imported or a file was
         // opened.
         setSession(createSession(source, next));
-        setFocus(null);
-        setEmission(null);
         setOperationNotes([]);
         setSavedText(serializeShaderGraphDocument(next));
     };
@@ -542,26 +560,19 @@ export function App() {
     // (The document IS history.present: one transition, no drift. The
     // dirty star stays derived — undoing to the saved baseline simply
     // un-dirties, no extra bookkeeping.)
-    const clearCanvasSelection = (): void => {
-        // Stepping back/forward can leave the current selection pointing
-        // at something that no longer exists: clear it, always.
-        setSelectedConnectionId(null);
-        setReconnectArmed(null);
-        setEdgeMenu(null);
-    };
     const onUndo = (): void => {
         if (canUndoHistory(history) === false) {
             return;
         }
         setHistory((previous) => undoHistory(previous));
-        clearCanvasSelection();
+        clearCanvasInteractionSession();
     };
     const onRedo = (): void => {
         if (canRedoHistory(history) === false) {
             return;
         }
         setHistory((previous) => redoHistory(previous));
-        clearCanvasSelection();
+        clearCanvasInteractionSession();
     };
 
     // ---- advanced gestures (port disconnect + reconnect) ------------------
@@ -578,7 +589,19 @@ export function App() {
             // (the core's atomic port removal — the fan-out of an output,
             // the incoming of an input, both-side honest). The selection
             // may now be stale: clear it either way.
-            applyAuthoring(removeConnectionsAtPort(document, activation.nodeId, activation.portId), `disconnected ${activation.nodeId}.${activation.portId}`);
+            // The clicked handle KNOWS its side (a rendered input handle
+            // or an output handle) — pass the full port identity down.
+            // The catalog ships same-named input/output ports, so side
+            // scoping is what keeps "Alt+click value on OneMinus" from
+            // severing the other side's wire.
+            applyAuthoring(
+                removeConnectionsAtPort(document, {
+                    nodeId: activation.nodeId,
+                    portId: activation.portId,
+                    side: activation.isInput ? "input" : "output",
+                }),
+                `disconnected ${activation.isInput ? "input" : "output"} ${activation.nodeId}.${activation.portId}`,
+            );
             setSelectedConnectionId(null);
             setReconnectArmed(null);
             return;

@@ -62,12 +62,20 @@ shader compilation, or backend target policy.
    state transition. Rules: one user intent = one labeled step ("removed
    connection c3", "automatic layout"); a single auto-layout pass is ONE
    step (not node by node); a REFUSED operation is never recorded (undo
-   must never "undo nothing"); opening/importing a document RESETS the
+   must never "undo nothing"), and a NO-OP is never recorded either —
+   the store is identity-guarded, so a zero-magnitude action cannot
+   discard the user's redo branch; opening/importing a document RESETS the
    line (provenance is not undoable); the shared text-field guard keeps
    Ctrl+Z inside the library search / JSON viewport for that field's own
    editor; dirty stays derived (undoing back to the baseline un-dirties).
    Undo/Redo land as a disabled-aware toolbar pair (Ctrl+Z / Ctrl+Y /
-   Ctrl+Shift+Z) and clear the canvas selection, which may become stale.
+   Ctrl+Shift+Z); and every document transition (open/import, undo,
+   redo) clears the whole canvas session through one shared helper —
+   selection, armed reconnect and menu (connection ids are
+   document-scoped: a stale selection naming an id that ALSO exists in
+   the new document is a delete/reconnect hazard) plus the diagnostic
+   focus and the emission preview, both of which are bound to the
+   revision they were derived from.
 - **One fact, one color (owner decision, locked)** — a connected input
    socket is colored by the type it ACTUALLY carries (the concrete
    resolved type of its incoming wire), so the socket, the wire, and the
@@ -79,11 +87,16 @@ shader compilation, or backend target policy.
 - **Connection lifecycle (port gestures)** — the advanced pair, on the
    same "core owns the semantics" rule. Both land as ONE atomic core
    operation each (never a UI-side remove+add sequence):
-  - **Alt + click a port** = disconnect EVERYTHING attached to that port
-    (the fan-out of an output, the incoming of an input — both-side
-    honest, one operation). Stale node → `UNRESOLVED_NODE_REFERENCE`;
-    a port the catalog denies for a known type → `UNKNOWN_PORT`; zero
-    attachments → honest no-op (same document instance, nothing dirties).
+  - **Alt + click a port** = disconnect EVERYTHING attached to that
+    ONE side of the port (the incoming of an input, the fan-out of an
+    output). The port is passed to the core as the full three-part
+    identity — node + port + SIDE — because the catalog itself ships
+    same-named input/output ports (Saturate, OneMinus: `value` is TWO
+    ports there); the clicked handle knows its side, the core never
+    guesses the other one. Stale node → `UNRESOLVED_NODE_REFERENCE`;
+    a port the catalog denies on THAT side for a known type →
+    `UNKNOWN_PORT`; zero attachments on that side → honest no-op (same
+    document instance, nothing dirties, no history step).
   - **Ctrl + click a connection** = arm the reconnect (a top-center hint
     chip shows it; the armed edge keeps the selection look). Then a plain
     click on ANY port confirms: the port's rendered side is the semantic

@@ -663,17 +663,25 @@ describe("typed port presentation (core types → data categories)", () => {
             const editable = document.createElement("div");
             editable.setAttribute("contenteditable", "true");
             document.body.appendChild(editable);
+            const nested = document.createElement("span"); // a click target INSIDE the region
+            editable.appendChild(nested);
+            const readOnly = document.createElement("div");
+            readOnly.setAttribute("contenteditable", "false"); // present but NOT editable
+            document.body.appendChild(readOnly);
             const plain = document.createElement("div");
             document.body.appendChild(plain);
             expect(isEditingTextTarget(input)).toBe(true);
             expect(isEditingTextTarget(textarea)).toBe(true);
             expect(isEditingTextTarget(editable)).toBe(true);
+            expect(isEditingTextTarget(nested)).toBe(true); // the region's editability propagates down
+            expect(isEditingTextTarget(readOnly)).toBe(false); // contenteditable="false" is not an editing surface
             expect(isEditingTextTarget(plain)).toBe(false);
             expect(isEditingTextTarget(document.body)).toBe(false);
             expect(isEditingTextTarget(null)).toBe(false);
             input.remove();
             textarea.remove();
             editable.remove();
+            readOnly.remove();
             plain.remove();
         });
 
@@ -716,9 +724,9 @@ describe("typed port presentation (core types → data categories)", () => {
     describe("connection lifecycle — port gestures", () => {
         it("disconnects a whole port through the authoring path, preserving unrelated wires", () => {
             const document = loaded(validV1Document()); // c1..c5
-            // n.c ("value") fans out to BaseColor (c1) and Emissive (c2) —
-            // BOTH go in one atomic core operation; c3..c5 stay.
-            const result = removeConnectionsAtPort(document, "n.c", "value");
+            // n.c's OUTPUT "value" fans out to BaseColor (c1) and Emissive
+            // (c2) — BOTH go in one atomic core operation; c3..c5 stay.
+            const result = removeConnectionsAtPort(document, { nodeId: "n.c", portId: "value", side: "output" });
             expect(result.applied).toBe(true);
             expect(result.document?.connections.map((entry) => entry.id)).toEqual(["c3", "c4", "c5"]);
             expect(result.document?.nodes).toEqual(document.nodes);
@@ -727,7 +735,7 @@ describe("typed port presentation (core types → data categories)", () => {
 
         it("refuses a port the catalog denies, returning the SAME document by reference", () => {
             const document = loaded(validV1Document());
-            const result = removeConnectionsAtPort(document, "n.out", "NonexistentPort");
+            const result = removeConnectionsAtPort(document, { nodeId: "n.out", portId: "NonexistentPort", side: "input" });
             expect(result.applied).toBe(false);
             expect(result.document).toBe(document);
             expect(result.refusal?.reason).toContain("NonexistentPort");
@@ -737,7 +745,7 @@ describe("typed port presentation (core types → data categories)", () => {
             // Free one declared input (drop c5 → Opacity has no wire at all).
             const record = JSON.parse(validV1Document()) as { connections: readonly { id: string }[] };
             const freed = loaded(JSON.stringify({ ...JSON.parse(validV1Document()), connections: record.connections.filter((entry) => entry.id !== "c5") }));
-            const result = removeConnectionsAtPort(freed, "n.out", "Opacity");
+            const result = removeConnectionsAtPort(freed, { nodeId: "n.out", portId: "Opacity", side: "input" });
             expect(result.applied).toBe(true);
             expect(result.document).toBe(freed); // identical instance → identical bytes → not dirty
         });
@@ -815,7 +823,10 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(viewport).toMatch(/onClick={portClick\(row\.outputId, false\)}/);
             const app = read("../src/app.tsx");
             // Alt + port: the core's atomic port removal (never two ops).
-            expect(app).toMatch(/removeConnectionsAtPort\(document, activation\.nodeId, activation\.portId\)/);
+            // The clicked handle's SIDE is passed through — the catalog
+            // ships same-named input/output ports (OneMinus, Saturate), so
+            // the disconnect must be scoped to the handle that was clicked.
+            expect(app).toMatch(/side: activation\.isInput \? "input" : "output"/);
             // Armed confirm: the HANDLE'S SIDE is the semantic fact —
             // input = the new target end, output = the new source end.
             expect(app).toMatch(/side: activation\.isInput \? "to" : "from"/);
@@ -866,6 +877,41 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(history.present).toBe("n6");
             expect(history.past.map((entry) => entry.label)).toEqual(["op 4", "op 5", "op 6"]);
             expect(HISTORY_LIMIT).toBe(50); // the app's default cap
+        });
+
+        it("a zero-magnitude action NEVER records and NEVER discards the redo branch", () => {
+            let history = createHistory("a");
+            history = recordHistory(history, "b", "first");
+            const undone = undoHistory(history); // "first" is redo-able
+            expect(canRedoHistory(undone)).toBe(true);
+            // The no-op: the SAME instance is "applied" again (a
+            // zero-attachment disconnect, a zero-movement drag stop, a
+            // repeated layout — all canonical no-ops on the same
+            // instance).
+            const afterNoOp = recordHistory(undone, "a", "an action that changed nothing");
+            expect(afterNoOp).toBe(undone); // the history itself is unchanged
+            expect(afterNoOp.past).toHaveLength(0);
+            expect(canRedoHistory(afterNoOp)).toBe(true); // the redo branch survives
+            const again = redoHistory(afterNoOp);
+            expect(again.present).toBe("b");
+        });
+
+        it("a document transition clears the ENTIRE canvas session: selection, armed, menu, focus AND emission", () => {
+            // Stable ids are document-scoped: a stale selection naming an
+            // id that ALSO exists in the new document is a delete/reconnect
+            // hazard. Focus and emission are bound to the revision they
+            // came from. One helper, three callers, no forgotten state.
+            const app = read("../src/app.tsx");
+            expect(app).toMatch(/function clearCanvasInteractionSession\(\): void/);
+            const helper = app.match(/function clearCanvasInteractionSession\(\): void \{[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
+            expect(helper).toContain("setSelectedConnectionId(null)");
+            expect(helper).toContain("setReconnectArmed(null)");
+            expect(helper).toContain("setEdgeMenu(null)");
+            expect(helper).toContain("setFocus(null)"); // a stale highlight is never shown
+            expect(helper).toContain("setEmission(null)"); // HLSL stays bound to its revision
+            expect(app).toMatch(/const replaceDocumentSession[\s\S]*?clearCanvasInteractionSession\(\)/);
+            expect(app).toMatch(/const onUndo[\s\S]*?clearCanvasInteractionSession\(\)/);
+            expect(app).toMatch(/const onRedo[\s\S]*?clearCanvasInteractionSession\(\)/);
         });
 
         it("discards the redo branch when a new intent is recorded after an undo", () => {
@@ -1639,6 +1685,17 @@ describe("palette → canvas drag and drop", () => {
         if (decoded !== null && decoded.kind === "parameter") {
             expect(decoded.valueType).toBe("float");
         }
+    });
+
+    it("a zero-movement placement patch returns the SAME document instance (a canonical no-op)", () => {
+        const base = loaded(validV1Document());
+        const seeded = withNodePosition(base, "n.r", { x: 5, y: 5 });
+        // …and patching that node back to exactly the same place is a no-op:
+        // no new instance (nothing dirties, and no history step can be
+        // fabricated out of it).
+        expect(withNodePosition(seeded, "n.r", { x: 5, y: 5 })).toBe(seeded);
+        // A different place still makes a real change.
+        expect(withNodePosition(seeded, "n.r", { x: 6, y: 5 })).not.toBe(seeded);
     });
 
     it("a drop with no ready flow instance is a no-op (never a silent (0,0) creation)", () => {
