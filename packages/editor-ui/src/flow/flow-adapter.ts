@@ -51,12 +51,17 @@ export function portTop(index: number): number {
 
 /**
  * Inline style for a port's Handle, positioned RELATIVE TO ITS OWN PORT
- * ROW (the row cell is `position: relative`): `top: 50%` + centering
- * transform puts the socket dead-center on the row, and the negative
- * left/right inset makes it straddle the card border. Size and inset come
- * from the single geometry source, so the socket center still sits exactly
- * on the shared `portCenterY` axis — the row layout establishes the
- * position relation (no node-root index→top mapping for sockets).
+ * ROW (the row cell is `position: relative`): `top: 50%` + the centering
+ * transform dead-centers the socket on the row, and the left/right inset
+ * places the socket OUTSIDE the card with its inner edge exactly
+ * tangent to the card border line (inset = half the socket + the card's
+ * 1px border) — attached, never floating, and a hollow ring never
+ * overlaps the border. Size and inset come from the single geometry
+ * source, so the socket center still sits exactly on the shared
+ * `portCenterY` axis and xyflow's measured edge anchor terminates on
+ * the socket center. The socket's color and connection state (hollow
+ * ring / solid dot) are CSS-owned — see the app sheet; geometry lives
+ * here.
  */
 export function handleStyle(side: "input" | "output"): Record<string, string> {
     const g = FLOW_GEOMETRY;
@@ -67,8 +72,6 @@ export function handleStyle(side: "input" | "output"): Record<string, string> {
         height: `${g.handleSize}px`,
         minWidth: `${g.handleSize}px`,
         minHeight: `${g.handleSize}px`,
-        border: "2px solid #0f1319",
-        borderRadius: "50%",
         ...(side === "input" ? { left: `${-g.handleInset}px` } : { right: `${-g.handleInset}px` }),
     };
 }

@@ -851,25 +851,32 @@ body {
     background: var(--kind-generic);
 }
 
-/* handles: base geometry inline (FLOW_LAYOUT), color by data category */
+/* Handles: geometry inline from FLOW_GEOMETRY; the socket STATE language
+   lives here. Unconnected = a HOLLOW ring (the ring reads the data
+   category, the hole shows the boundary line it sits on); connected = a
+   SOLID dot of the same category color. One color variable per kind. */
 .react-flow__handle {
-    background: var(--kind-generic);
+    --gglab-socket: var(--kind-generic);
+    box-sizing: border-box;
+    border: 2px solid var(--gglab-socket);
+    background: transparent;
+    border-radius: 50%;
 }
 
 .react-flow__handle.gglab-handle-kind-scalar {
-    background: var(--kind-scalar);
+    --gglab-socket: var(--kind-scalar);
 }
 
 .react-flow__handle.gglab-handle-kind-vector {
-    background: var(--kind-vector);
+    --gglab-socket: var(--kind-vector);
 }
 
 .react-flow__handle.gglab-handle-kind-texture {
-    background: var(--kind-texture);
+    --gglab-socket: var(--kind-texture);
 }
 
-.react-flow__handle.gglab-handle-kind-generic {
-    background: var(--kind-generic);
+.react-flow__handle.gglab-handle-connected {
+    background: var(--gglab-socket);
 }
 
 .react-flow__handle.gglab-handle-focus {

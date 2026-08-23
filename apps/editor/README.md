@@ -45,17 +45,25 @@ shader compilation, or backend target policy.
   shadow when pressed, accent focus ring. A tool button is not a web CTA:
   `primary` is never the default surface.
 - **Library controls without wrapping text** — the library head carries
-  three 26×26 icon buttons (Collapse all / Expand all / Collapse
-  sidebar) with `aria-label` + `title`; the meaning lives in the labels,
+  ONE state-derived bulk toggle (any open section: down-arrow action
+  collapses all; fully collapsed: up-arrow action expands all — arrow
+  mapping per the owner's choice) plus the collapse-sidebar button, each
+  26×26 with `aria-label` + `title`; the meaning lives in the labels,
   never in two-line wrapped text in the narrow sidebar.
 - **Unity-style integrated port** — a PortRow IS one visual port: the
   real React Flow Handle (the sole socket glyph, carrying the
-  data-category color + focus state) and its semantic label share the
-  same row. The row cell is the Handle's positioning context
-  (`position: relative`; `top: 50%` + centering transform; a negative
-  inset makes the socket straddle the card border), so by construction:
-  PortRow center = Handle center = React Flow edge anchor. No fake inner
-  dot, no invisible external handle — one port, one real socket.
+  data-category color, the connection state, and the focus state) and
+  its semantic label share the same row. The row cell is the Handle's
+  positioning context (`position: relative`; `top: 50%` + centering
+  transform; the inset = half the socket + the card's 1px border puts
+  the socket OUTSIDE the card with its inner edge exactly tangent to
+  the border line — attached, never floating, and a hollow ring never
+  overlaps the border), so by construction: PortRow center = Handle
+  center = React Flow edge anchor. Socket state language: **unconnected
+  = a hollow ring of the data-category color, connected = a solid dot
+  of the same color** (the connection state is presentation derived from
+  the edge store — Handle count, ids, and wiring never change). No fake
+  inner dot, no invisible external handle — one port, one real socket.
 - **Placement patches only position** — drag placement, auto layout, and
   drop authoring all write `editorMetadata.nodes[*].position` through one
   shared position-patch helper, preserving the node's existing

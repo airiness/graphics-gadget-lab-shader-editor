@@ -13,8 +13,14 @@
  *     and canvas placement never changes them.
  */
 import { act, render, renderHook, screen, within } from "@testing-library/react";
+import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+
+const uiRoot = join(dirname(fileURLToPath(import.meta.url)), "../../../packages/editor-ui/src");
+const appCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../src/app.css"), "utf8");
 import {
     addConnection,
     addNode,
@@ -27,6 +33,7 @@ import {
     encodeAuthoringDrop,
     FLOW_GEOMETRY,
     flowGeometryCssVars,
+    handleStyle,
     handleTop,
     libraryMatchesQuery,
     nodeCardHeight,
@@ -800,6 +807,30 @@ describe("flow geometry (single source of truth)", () => {
         expect(vars["--gglab-geom-node-w"]).toBe(`${FLOW_GEOMETRY.nodeWidth}px`);
         expect(vars["--gglab-geom-handle-s"]).toBe(`${FLOW_GEOMETRY.handleSize}px`);
         expect(vars["--gglab-geom-header-h"]).toBe(`${FLOW_GEOMETRY.headerHeight}px`);
+    });
+
+    it("the socket sits outside the card, tangent to the border line, at a presence size", () => {
+        // Inset = half the socket + the card's 1px border: the socket is
+        // entirely OUTSIDE the card and its inner edge is exactly tangent
+        // to the border line — attached, not floating, and a hollow ring
+        // never overlaps the border it hangs off.
+        expect(FLOW_GEOMETRY.handleInset).toBe(FLOW_GEOMETRY.handleSize / 2 + 1);
+        expect(FLOW_GEOMETRY.handleSize).toBeGreaterThanOrEqual(12);
+        const input = handleStyle("input");
+        expect(input).toMatchObject({ top: "50%", transform: "translate(-50%, -50%)", left: `-${FLOW_GEOMETRY.handleInset}px` });
+        const output = handleStyle("output");
+        expect(output).toMatchObject({ top: "50%", transform: "translate(50%, -50%)", right: `-${FLOW_GEOMETRY.handleInset}px` });
+    });
+
+    it("carries the socket state language in the app sheet: hollow ring unconnected, solid dot connected", () => {
+        expect(appCss).toContain("--gglab-socket: var(--kind-generic)");
+        expect(appCss).toContain("border: 2px solid var(--gglab-socket);");
+        expect(appCss).toContain("background: transparent;");
+        expect(appCss).toContain(".react-flow__handle.gglab-handle-connected {");
+        expect(appCss).toContain("background: var(--gglab-socket);");
+        // The geometry layer must not re-hardcode a legacy border color.
+        const adapter = readFileSync(join(uiRoot, "flow/flow-adapter.ts"), "utf8");
+        expect(adapter).not.toContain("2px solid #0f1319");
     });
 });
 

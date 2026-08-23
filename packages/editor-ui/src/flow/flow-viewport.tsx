@@ -25,6 +25,7 @@ import {
     Position,
     ReactFlow,
     ReactFlowProvider,
+    useEdges,
     useNodesState,
     type Connection,
     type Node,
@@ -55,6 +56,14 @@ function portRows(inputPorts: readonly string[], outputPorts: readonly string[])
 export function ShaderNode(props: NodeProps<ShaderNodeT>) {
     const data: ShaderNodeData = props.data;
     const rows = portRows(data.inputPorts, data.outputPorts);
+    // Connection STATE is presentation (hollow ring vs solid socket); the
+    // Handles themselves — count, ids, types, positions — never change.
+    const edges = useEdges();
+    const connected = (side: "input" | "output", portId: string): boolean =>
+        edges.some((edge) =>
+            side === "output" ? edge.source === props.id && edge.sourceHandle === portId : edge.target === props.id && edge.targetHandle === portId,
+        );
+    const socketClass = (side: "input" | "output", portId: string): string => (connected(side, portId) ? " gglab-handle-connected" : "");
     return (
         <div className={`gglab-node gglab-node-cat-${data.nodeCategory ?? "unknown"}${data.knownToCatalog === false ? " gglab-node-unknown" : ""}${data.focused ? " gglab-node-focus" : ""}`}>
             <div className="gglab-node-header">
@@ -81,7 +90,7 @@ export function ShaderNode(props: NodeProps<ShaderNodeT>) {
                                     type="target"
                                     position={Position.Left}
                                     style={handleStyle("input")}
-                                    className={`gglab-handle-kind-${data.inputPortKinds[index] ?? "generic"}${data.focusedPorts.includes(row.inputId) ? " gglab-handle-focus" : ""}`}
+                                    className={`gglab-handle-kind-${data.inputPortKinds[index] ?? "generic"}${socketClass("input", row.inputId)}${data.focusedPorts.includes(row.inputId) ? " gglab-handle-focus" : ""}`}
                                 />
                             )}
                             {row.inputId ?? ""}
@@ -94,7 +103,7 @@ export function ShaderNode(props: NodeProps<ShaderNodeT>) {
                                     type="source"
                                     position={Position.Right}
                                     style={handleStyle("output")}
-                                    className={`gglab-handle-kind-${data.outputPortKinds[index] ?? "generic"}${data.focusedPorts.includes(row.outputId) ? " gglab-handle-focus" : ""}`}
+                                    className={`gglab-handle-kind-${data.outputPortKinds[index] ?? "generic"}${socketClass("output", row.outputId)}${data.focusedPorts.includes(row.outputId) ? " gglab-handle-focus" : ""}`}
                                 />
                             )}
                         </span>

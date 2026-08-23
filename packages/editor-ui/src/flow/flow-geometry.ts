@@ -21,9 +21,13 @@ export interface FlowGeometry {
     readonly headerHeight: number;
     /** One port row. */
     readonly portRowHeight: number;
-    /** Handle dot diameter. */
+    /** Socket dot diameter (the Handle itself — the sole socket glyph). */
     readonly handleSize: number;
-    /** How far a Handle sits outside the card border along its axis. */
+    /** Outward offset of the socket CENTER from the row cell's edge —
+     * `handleSize / 2 + 1px` (half the socket + the card's 1px border),
+     * so the socket sits OUTSIDE the card and its inner edge is exactly
+     * TANGENT to the card border line: attached, not floating, and a
+     * hollow ring never overlaps the border it hangs off. */
     readonly handleInset: number;
     /** Breathing room under the last port row. */
     readonly rowsBottomPad: number;
@@ -38,7 +42,7 @@ export const FLOW_GEOMETRY: FlowGeometry = {
     nodeWidth: 200,
     headerHeight: 56,
     portRowHeight: 26,
-    handleSize: 10,
+    handleSize: 12,
     handleInset: 7,
     rowsBottomPad: 10,
     headerPadTop: 9,
