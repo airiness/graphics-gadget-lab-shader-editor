@@ -945,6 +945,53 @@ describe("typed port presentation (core types → data categories)", () => {
         });
     });
 
+    // ---- golden graphs (the fixed smoke scenes) ----------------------------
+    describe("golden graphs (fixed scenes for every screenshot and smoke test)", () => {
+        const goldenPath = "../../../packages/shader-graph-core/tests/fixtures/SurfaceTextureGolden.shadergraph";
+        const diagnosticsPath = "../../../packages/shader-graph-core/tests/fixtures/SurfaceDiagnostics.shadergraph";
+
+        it("SurfaceTextureGolden OPENS and projects the FULL typed vocabulary: scalar, vector AND texture — with the fan-out intact", () => {
+            // This is the scene every future screenshot renders: it must
+            // open cleanly and expose every capability at a glance.
+            const document = loaded(read(goldenPath));
+            const projection = documentToFlow(document);
+            const portKinds = new Set<string>();
+            for (const node of projection.nodes) {
+                for (const kind of [...node.data.inputPortKinds, ...node.data.outputPortKinds]) {
+                    portKinds.add(kind);
+                }
+            }
+            expect([...portKinds].sort()).toEqual(["scalar", "texture", "vector"]);
+            const edgeKinds = new Set(projection.edges.map((edge) => edge.data?.kind).filter((kind): kind is string => kind !== undefined));
+            expect(["scalar", "texture", "vector"].every((kind) => edgeKinds.has(kind))).toBe(true);
+            expect(edgeKinds.has("generic")).toBe(false); // every wire tells a TYPED story
+            expect(projection.edges).toHaveLength(15);
+            // The fan-out the scene was built around: one output driving two inputs.
+            expect(projection.edges.filter((edge) => edge.source === "n.mix").length).toBe(2);
+        });
+
+        it("SurfaceDiagnostics OPENS as the panel's fixed material scene: every defect is live data for the diagnostics list", () => {
+            const parsed = parseShaderGraphDocument(read(diagnosticsPath));
+            expect(parsed.ok).toBe(true);
+            expect(parsed.value).not.toBeNull();
+            const document = parsed.value as ShaderGraphDocument;
+            const report = validateShaderGraph(document);
+            const codes = new Set(report.diagnostics.map((entry) => entry.code));
+            expect(codes.has(DiagnosticCode.TypeMismatch)).toBe(true);
+            expect(codes.has(DiagnosticCode.MissingRequiredInput)).toBe(true);
+            expect(codes.has(DiagnosticCode.CycleDetected)).toBe(true);
+            expect(codes.has(DiagnosticCode.DuplicateConnection)).toBe(true);
+            expect(codes.has(DiagnosticCode.UnknownPort)).toBe(true);
+            expect(codes.has(DiagnosticCode.UnresolvedParameterReference)).toBe(true);
+            expect(report.diagnostics.filter((entry) => entry.severity === "error").length).toBeGreaterThan(3);
+            // ...while the document still projects (selection, sockets and
+            // kinds keep working on a broken graph — the panel and the
+            // canvas must not be two different worlds).
+            const projection = documentToFlow(document);
+            expect(projection.nodes.length).toBe(8);
+        });
+    });
+
     it("keeps both side rails on one language: library and inspector collapse to the same 48px rail", () => {
         // Grid states compose: each rail alone, and both together
         // (canvas maximization) — 48px on the collapsed side(s).

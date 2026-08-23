@@ -1,0 +1,417 @@
+{
+  "schemaVersion": 1,
+  "graphId": "graph.surface-texture-golden",
+  "profile": "gglab.surface",
+  "profileVersion": 2,
+  "parameters": [
+    {
+      "id": "p.albedo",
+      "name": "Albedo Texture",
+      "class": "Texture2DParameter",
+      "valueType": "Texture2D"
+    },
+    {
+      "id": "p.baseTint",
+      "name": "Base Tint",
+      "class": "VectorParameter",
+      "valueType": "float3"
+    },
+    {
+      "id": "p.mixStrength",
+      "name": "Mix Strength",
+      "class": "ScalarParameter",
+      "valueType": "float"
+    },
+    {
+      "id": "p.emission",
+      "name": "Emission",
+      "class": "ScalarParameter",
+      "valueType": "float"
+    },
+    {
+      "id": "p.roughness",
+      "name": "Roughness",
+      "class": "ScalarParameter",
+      "valueType": "float"
+    },
+    {
+      "id": "p.metalness",
+      "name": "Metalness",
+      "class": "ScalarParameter",
+      "valueType": "float"
+    },
+    {
+      "id": "p.opacity",
+      "name": "Opacity",
+      "class": "ScalarParameter",
+      "valueType": "float"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "n.albedo",
+      "type": "Texture2DParameter",
+      "version": 1,
+      "properties": {
+        "parameterId": "p.albedo"
+      }
+    },
+    {
+      "id": "n.uv",
+      "type": "UV0",
+      "version": 1,
+      "properties": {}
+    },
+    {
+      "id": "n.sample",
+      "type": "SampleTexture2D",
+      "version": 1,
+      "properties": {}
+    },
+    {
+      "id": "n.baseTint",
+      "type": "VectorParameter",
+      "version": 1,
+      "properties": {
+        "parameterId": "p.baseTint"
+      }
+    },
+    {
+      "id": "n.mix",
+      "type": "Lerp",
+      "version": 1,
+      "properties": {}
+    },
+    {
+      "id": "n.mixStrength",
+      "type": "ScalarParameter",
+      "version": 1,
+      "properties": {
+        "parameterId": "p.mixStrength"
+      }
+    },
+    {
+      "id": "n.clamp",
+      "type": "Saturate",
+      "version": 1,
+      "properties": {}
+    },
+    {
+      "id": "n.emis",
+      "type": "Multiply",
+      "version": 1,
+      "properties": {}
+    },
+    {
+      "id": "n.emission",
+      "type": "ScalarParameter",
+      "version": 1,
+      "properties": {
+        "parameterId": "p.emission"
+      }
+    },
+    {
+      "id": "n.rough",
+      "type": "OneMinus",
+      "version": 1,
+      "properties": {}
+    },
+    {
+      "id": "n.roughness",
+      "type": "ScalarParameter",
+      "version": 1,
+      "properties": {
+        "parameterId": "p.roughness"
+      }
+    },
+    {
+      "id": "n.metalness",
+      "type": "ScalarParameter",
+      "version": 1,
+      "properties": {
+        "parameterId": "p.metalness"
+      }
+    },
+    {
+      "id": "n.metalClamp",
+      "type": "Saturate",
+      "version": 1,
+      "properties": {}
+    },
+    {
+      "id": "n.opacity",
+      "type": "ScalarParameter",
+      "version": 1,
+      "properties": {
+        "parameterId": "p.opacity"
+      }
+    },
+    {
+      "id": "n.out",
+      "type": "SurfaceOutput",
+      "version": 1,
+      "properties": {}
+    }
+  ],
+  "connections": [
+    {
+      "id": "c.albedoSample",
+      "from": {
+        "nodeId": "n.albedo",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.sample",
+        "portId": "texture"
+      }
+    },
+    {
+      "id": "c.uvSample",
+      "from": {
+        "nodeId": "n.uv",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.sample",
+        "portId": "uv"
+      }
+    },
+    {
+      "id": "c.tintMix",
+      "from": {
+        "nodeId": "n.baseTint",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.mix",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c.sampleMix",
+      "from": {
+        "nodeId": "n.sample",
+        "portId": "RGB"
+      },
+      "to": {
+        "nodeId": "n.mix",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c.strideMix",
+      "from": {
+        "nodeId": "n.mixStrength",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.mix",
+        "portId": "t"
+      }
+    },
+    {
+      "id": "c.mixClamp",
+      "from": {
+        "nodeId": "n.mix",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.clamp",
+        "portId": "value"
+      }
+    },
+    {
+      "id": "c.clampOut",
+      "from": {
+        "nodeId": "n.clamp",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.out",
+        "portId": "BaseColor"
+      }
+    },
+    {
+      "id": "c.mixEmissive",
+      "from": {
+        "nodeId": "n.mix",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.emis",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c.emisStrength",
+      "from": {
+        "nodeId": "n.emission",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.emis",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c.emisOut",
+      "from": {
+        "nodeId": "n.emis",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.out",
+        "portId": "Emissive"
+      }
+    },
+    {
+      "id": "c.roughIn",
+      "from": {
+        "nodeId": "n.roughness",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.rough",
+        "portId": "value"
+      }
+    },
+    {
+      "id": "c.roughOut",
+      "from": {
+        "nodeId": "n.rough",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.out",
+        "portId": "Roughness"
+      }
+    },
+    {
+      "id": "c.metalIn",
+      "from": {
+        "nodeId": "n.metalness",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.metalClamp",
+        "portId": "value"
+      }
+    },
+    {
+      "id": "c.metalOut",
+      "from": {
+        "nodeId": "n.metalClamp",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.out",
+        "portId": "Metallic"
+      }
+    },
+    {
+      "id": "c.opacityOut",
+      "from": {
+        "nodeId": "n.opacity",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.out",
+        "portId": "Opacity"
+      }
+    }
+  ],
+  "editorMetadata": {
+    "nodes": {
+      "n.albedo": {
+        "position": {
+          "x": 60,
+          "y": 656
+        }
+      },
+      "n.baseTint": {
+        "position": {
+          "x": 400,
+          "y": 374
+        }
+      },
+      "n.clamp": {
+        "position": {
+          "x": 1080,
+          "y": 696
+        }
+      },
+      "n.emis": {
+        "position": {
+          "x": 1080,
+          "y": 504
+        }
+      },
+      "n.emission": {
+        "position": {
+          "x": 740,
+          "y": 510
+        }
+      },
+      "n.metalClamp": {
+        "position": {
+          "x": 1080,
+          "y": 208
+        }
+      },
+      "n.metalness": {
+        "position": {
+          "x": 740,
+          "y": 208
+        }
+      },
+      "n.mix": {
+        "position": {
+          "x": 740,
+          "y": 662
+        }
+      },
+      "n.mixStrength": {
+        "position": {
+          "x": 400,
+          "y": 790
+        }
+      },
+      "n.opacity": {
+        "position": {
+          "x": 1080,
+          "y": 60
+        }
+      },
+      "n.out": {
+        "position": {
+          "x": 1420,
+          "y": 204
+        }
+      },
+      "n.rough": {
+        "position": {
+          "x": 1080,
+          "y": 356
+        }
+      },
+      "n.roughness": {
+        "position": {
+          "x": 740,
+          "y": 356
+        }
+      },
+      "n.sample": {
+        "position": {
+          "x": 400,
+          "y": 522
+        }
+      },
+      "n.uv": {
+        "position": {
+          "x": 60,
+          "y": 508
+        }
+      }
+    }
+  }
+}

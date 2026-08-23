@@ -76,6 +76,17 @@ shader compilation, or backend target policy.
    the new document is a delete/reconnect hazard) plus the diagnostic
    focus and the emission preview, both of which are bound to the
    revision they were derived from.
+- **Golden graphs — the fixed smoke scenes** — `…/tests/fixtures/
+  SurfaceTextureGolden.shadergraph` (fully legal v2 surface: scalar,
+  vector and texture parameters, UV, typed-channel sampling, the math
+  set, a fan-out, and all five SurfaceOutput inputs; opens with ZERO
+  diagnostics and emits HLSL with a pinned durable SHA-256 fingerprint)
+  and `…/tests/fixtures/SurfaceDiagnostics.shadergraph` (opens cleanly
+  as a session — structural references resolve — then exposes the full
+  semantic defect set with core-owned codes/severities, and refuses
+  emission with the structured errors). These paths are the ONE stable
+  scene reference for every editor screenshot and smoke test: new
+  visual work renders against them, not ad-hoc state.
 - **One fact, one color (owner decision, locked)** — a connected input
    socket is colored by the type it ACTUALLY carries (the concrete
    resolved type of its incoming wire), so the socket, the wire, and the

@@ -1,0 +1,196 @@
+{
+  "schemaVersion": 1,
+  "graphId": "graph.surface-diagnostics",
+  "profile": "gglab.surface",
+  "profileVersion": 1,
+  "parameters": [
+    {
+      "id": "p.roughness",
+      "name": "Roughness",
+      "class": "ScalarParameter",
+      "valueType": "float"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "n.roughness",
+      "type": "ScalarParameter",
+      "version": 1,
+      "properties": {
+        "parameterId": "p.roughness"
+      }
+    },
+    {
+      "id": "n.orphanParam",
+      "type": "ScalarParameter",
+      "version": 1,
+      "properties": {
+        "parameterId": "p.doesNotExist"
+      }
+    },
+    {
+      "id": "n.one",
+      "type": "Float",
+      "version": 1,
+      "properties": {
+        "value": 1
+      }
+    },
+    {
+      "id": "n.white",
+      "type": "Float3",
+      "version": 1,
+      "properties": {
+        "value": [
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "n.add",
+      "type": "Add",
+      "version": 1,
+      "properties": {}
+    },
+    {
+      "id": "n.mul",
+      "type": "Multiply",
+      "version": 1,
+      "properties": {}
+    },
+    {
+      "id": "n.bogus",
+      "type": "BogusOp",
+      "version": 1,
+      "properties": {}
+    },
+    {
+      "id": "n.out",
+      "type": "SurfaceOutput",
+      "version": 1,
+      "properties": {}
+    }
+  ],
+  "connections": [
+    {
+      "id": "d.floatIntoFloat3",
+      "from": {
+        "nodeId": "n.one",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.out",
+        "portId": "Emissive"
+      }
+    },
+    {
+      "id": "d.cycleA",
+      "from": {
+        "nodeId": "n.mul",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.add",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "d.cycleB",
+      "from": {
+        "nodeId": "n.add",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.mul",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "d.dupA",
+      "from": {
+        "nodeId": "n.one",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.out",
+        "portId": "Metallic"
+      }
+    },
+    {
+      "id": "d.dupB",
+      "from": {
+        "nodeId": "n.one",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.out",
+        "portId": "Metallic"
+      }
+    },
+    {
+      "id": "d.unknownPort",
+      "from": {
+        "nodeId": "n.white",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.out",
+        "portId": "Albedo"
+      }
+    }
+  ],
+  "editorMetadata": {
+    "nodes": {
+      "n.add": {
+        "position": {
+          "x": 400,
+          "y": 676
+        }
+      },
+      "n.bogus": {
+        "position": {
+          "x": 60,
+          "y": 848
+        }
+      },
+      "n.mul": {
+        "position": {
+          "x": 60,
+          "y": 676
+        }
+      },
+      "n.one": {
+        "position": {
+          "x": 60,
+          "y": 504
+        }
+      },
+      "n.orphanParam": {
+        "position": {
+          "x": 60,
+          "y": 208
+        }
+      },
+      "n.out": {
+        "position": {
+          "x": 400,
+          "y": 382
+        }
+      },
+      "n.roughness": {
+        "position": {
+          "x": 60,
+          "y": 60
+        }
+      },
+      "n.white": {
+        "position": {
+          "x": 60,
+          "y": 356
+        }
+      }
+    }
+  }
+}
