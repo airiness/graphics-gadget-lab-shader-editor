@@ -161,10 +161,11 @@ the app sheet, and no parallel button vocabulary anywhere.
   variant** — no variant blends into the app background, invents its
   own border/shade/label tint; hierarchy comes from the semantic fills
   (primary: the accent fill, destructive: the error tint) and position.
-- **Library bulk** — the node library has ONE bulk toggle: its arrow
-  and action derive from the section state — every section collapsed
-  means an up arrow (expand all), any open section means a down arrow
-  (collapse all); no second control.
+- **Library bulk** — the node library has ONE bulk toggle whose action
+  derives from the section state — any open section: click collapses
+  everything; every section collapsed: click expands everything (the
+  arrow mapping follows the owner's choice: expanded library → up
+  arrow, fully collapsed → down arrow); no second control.
 - **Five states, all explicit** — rest (raised off the panel with a
   visible border: **a button must read as a button in a still
   screenshot, never only on hover**), hover (brighter background +

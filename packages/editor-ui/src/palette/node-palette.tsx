@@ -207,16 +207,18 @@ export function NodePalette(props: NodePaletteProps) {
         <nav className="gglab-palette" aria-label="Node library">
             <div className="gglab-library-head">
                 <h2 className="gglab-library-title">Node Library</h2>
-                {/* ONE bulk toggle — its arrow and action derive from the
-                    section state: fully collapsed → up / expand, otherwise
-                    down / collapse. No second control. */}
+                {/* ONE bulk toggle — its action derives from the section
+                    state: fully collapsed → expand all, otherwise collapse
+                    all; the arrow orientation is the owner's chosen
+                    mapping (expanded library → up arrow, fully collapsed
+                    → down arrow). No second control. */}
                 <div className="gglab-library-bulk" role="group" aria-label="Library controls">
                     {(() => {
                         const allCollapsed = sectionKeys.length > 0 && sectionKeys.every((key) => collapsed[key] === true);
                         const label = allCollapsed ? "Expand all sections" : "Collapse all sections";
                         return (
                             <Button variant="icon" size="icon" aria-label={label} title={label} onClick={() => setAll(!allCollapsed)}>
-                                {allCollapsed ? <ChevronsUpIcon /> : <ChevronsDownIcon />}
+                                {allCollapsed ? <ChevronsDownIcon /> : <ChevronsUpIcon />}
                             </Button>
                         );
                     })()}
