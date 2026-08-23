@@ -25,7 +25,7 @@ import type { GraphType } from "./graph-types.js";
 import { hasField, isJsonNumber, isJsonRecord, isJsonString, jsonKind } from "./json-value.js";
 import type { JsonRecord, JsonValue } from "./json-value.js";
 import { errorAt, requireInteger, requireString, takeArray, takeField, takeObject, warnAt } from "./parse-helpers.js";
-import { supportedNodeTypeCatalog } from "./node-definitions.js";
+import { getNodeDefinition, supportedNodeTypeCatalog } from "./node-definitions.js";
 
 export interface SchemaVersionRange {
     readonly minimum: number;
@@ -633,5 +633,134 @@ export function removeConnection(document: ShaderGraphDocument, connectionId: st
         };
     }
     const connections = [...document.connections.slice(0, index), ...document.connections.slice(index + 1)];
+    return { ok: true, document: { ...document, connections }, diagnostics: [] };
+}
+
+/**
+ * Result of the core's port-disconnect service (remove every connection
+ * attached to one node port, in EITHER direction — the fan-out of an
+ * output, the incoming of an input, whatever actually exists in the data).
+ *
+ * Same strictness rules as the single-connection removal: the node must
+ * exist (a missing node is an unresolved reference); for node types the
+ * catalog knows, the port must be one of the type's ports (a typo in a
+ * rendered handle or a stale selection is an explicit UNKNOWN_PORT, never
+ * a silent no-op that pretends to have worked); node types the catalog
+ * does not know keep their data and are left to the port ids present in
+ * the document. Removal is non-validating (a graph may end up missing a
+ * required input — it reports that itself afterwards).
+ *
+ * Zero attachments is a genuine no-op: `ok`, the SAME document instance,
+ * `removed` = 0 — callers that apply it change nothing (and nothing
+ * dirties, because the canonical bytes are identical).
+ */
+export interface RemoveConnectionsAtPortResult {
+    readonly ok: boolean;
+    readonly document: ShaderGraphDocument | null;
+    readonly removed: number;
+    readonly diagnostics: readonly ShaderGraphDiagnostic[];
+}
+
+export function removeConnectionsAtPort(
+    document: ShaderGraphDocument,
+    nodeId: string,
+    portId: string,
+): RemoveConnectionsAtPortResult {
+    const node = document.nodes.find((candidate) => candidate.id === nodeId);
+    if (node === undefined) {
+        return {
+            ok: false,
+            document: null,
+            removed: 0,
+            diagnostics: [
+                errorAt("$.nodes", DiagnosticCode.UnresolvedNodeReference, `The port disconnect targets node "${nodeId}", which does not exist at this revision.`),
+            ],
+        };
+    }
+    // Port existence is judged by the catalog — but only when the catalog
+    // knows this node type. Unknown types are retained data: their ports
+    // are whatever ids the document carries, so the removal proceeds.
+    const definition = getNodeDefinition(node.type);
+    if (definition !== undefined) {
+        const declared = [...definition.inputs, ...definition.outputs];
+        if (declared.some((port) => port.id === portId) === false) {
+            return {
+                ok: false,
+                document: null,
+                removed: 0,
+                diagnostics: [
+                    errorAt(`$.nodes[id="${nodeId}"].ports`, DiagnosticCode.UnknownPort, `Port "${portId}" is not a port of the "${node.type}" node at this revision.`),
+                ],
+            };
+        }
+    }
+    const attached = document.connections.filter(
+        (connection) =>
+            (connection.from.nodeId === nodeId && connection.from.portId === portId) ||
+            (connection.to.nodeId === nodeId && connection.to.portId === portId),
+    );
+    if (attached.length === 0) {
+        // Honest no-op: nothing attached, nothing to change, same instance.
+        return { ok: true, document, removed: 0, diagnostics: [] };
+    }
+    const remaining = document.connections.filter((connection) => attached.includes(connection) === false);
+    return {
+        ok: true,
+        document: { ...document, connections: remaining },
+        removed: attached.length,
+        diagnostics: [],
+    };
+}
+
+/** Result of the core's reconnect service (move one endpoint of ONE
+ * connection). */
+export interface ReconnectResult {
+    readonly ok: boolean;
+    readonly document: ShaderGraphDocument | null;
+    readonly diagnostics: readonly ShaderGraphDiagnostic[];
+}
+
+/**
+ * Move EXACTLY ONE endpoint of the named connection (identified by stable
+ * id). This is the core's atomic form of "disconnect + reconnect": the
+ * connection keeps its id, its unknownFields, and its OTHER endpoint
+ * untouched — it is the same first-class document object with a new end,
+ * which is what keeps undo identity, diagnostic identity, and any future
+ * annotations coherent.
+ *
+ * Same strictness rules: a missing connection id fails with a structured
+ * CONNECTION_NOT_FOUND and no document (stale selection exposed, never
+ * silent). The rename does NOT judge: no type check, no cycle check, no
+ * required-input check — the resulting graph simply reports its own
+ * diagnostics afterwards (a reconnect is how users REPAIR a bad graph).
+ * Producing a duplicate wire is allowed by this service for the same
+ * reason; the graph's duplicate-connection diagnostic is its own
+ * diagnosis.
+ */
+export function reconnectConnection(
+    document: ShaderGraphDocument,
+    connectionId: string,
+    change: { readonly side: "from" | "to"; readonly nodeId: string; readonly portId: string },
+): ReconnectResult {
+    const connection = document.connections.find((candidate) => candidate.id === connectionId);
+    if (connection === undefined) {
+        return {
+            ok: false,
+            document: null,
+            diagnostics: [
+                errorAt("$.connections", DiagnosticCode.ConnectionNotFound, `No connection with the stable id "${connectionId}" exists at this revision; the selection is stale.`),
+            ],
+        };
+    }
+    const moved: GraphConnection = {
+        ...connection,
+        [change.side]: {
+            nodeId: change.nodeId,
+            portId: change.portId,
+            unknownFields: {},
+        },
+    };
+    const index = document.connections.findIndex((candidate) => candidate.id === connectionId);
+    const connections = [...document.connections.slice(0, index), moved, ...document.connections.slice(index + 1)];
     return { ok: true, document: { ...document, connections }, diagnostics: [] };
 }

@@ -15,7 +15,7 @@
  * Canvas chrome (grid, controls, minimap) is pure presentation: it never
  * adds a node, port, or semantic fact.
  */
-import { useEffect, useRef, type DragEvent } from "react";
+import { createContext, useContext, useEffect, useRef, type DragEvent } from "react";
 import {
     Background,
     BackgroundVariant,
@@ -41,6 +41,22 @@ export { ReactFlowProvider };
 
 type ShaderNodeT = ShaderFlowNode;
 
+/**
+ * A port activation — the raw gesture fact (which node/port, which side,
+ * was Alt held). Delivered to the composition root as data; the root
+ * gives it meaning (Alt = disconnect at port; a plain click means
+ * something only while a reconnect is armed). The callback rides a
+ * context instead of node `data`: the projection stays pure.
+ */
+export type PortActivation = {
+    readonly nodeId: string;
+    readonly portId: string;
+    readonly isInput: boolean;
+    readonly altKey: boolean;
+};
+
+const PortGestureContext = createContext<((activation: PortActivation) => void) | null>(null);
+
 function portRows(inputPorts: readonly string[], outputPorts: readonly string[]): { key: string; inputId: string | undefined; outputId: string | undefined }[] {
     const rows = Math.max(inputPorts.length, outputPorts.length, 1);
     const result: { key: string; inputId: string | undefined; outputId: string | undefined }[] = [];
@@ -64,6 +80,14 @@ export function ShaderNode(props: NodeProps<ShaderNodeT>) {
             side === "output" ? edge.source === props.id && edge.sourceHandle === portId : edge.target === props.id && edge.targetHandle === portId,
         );
     const socketClass = (side: "input" | "output", portId: string): string => (connected(side, portId) ? " gglab-handle-connected" : "");
+    // Port activation (Alt+click disconnect, reconnect-target click) —
+    // reported as raw data; the app owns the interpretation. Absent
+    // (null) means the port is a pure socket, which stays the default.
+    const activatePort = useContext(PortGestureContext);
+    const portClick = (portId: string, isInput: boolean) =>
+        activatePort !== null
+            ? (event: { readonly altKey: boolean }) => activatePort({ nodeId: props.id, portId, isInput, altKey: event.altKey })
+            : undefined;
     return (
         <div className={`gglab-node gglab-node-cat-${data.nodeCategory ?? "unknown"}${data.knownToCatalog === false ? " gglab-node-unknown" : ""}${data.focused ? " gglab-node-focus" : ""}`}>
             <div className="gglab-node-header">
@@ -99,6 +123,7 @@ export function ShaderNode(props: NodeProps<ShaderNodeT>) {
                                         type="target"
                                         position={Position.Left}
                                         style={handleStyle("input")}
+                                        onClick={portClick(row.inputId, true)}
                                         className={`gglab-handle-kind-${data.inputPortKinds[index] ?? "generic"}${socketClass("input", row.inputId)}${data.focusedPorts.includes(row.inputId) ? " gglab-handle-focus" : ""}`}
                                     />
                                 )}
@@ -115,6 +140,7 @@ export function ShaderNode(props: NodeProps<ShaderNodeT>) {
                                         type="source"
                                         position={Position.Right}
                                         style={handleStyle("output")}
+                                        onClick={portClick(row.outputId, false)}
                                         className={`gglab-handle-kind-${data.outputPortKinds[index] ?? "generic"}${socketClass("output", row.outputId)}${data.focusedPorts.includes(row.outputId) ? " gglab-handle-focus" : ""}`}
                                     />
                                 )}
@@ -162,6 +188,14 @@ export interface FlowViewportProps {
     readonly onEdgeSelect?: (connectionId: string) => void;
     readonly onCanvasClick?: () => void;
     readonly onEdgeContextMenu?: (event: { readonly clientX: number; readonly clientY: number }, connectionId: string) => void;
+    /**
+     * Advanced gesture, raw facts only: Ctrl(+Meta) + click on an edge
+     * arms the RECONNECT of that specific connection; a plain port
+     * activation reports node/port/side/Alt. The app owns both meanings;
+     * nothing here mutates a document.
+     */
+    readonly onEdgeReconnectArm?: (connectionId: string) => void;
+    readonly onPortActivate?: (activation: PortActivation) => void;
 }
 
 /**
@@ -247,6 +281,7 @@ export function FlowViewport(props: FlowViewportProps) {
         // source (flow-geometry.ts), so the CSS references the same numbers
         // the TS projection uses — no parallel literals to drift.
         <div className="gglab-viewport" style={flowGeometryCssVars()}>
+            <PortGestureContext.Provider value={props.onPortActivate ?? null}>
             <ReactFlow<ShaderNodeT>
                 nodes={nodes}
                 onNodesChange={onNodesChange}
@@ -290,7 +325,15 @@ export function FlowViewport(props: FlowViewportProps) {
                 // built-in key-delete must stay OFF: it would bypass the
                 // session state and the core-owned removal.
                 deleteKeyCode={null}
-                onEdgeClick={(_event, edge) => {
+                onEdgeClick={(event, edge) => {
+                    // Ctrl(+Meta) + click is the ADVANCED gesture: arm the
+                    // reconnect of this connection (the app owns what
+                    // "armed" means — click a port to move one endpoint;
+                    // Esc / blank cancels with the original untouched).
+                    if (event.ctrlKey || event.metaKey) {
+                        props.onEdgeReconnectArm?.(edge.id);
+                        return;
+                    }
                     props.onEdgeSelect?.(edge.id);
                 }}
                 onEdgeContextMenu={(event, edge) => {
@@ -309,6 +352,7 @@ export function FlowViewport(props: FlowViewportProps) {
                 <Controls showInteractive={false} position="top-right" />
                 <MiniMap pannable zoomable nodeColor={minimapNodeColor} maskColor="rgba(15,19,25,0.78)" position="bottom-right" className="gglab-minimap" />
             </ReactFlow>
+            </PortGestureContext.Provider>
         </div>
     );
 }

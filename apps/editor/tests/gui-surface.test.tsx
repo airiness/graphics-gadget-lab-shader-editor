@@ -48,6 +48,8 @@ import {
     portTop,
     readDescriptorText,
     removeConnection,
+    removeConnectionsAtPort,
+    reconnectConnection,
     resolveDropCoordinate,
     textureSignatureSerialized,
     DiagnosticsPanel,
@@ -700,6 +702,90 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(appCss).toMatch(/\.react-flow__edge:hover \.react-flow__edge-path \{[\s\S]*?filter: brightness\(1\.35\)/);
             expect(appCss).toMatch(/\.react-flow__edge\.gglab-edge-kind-scalar \{[\s\S]*?--gglab-edge-glow: color-mix\(in srgb, var\(--kind-scalar\) 55%, transparent\)/);
             expect(appCss).toMatch(/\.gglab-edge-menu \{[\s\S]*?background: var\(--panel-2\);[\s\S]*?box-shadow: var\(--shadow-2\)/);
+        });
+    });
+
+    describe("connection lifecycle — port gestures", () => {
+        it("disconnects a whole port through the authoring path, preserving unrelated wires", () => {
+            const document = loaded(validV1Document()); // c1..c5
+            // n.c ("value") fans out to BaseColor (c1) and Emissive (c2) —
+            // BOTH go in one atomic core operation; c3..c5 stay.
+            const result = removeConnectionsAtPort(document, "n.c", "value");
+            expect(result.applied).toBe(true);
+            expect(result.document?.connections.map((entry) => entry.id)).toEqual(["c3", "c4", "c5"]);
+            expect(result.document?.nodes).toEqual(document.nodes);
+            expect(document.connections).toHaveLength(5); // input untouched
+        });
+
+        it("refuses a port the catalog denies, returning the SAME document by reference", () => {
+            const document = loaded(validV1Document());
+            const result = removeConnectionsAtPort(document, "n.out", "NonexistentPort");
+            expect(result.applied).toBe(false);
+            expect(result.document).toBe(document);
+            expect(result.refusal?.reason).toContain("NonexistentPort");
+        });
+
+        it("treats a zero-attachment port as an honest no-op: applied, same instance, nothing to dirty", () => {
+            // Free one declared input (drop c5 → Opacity has no wire at all).
+            const record = JSON.parse(validV1Document()) as { connections: readonly { id: string }[] };
+            const freed = loaded(JSON.stringify({ ...JSON.parse(validV1Document()), connections: record.connections.filter((entry) => entry.id !== "c5") }));
+            const result = removeConnectionsAtPort(freed, "n.out", "Opacity");
+            expect(result.applied).toBe(true);
+            expect(result.document).toBe(freed); // identical instance → identical bytes → not dirty
+        });
+
+        it("reconnects one endpoint of the same first-class connection (id preserved, other end intact)", () => {
+            const document = loaded(validV1Document());
+            const before = document.connections.find((entry) => entry.id === "c1");
+            expect(before).toBeDefined();
+            const result = reconnectConnection(document, "c1", { side: "to", nodeId: "n.out", portId: "Emissive" });
+            expect(result.applied).toBe(true);
+            const after = result.document?.connections.find((entry) => entry.id === "c1");
+            expect(after).not.toBeUndefined();
+            expect(after?.from).toEqual(before?.from); // the source end is untouched
+            expect(after?.to.portId).toBe("Emissive");
+            expect(document.connections.find((entry) => entry.id === "c1")?.to.portId).toBe("BaseColor"); // input untouched
+        });
+
+        it("refuses a stale reconnect id without mutation, like every strict core refusal", () => {
+            const document = loaded(validV1Document());
+            const result = reconnectConnection(document, "c99", { side: "to", nodeId: "n.out", portId: "Emissive" });
+            expect(result.applied).toBe(false);
+            expect(result.document).toBe(document);
+            expect(result.refusal?.reason).toContain("c99");
+        });
+
+        it("wires the advanced gestures: Alt+port = core port disconnect; Ctrl+edge → armed → port click = ONE atomic reconnect; Esc/blank cancel untouched", () => {
+            const viewport = read("../../../packages/editor-ui/src/flow/flow-viewport.tsx");
+            // Ctrl(+Meta) click arms the reconnect of THAT connection; a
+            // plain click is selection (Slice 1 path). Ports report their
+            // activation as raw data through the gesture context.
+            expect(viewport).toMatch(/event\.ctrlKey \|\| event\.metaKey/);
+            expect(viewport).toContain("props.onEdgeReconnectArm?.(edge.id)");
+            expect(viewport).toContain("PortGestureContext.Provider");
+            expect(viewport).toMatch(/onClick={portClick\(row\.inputId, true\)}/);
+            expect(viewport).toMatch(/onClick={portClick\(row\.outputId, false\)}/);
+            const app = read("../src/app.tsx");
+            // Alt + port: the core's atomic port removal (never two ops).
+            expect(app).toMatch(/removeConnectionsAtPort\(document, activation\.nodeId, activation\.portId\)/);
+            // Armed confirm: the HANDLE'S SIDE is the semantic fact —
+            // input = the new target end, output = the new source end.
+            expect(app).toMatch(/side: activation\.isInput \? "to" : "from"/);
+            expect(app).toMatch(/reconnectConnection\(document, reconnectArmed, \{/);
+            // Cancellation is a no-op: selection state only, original wire
+            // untouched (no compensating remove/add sequence exists).
+            expect(app).toMatch(/if \(event\.key === "Escape"\)[\s\S]*?setReconnectArmed\(null\)/);
+            expect(app).toMatch(/const onCanvasClick[\s\S]*?setReconnectArmed\(null\)/);
+            // No two-step "remove + add" for a reconnect, ever.
+            expect(app).not.toMatch(/removeConnection\(document, .*\);\s*\n[\s\S]{0,120}addConnection\(/);
+            // The armed state is visible: the top-center hint chip.
+            expect(app).toContain("gglab-reconnect-hint");
+            expect(appCss).toMatch(/\.gglab-reconnect-hint \{[\s\S]*?background: var\(--panel-2\);[\s\S]*?border: 1px solid var\(--border\)/);
+            // The barrel keeps the gesture vocabulary explicit.
+            const barrel = read("../../../packages/editor-ui/src/index.ts");
+            expect(barrel).toContain("removeConnectionsAtPort");
+            expect(barrel).toContain("reconnectConnection");
+            expect(barrel).toContain("PortActivation");
         });
     });
 

@@ -56,6 +56,24 @@ shader compilation, or backend target policy.
    rail alone, or both together, maximize the canvas (composed
    `gglab-body-*-collapsed` grid states). The state is app-level layout
    state; the sections reappear unchanged on re-open.
+- **Connection lifecycle (port gestures)** — the advanced pair, on the
+   same "core owns the semantics" rule. Both land as ONE atomic core
+   operation each (never a UI-side remove+add sequence):
+  - **Alt + click a port** = disconnect EVERYTHING attached to that port
+    (the fan-out of an output, the incoming of an input — both-side
+    honest, one operation). Stale node → `UNRESOLVED_NODE_REFERENCE`;
+    a port the catalog denies for a known type → `UNKNOWN_PORT`; zero
+    attachments → honest no-op (same document instance, nothing dirties).
+  - **Ctrl + click a connection** = arm the reconnect (a top-center hint
+    chip shows it; the armed edge keeps the selection look). Then a plain
+    click on ANY port confirms: the port's rendered side is the semantic
+    fact — an input handle becomes the new target end (`to`), an output
+    handle the new source end (`from`) — via the core's atomic
+    `reconnectConnection`, which moves one endpoint of the SAME
+    connection object (id, unknownFields, and the other end all
+    survive). Esc or a blank click cancels — and cancel is a no-op,
+    because nothing mutates until a port confirms (the revert rule holds
+    by construction).
 - **Connection lifecycle (interaction slice 1)** — selecting and
    deleting a connection follows ONE rule: the core owns the semantics,
    the app owns the session state, React Flow only supplies the gesture.
@@ -74,10 +92,10 @@ shader compilation, or backend target policy.
   - **Presentation**: selection = same-hue emphasis (thicker stroke +
     soft per-kind glow), never a re-color; wires stay a 2px stroke but
     keep a 12px interaction width so they stay pressable when zoomed.
-  - **Out of scope for this slice** (deliberately deferred): port
-    disconnect-all, reconnect/move endpoint, occupied-input replace,
-    multi-selection, node deletion, create-node from a dangling wire,
-    reroute, undo/redo.
+  - **Out of scope here** (deliberately deferred): occupied-input
+    replace, multi-selection, node deletion, create-node from a dangling
+    wire, reroute, undo/redo. (Port disconnect and a single-endpoint
+    reconnect landed above.)
 - **Unity-style integrated port** — a PortRow IS one visual port: the
   real React Flow Handle (the sole socket glyph, carrying the
   data-category color, the connection state, and the focus state) and

@@ -26,7 +26,7 @@ export {
 } from "./flow/flow-adapter.js";
 export type { ShaderNodeData, ShaderFlowNode, CanvasFocus, PortKind, FlowGeometry } from "./flow/flow-adapter.js";
 export { FlowViewport, ShaderNode, ReactFlowProvider, useSyncedFlowNodes } from "./flow/flow-viewport.js";
-export type { ConnectionRequest, FlowViewportProps } from "./flow/flow-viewport.js";
+export type { ConnectionRequest, FlowViewportProps, PortActivation } from "./flow/flow-viewport.js";
 export { NodePalette, nodeCatalogGroups, parameterChoices, libraryMatchesQuery } from "./palette/node-palette.js";
 export type { NodePaletteProps, ParameterChoice } from "./palette/node-palette.js";
 export { DiagnosticsPanel } from "./panels/diagnostics-panel.js";
@@ -38,6 +38,8 @@ export {
     removeNode,
     addConnection,
     removeConnection,
+    removeConnectionsAtPort,
+    reconnectConnection,
     addParameter,
     AUTHORING_DROP_MIME,
     encodeAuthoringDrop,

@@ -21,7 +21,14 @@ import type {
     GraphType,
     ShaderGraphDocument,
 } from "@gglab/shader-graph-core";
-import { createNode, getNodeDefinition, isGraphType, removeConnection as removeConnectionCore } from "@gglab/shader-graph-core";
+import {
+    createNode,
+    getNodeDefinition,
+    isGraphType,
+    removeConnection as removeConnectionCore,
+    removeConnectionsAtPort as removeConnectionsAtPortCore,
+    reconnectConnection as reconnectConnectionCore,
+} from "@gglab/shader-graph-core";
 import { withNodePosition } from "./node-position.js";
 
 /**
@@ -312,6 +319,46 @@ export function removeConnection(document: ShaderGraphDocument, connectionId: st
     const result = removeConnectionCore(document, connectionId);
     if (result.ok === false || result.document === null) {
         const reason = result.diagnostics[0]?.message ?? "The connection could not be removed at this revision.";
+        return { document, applied: false, refusal: { reason }, createdId: undefined };
+    }
+    return { document: result.document, applied: true, refusal: undefined, createdId: undefined };
+}
+
+/**
+ * Disconnect EVERY connection attached to one node port (both sides —
+ * the fan-out of an output, the incoming of an input). The core owns the
+ * strict semantics (node must exist, known-type ports must exist, zero
+ * attachments is an honest no-op of the SAME document); the wrapper
+ * keeps it on the authoring-result path like every other operation.
+ */
+export function removeConnectionsAtPort(
+    document: ShaderGraphDocument,
+    nodeId: string,
+    portId: string,
+): AuthoringResult {
+    const result = removeConnectionsAtPortCore(document, nodeId, portId);
+    if (result.ok === false || result.document === null) {
+        const reason = result.diagnostics[0]?.message ?? "The port disconnect was not applied at this revision.";
+        return { document, applied: false, refusal: { reason }, createdId: undefined };
+    }
+    return { document: result.document, applied: true, refusal: undefined, createdId: undefined };
+}
+
+/**
+ * Move exactly ONE endpoint of the named connection (the core's atomic
+ * form of reconnect: same id, same unknownFields, other endpoint
+ * untouched). This is the ONLY sanctioned way the UI moves an endpoint —
+ * never "remove + add" (that would split one undo identity into two and
+ * rewrite the connection's stable id).
+ */
+export function reconnectConnection(
+    document: ShaderGraphDocument,
+    connectionId: string,
+    change: { readonly side: "from" | "to"; readonly nodeId: string; readonly portId: string },
+): AuthoringResult {
+    const result = reconnectConnectionCore(document, connectionId, change);
+    if (result.ok === false || result.document === null) {
+        const reason = result.diagnostics[0]?.message ?? "The reconnect was not applied at this revision.";
         return { document, applied: false, refusal: { reason }, createdId: undefined };
     }
     return { document: result.document, applied: true, refusal: undefined, createdId: undefined };

@@ -267,6 +267,26 @@ body {
     gap: 8px;
 }
 
+/* Reconnect armed — the top-center chrome chip (same surface language as
+   the toolbar), the visible state of a PENDING gesture: it means nothing
+   has been changed yet, and Esc/blank returns it to exactly that. */
+.gglab-reconnect-hint {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    max-width: min(560px, calc(100% - 160px));
+    padding: 5px 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    box-shadow: var(--shadow-1);
+    color: var(--muted);
+    font-size: var(--type-body);
+    line-height: var(--lh-body);
+}
+
 .gglab-side-left {
     border-right: 1px solid var(--border-soft);
 }

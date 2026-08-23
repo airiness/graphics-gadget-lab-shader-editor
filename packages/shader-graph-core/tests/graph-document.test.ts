@@ -3,6 +3,8 @@ import {
     DiagnosticCode,
     parseShaderGraphDocument,
     removeConnection,
+    removeConnectionsAtPort,
+    reconnectConnection,
     serializeShaderGraphDocument,
     validateShaderGraph,
 } from "../src/index.js";
@@ -392,5 +394,134 @@ describe("parseShaderGraphDocument", () => {
         expect(result.diagnostics).toEqual([
             expect.objectContaining({ code: DiagnosticCode.InvalidJson, severity: "error", dataPath: "$" }),
         ]);
+    });
+});
+
+describe("removeConnectionsAtPort", () => {
+    function portTestDocument(): ShaderGraphDocument {
+        const record = baseDocument();
+        const connections = record["connections"] as Record<string, unknown>[];
+        // Two attachments ON the output's BaseColor input (incoming from
+        // the Float), plus one unrelated wire on Roughness.
+        connections.push({
+            id: "conn.02",
+            from: { nodeId: "node.output", portId: "Roughness" },
+            to: { nodeId: "node.output", portId: "Metallic" },
+        });
+        return expectParsed(parseShaderGraphDocument(JSON.stringify(record)).value);
+    }
+
+    it("removes EVERYTHING attached to the port, in either direction, and preserves the rest", () => {
+        const document = portTestDocument();
+        // Both the incoming (conn.01 ends on BaseColor) and the other-side
+        // attachment of conn.02 touch "node.output/BaseColor"? No — conn.02
+        // starts at Roughness. BaseColor only holds conn.01's target end.
+        const onBaseColor = removeConnectionsAtPort(document, "node.output", "BaseColor");
+        expect(onBaseColor.ok).toBe(true);
+        expect(onBaseColor.removed).toBe(1);
+        if (onBaseColor.document === null) {
+            throw new Error("expected a document");
+        }
+        expect(onBaseColor.document.connections.map((entry) => entry.id)).toEqual(["conn.02"]);
+        expect(onBaseColor.document.nodes).toEqual(document.nodes);
+        expect(onBaseColor.document.parameters).toEqual(document.parameters);
+        expect(onBaseColor.document.editorMetadata).toEqual(document.editorMetadata);
+        // A second attempt at the same port is now the honest zero case:
+        const again = removeConnectionsAtPort(document, "node.output", "BaseColor");
+        expect(again.ok).toBe(true);
+        expect(again.removed).toBe(1); // against the ORIGINAL input instance
+    });
+
+    it("removes the fan-out of a producer in one atomic operation", () => {
+        const record = baseDocument();
+        // float3 value out → two output inputs: a real fan-out on "value".
+        const connections = record["connections"] as Record<string, unknown>[];
+        connections.unshift({
+            id: "conn.00",
+            from: { nodeId: "node.constant", portId: "value" },
+            to: { nodeId: "node.output", portId: "Roughness" },
+        });
+        const document = expectParsed(parseShaderGraphDocument(JSON.stringify(record)).value);
+        expect(document.connections.map((entry) => entry.id)).toEqual(["conn.00", "conn.01"]);
+        const result = removeConnectionsAtPort(document, "node.constant", "value");
+        expect(result.ok).toBe(true);
+        expect(result.removed).toBe(2);
+        if (result.document === null) {
+            throw new Error("expected a document");
+        }
+        expect(result.document.connections).toEqual([]);
+        // ...and the input document stayed untouched (atomic).
+        expect(document.connections).toHaveLength(2);
+    });
+
+    it("fails with an UNRESOLVED_NODE_REFERENCE for a node that does not exist", () => {
+        const document = portTestDocument();
+        const result = removeConnectionsAtPort(document, "node.nowhere", "BaseColor");
+        expect(result.ok).toBe(false);
+        expect(result.document).toBeNull();
+        expect(result.removed).toBe(0);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({ code: DiagnosticCode.UnresolvedNodeReference, severity: "error" }),
+        );
+    });
+
+    it("fails with an UNKNOWN_PORT for a port the catalog says the type does not have", () => {
+        // SurfaceOutput is a known type; it has no "value" output.
+        const document = portTestDocument();
+        const result = removeConnectionsAtPort(document, "node.output", "value");
+        expect(result.ok).toBe(false);
+        expect(result.document).toBeNull();
+        expect(result.removed).toBe(0);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({ code: DiagnosticCode.UnknownPort, severity: "error" }),
+        );
+    });
+
+    it("is an honest no-op for a real port with zero attachments: ok, SAME instance, removed 0", () => {
+        const document = portTestDocument();
+        const result = removeConnectionsAtPort(document, "node.output", "Emissive");
+        expect(result.ok).toBe(true);
+        expect(result.removed).toBe(0);
+        expect(result.document).toBe(document); // same instance → nothing applies, nothing dirties
+        expect(result.diagnostics).toEqual([]);
+    });
+});
+
+describe("reconnectConnection", () => {
+    it("moves exactly one endpoint and preserves the id, unknownFields, and the other end", () => {
+        const record = baseDocument();
+        const connections = record["connections"] as Record<string, unknown>[];
+        const first = expectElement(connections, 0) as Record<string, unknown>;
+        first["revisit"] = "keep-me"; // unknown field → must survive the move
+        const document = expectParsed(parseShaderGraphDocument(JSON.stringify(record)).value);
+        const moved = document.connections[0];
+        expect(moved).not.toBeUndefined();
+        if (moved === undefined) {
+            throw new Error("expected the fixture connection");
+        }
+        const result = reconnectConnection(document, moved.id, { side: "to", nodeId: "node.output", portId: "Emissive" });
+        expect(result.ok).toBe(true);
+        expect(result.diagnostics).toEqual([]);
+        if (result.document === null) {
+            throw new Error("expected a document");
+        }
+        const after = expectElement(result.document.connections, 0);
+        expect(after.id).toBe(moved.id); // the SAME first-class object
+        expect(after.to).toEqual({ nodeId: "node.output", portId: "Emissive", unknownFields: {} });
+        expect(after.from).toEqual(moved.from); // other end untouched
+        expect((after as { revisit?: unknown }).revisit ?? after.unknownFields["revisit"]).toEqual("keep-me");
+        // The input document keeps its original wire (atomic).
+        expect(document.connections[0]?.to.portId).toBe("BaseColor");
+    });
+
+    it("fails with a structured CONNECTION_NOT_FOUND and no document for a stale id", () => {
+        const document = expectParsed(parseShaderGraphDocument(baseJson).value);
+        const result = reconnectConnection(document, "conn.stale", { side: "from", nodeId: "node.constant", portId: "value" });
+        expect(result.ok).toBe(false);
+        expect(result.document).toBeNull();
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]).toEqual(
+            expect.objectContaining({ code: DiagnosticCode.ConnectionNotFound, severity: "error", dataPath: "$.connections" }),
+        );
     });
 });

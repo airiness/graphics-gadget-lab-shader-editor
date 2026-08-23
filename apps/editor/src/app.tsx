@@ -11,6 +11,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
     addConnection,
     removeConnection,
+    removeConnectionsAtPort,
+    reconnectConnection,
     isEditingTextTarget,
     addNode,
     addParameter,
@@ -123,6 +125,12 @@ export function App() {
     const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
     // The edge context menu position (cursor point), null = closed.
     const [edgeMenu, setEdgeMenu] = useState<{ x: number; y: number } | null>(null);
+    // The advanced "reconnect" armed state: Ctrl+click on a connection
+    // selects it AND starts the pending end-point move. Nothing is
+    // mutated until a port click confirms — Esc / blank click cancels and
+    // the original connection is provably untouched (revert by
+    // construction, not by a compensating operation).
+    const [reconnectArmed, setReconnectArmed] = useState<string | null>(null);
     // Viewport fit trigger (registered by the flow adapter via onInit).
     const fitRef = useRef<(() => void) | null>(null);
     // Desktop slice 1: native document I/O channel (absent in the browser
@@ -489,6 +497,7 @@ export function App() {
     const onCanvasClick = (): void => {
         setSelectedConnectionId(null);
         setEdgeMenu(null);
+        setReconnectArmed(null);
     };
     const onEdgeContextMenu = (event: { clientX: number; clientY: number }, connectionId: string): void => {
         // Right-click selects (if needed) and offers the one destructive
@@ -504,6 +513,48 @@ export function App() {
         applyAuthoring(removeConnection(document, connectionId));
         setSelectedConnectionId(null);
         setEdgeMenu(null);
+        setReconnectArmed(null);
+    };
+
+    // ---- advanced gestures (port disconnect + reconnect) ------------------
+    const onEdgeReconnectArm = (connectionId: string): void => {
+        // Ctrl+click a connection: select it (the armed edge keeps the
+        // selection language) and start the pending endpoint move.
+        setSelectedConnectionId(connectionId);
+        setReconnectArmed(connectionId);
+        setEdgeMenu(null);
+    };
+    const onPortActivate = (activation: { nodeId: string; portId: string; isInput: boolean; altKey: boolean }): void => {
+        if (activation.altKey) {
+            // Alt + click a port: disconnect EVERYTHING attached to it
+            // (the core's atomic port removal — the fan-out of an output,
+            // the incoming of an input, both-side honest). The selection
+            // may now be stale: clear it either way.
+            applyAuthoring(removeConnectionsAtPort(document, activation.nodeId, activation.portId));
+            setSelectedConnectionId(null);
+            setReconnectArmed(null);
+            return;
+        }
+        if (reconnectArmed !== null) {
+            // Confirm the pending reconnect: the port's ROLE decides the
+            // side — an input handle (rendered as the TARGET end) becomes
+            // the new "to", an output handle the new "from". No guessing:
+            // the row knew which side it rendered. One atomic core
+            // operation; same connection id, other end untouched.
+            applyAuthoring(
+                reconnectConnection(document, reconnectArmed, {
+                    side: activation.isInput ? "to" : "from",
+                    nodeId: activation.nodeId,
+                    portId: activation.portId,
+                }),
+            );
+            setReconnectArmed(null);
+            // The selection intentionally STAYS on the same connection id:
+            // it is still the same first-class document object, moved.
+            return;
+        }
+        // A bare port click with no pending gesture is a pure socket: a
+        // no-op. (Wiring still happens as before: drag from a handle.)
     };
 
     // Delete / Backspace remove the selected connection — but only when the
@@ -515,6 +566,7 @@ export function App() {
         const onKeyDown = (event: KeyboardEvent): void => {
             if (event.key === "Escape") {
                 setEdgeMenu(null);
+                setReconnectArmed(null);
                 return;
             }
             if ((event.key === "Delete" || event.key === "Backspace") && selectedConnectionId !== null) {
@@ -667,6 +719,15 @@ export function App() {
                             Auto layout
                         </Button>
                     </div>
+                    {/* Reconnect armed — the advanced gesture's visible
+                        affordance. Cancelling is a no-op: the original
+                        connection is moved only when a port confirms. */}
+                    {reconnectArmed !== null && (
+                        <div className="gglab-reconnect-hint" role="status">
+                            Reconnecting <span className="mono">{reconnectArmed}</span> — click a port (input = target end · output = source
+                            end). Esc cancels; the original wire stays put.
+                        </div>
+                    )}
                     <FlowViewport
                         nodes={flow.nodes}
                         edges={flow.edges}
@@ -676,6 +737,8 @@ export function App() {
                         onEdgeSelect={onEdgeSelect}
                         onCanvasClick={onCanvasClick}
                         onEdgeContextMenu={onEdgeContextMenu}
+                        onEdgeReconnectArm={onEdgeReconnectArm}
+                        onPortActivate={onPortActivate}
                         onFlowReady={(fitView) => {
                             fitRef.current = fitView;
                         }}
