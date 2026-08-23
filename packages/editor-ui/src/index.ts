@@ -16,6 +16,7 @@ export {
     FLOW_NODE_TYPE,
     FLOW_LAYOUT,
     FLOW_GEOMETRY,
+    EDGE_HIT_WIDTH,
     portCenterY,
     portRowCount,
     portRowTop,
@@ -36,6 +37,7 @@ export {
     addNode,
     removeNode,
     addConnection,
+    removeConnection,
     addParameter,
     AUTHORING_DROP_MIME,
     encodeAuthoringDrop,
@@ -44,6 +46,7 @@ export {
 } from "./session/authoring-operations.js";
 export type { AuthoringResult, AuthoringRefusal, ParameterRequest, AuthoringDropPayload } from "./session/authoring-operations.js";
 export { withNodePosition } from "./session/node-position.js";
+export { isEditingTextTarget } from "./session/keyboard-guard.js";
 export { LayoutIcon, FileIcon, PanelCloseIcon, PanelOpenIcon } from "./components/icons.js";
 export { diagnosticFocus } from "./session/diagnostic-focus.js";
 export { autoLayout } from "./session/auto-layout.js";

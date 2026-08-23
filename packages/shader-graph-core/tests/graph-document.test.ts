@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
     DiagnosticCode,
     parseShaderGraphDocument,
+    removeConnection,
     serializeShaderGraphDocument,
+    validateShaderGraph,
 } from "../src/index.js";
 import type { ParseResult, ShaderGraphDocument } from "../src/index.js";
 
@@ -104,6 +106,58 @@ describe("parseShaderGraphDocument", () => {
                 }),
             );
         }
+    });
+
+    it("removes exactly the named connection while preserving everything else", () => {
+        const document = expectParsed(parseShaderGraphDocument(baseJson).value);
+        const result = removeConnection(document, "conn.01");
+        expect(result.ok).toBe(true);
+        expect(result.diagnostics).toEqual([]);
+        const next = result.document;
+        expect(next).not.toBeNull();
+        expect(next?.connections).toEqual([]);
+        // Structural preservation: everything outside the removed entry is
+        // identical, and the input document is untouched (atomic).
+        expect(next?.nodes).toEqual(document.nodes);
+        expect(next?.parameters).toEqual(document.parameters);
+        expect(next?.editorMetadata).toEqual(document.editorMetadata);
+        expect(next?.graphId).toBe(document.graphId);
+        expect(next?.profile).toBe(document.profile);
+        expect(document.connections).toHaveLength(1);
+    });
+
+    it("fails with a structured CONNECTION_NOT_FOUND and returns no document for a stale id", () => {
+        const document = expectParsed(parseShaderGraphDocument(baseJson).value);
+        const result = removeConnection(document, "conn.does-not-exist");
+        expect(result.ok).toBe(false);
+        expect(result.document).toBeNull();
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]).toEqual(
+            expect.objectContaining({
+                code: DiagnosticCode.ConnectionNotFound,
+                severity: "error",
+                dataPath: "$.connections",
+            }),
+        );
+        // No change, by construction: the caller keeps exactly the input.
+        expect(document.connections).toHaveLength(1);
+    });
+
+    it("removes cleanly even when the removal leaves the graph invalid", () => {
+        // Drop the only feed of the output's required BaseColor input. The
+        // result is a graph with an unsatisfied required input — the graph's
+        // OWN diagnosis afterwards. The core's removal must not depend on
+        // that validity (a user repairing a bad graph can still disconnect).
+        const document = expectParsed(parseShaderGraphDocument(baseJson).value);
+        const result = removeConnection(document, "conn.01");
+        expect(result.ok).toBe(true);
+        if (result.document === null) {
+            throw new Error("expected a removed document");
+        }
+        const next = result.document;
+        expect(next.connections).toEqual([]);
+        const validation = validateShaderGraph(next);
+        expect(validation.diagnostics.some((diagnostic) => diagnostic.code === DiagnosticCode.MissingRequiredInput)).toBe(true);
     });
 
     it("marks every node type explicitly unknown under an explicit empty catalog", () => {

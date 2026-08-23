@@ -56,6 +56,28 @@ shader compilation, or backend target policy.
    rail alone, or both together, maximize the canvas (composed
    `gglab-body-*-collapsed` grid states). The state is app-level layout
    state; the sections reappear unchanged on re-open.
+- **Connection lifecycle (interaction slice 1)** — selecting and
+   deleting a connection follows ONE rule: the core owns the semantics,
+   the app owns the session state, React Flow only supplies the gesture.
+  - **Select**: LMB on an edge → session `selectedConnectionId` (never
+    document data — selecting never dirties). Blank click clears.
+  - **Delete**: `Delete`/`Backspace` (or the right-click menu's single
+    `Delete Connection` item) → the core's atomic `removeConnection` on the
+    authoring path (dirty/validation/serialization ride the same
+    transaction). A stale id fails with a structured
+    `CONNECTION_NOT_FOUND` and surfaces as a note — never silently
+    swallowed, never a UI-side `edges.filter`.
+  - **Guard**: graph shortcuts ask the shared `isEditingTextTarget`
+    predicate first, so typing in the library search or the JSON
+    viewport never deletes a wire. React Flow's built-in key-delete is
+    disabled (`deleteKeyCode={null}`).
+  - **Presentation**: selection = same-hue emphasis (thicker stroke +
+    soft per-kind glow), never a re-color; wires stay a 2px stroke but
+    keep a 12px interaction width so they stay pressable when zoomed.
+  - **Out of scope for this slice** (deliberately deferred): port
+    disconnect-all, reconnect/move endpoint, occupied-input replace,
+    multi-selection, node deletion, create-node from a dangling wire,
+    reroute, undo/redo.
 - **Unity-style integrated port** — a PortRow IS one visual port: the
   real React Flow Handle (the sole socket glyph, carrying the
   data-category color, the connection state, and the focus state) and

@@ -590,3 +590,48 @@ function connectionEndValue(end: ConnectionEnd): JsonValue {
     appendUnknownFields(record, end.unknownFields);
     return record;
 }
+
+/**
+ * Result of the core's connection-removal service.
+ *
+ * Removal is a STRICT structural operation:
+ * - the named connection exists → a new document with exactly that entry
+ *   gone; everything else (nodes, parameters, labels, properties, editor
+ *   metadata, the other connections, every unknownFields bag) is preserved
+ *   structurally, and the remaining connection ids/order are untouched;
+ * - the connection is missing → a structured failure and NO document.
+ *   A stale id is a state bug on the caller's side; the core reports it
+ *   (CONNECTION_NOT_FOUND) instead of silently succeeding.
+ *
+ * Removal deliberately does NOT judge the graph: it does no type check,
+ * does not require the resulting graph to validate, does not touch nodes,
+ * parameters, or metadata, and does not reorder any of the other
+ * connections. A graph that becomes invalid (for example a required input
+ * left unsatisfied) simply reports its real diagnostics afterwards —
+ * disconnecting must stay possible while a graph is being repaired.
+ */
+export interface RemoveConnectionResult {
+    readonly ok: boolean;
+    readonly document: ShaderGraphDocument | null;
+    readonly diagnostics: readonly ShaderGraphDiagnostic[];
+}
+
+/**
+ * Remove exactly one connection (identified by stable id) from a
+ * document. Atomic: a failure returns the input untouched and a
+ * structured diagnostic; a success replaces only the connections entry.
+ */
+export function removeConnection(document: ShaderGraphDocument, connectionId: string): RemoveConnectionResult {
+    const index = document.connections.findIndex((connection) => connection.id === connectionId);
+    if (index === -1) {
+        return {
+            ok: false,
+            document: null,
+            diagnostics: [
+                errorAt("$.connections", DiagnosticCode.ConnectionNotFound, `No connection with the stable id "${connectionId}" exists at this revision; the selection is stale.`),
+            ],
+        };
+    }
+    const connections = [...document.connections.slice(0, index), ...document.connections.slice(index + 1)];
+    return { ok: true, document: { ...document, connections }, diagnostics: [] };
+}

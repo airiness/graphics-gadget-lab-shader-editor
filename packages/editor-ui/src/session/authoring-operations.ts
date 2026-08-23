@@ -21,7 +21,7 @@ import type {
     GraphType,
     ShaderGraphDocument,
 } from "@gglab/shader-graph-core";
-import { createNode, getNodeDefinition, isGraphType } from "@gglab/shader-graph-core";
+import { createNode, getNodeDefinition, isGraphType, removeConnection as removeConnectionCore } from "@gglab/shader-graph-core";
 import { withNodePosition } from "./node-position.js";
 
 /**
@@ -297,6 +297,24 @@ export function addParameter(
  */
 function nodeTypeForParameterClass(parameterClass: string): string {
     return parameterClass;
+}
+
+/**
+ * Remove one connection by its stable id — the Core owns the removal
+ * semantics (strict existence, structural preservation, no validity
+ * judgment); this wrapper keeps it on the SAME authoring-result path as
+ * every other operation, so a removal flows through the app exactly like
+ * a creation: applied → new document (dirty), refused → unchanged input
+ * + a note (a stale selection is exposed, never swallowed). The UI never
+ * splices the flow edges itself.
+ */
+export function removeConnection(document: ShaderGraphDocument, connectionId: string): AuthoringResult {
+    const result = removeConnectionCore(document, connectionId);
+    if (result.ok === false || result.document === null) {
+        const reason = result.diagnostics[0]?.message ?? "The connection could not be removed at this revision.";
+        return { document, applied: false, refusal: { reason }, createdId: undefined };
+    }
+    return { document: result.document, applied: true, refusal: undefined, createdId: undefined };
 }
 
 function refused(document: ShaderGraphDocument, reason: string): AuthoringResult {

@@ -153,6 +153,15 @@ export interface FlowViewportProps {
      * creation itself is the core-judged authoring operation.
      */
     readonly onDropRequest?: (payload: AuthoringDropPayload, position: { x: number; y: number }) => void;
+    /**
+     * Connection selection is the SESSION's state: the viewport only
+     * reports the raw gesture (edge click, pane click, edge right-click)
+     * with the edge id. The app decides what it means; React Flow never
+     * owns selection, and it is never the deletion authority.
+     */
+    readonly onEdgeSelect?: (connectionId: string) => void;
+    readonly onCanvasClick?: () => void;
+    readonly onEdgeContextMenu?: (event: { readonly clientX: number; readonly clientY: number }, connectionId: string) => void;
 }
 
 /**
@@ -276,6 +285,21 @@ export function FlowViewport(props: FlowViewportProps) {
                     }
                 }}
                 selectionOnDrag={false}
+                // Delete/Backspace is the APP's shortcut (with the text-field
+                // guard) calling the core's removeConnection — React Flow's
+                // built-in key-delete must stay OFF: it would bypass the
+                // session state and the core-owned removal.
+                deleteKeyCode={null}
+                onEdgeClick={(_event, edge) => {
+                    props.onEdgeSelect?.(edge.id);
+                }}
+                onEdgeContextMenu={(event, edge) => {
+                    event.preventDefault();
+                    props.onEdgeContextMenu?.(event, edge.id);
+                }}
+                onPaneClick={() => {
+                    props.onCanvasClick?.();
+                }}
             >
                 {/* Overlay layout: controls top-right, minimap bottom-right —
                     two fixed corners, no overlap, no margin hacks. The

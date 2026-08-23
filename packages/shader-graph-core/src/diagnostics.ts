@@ -47,6 +47,7 @@ export const DiagnosticCode = {
     DuplicateNodeId: "DUPLICATE_NODE_ID",
     DuplicateParameterId: "DUPLICATE_PARAMETER_ID",
     DuplicateConnectionId: "DUPLICATE_CONNECTION_ID",
+    ConnectionNotFound: "CONNECTION_NOT_FOUND",
     UnresolvedNodeReference: "UNRESOLVED_NODE_REFERENCE",
     UnknownNodeType: "UNKNOWN_NODE_TYPE",
     UnknownNodeVersion: "UNKNOWN_NODE_VERSION",

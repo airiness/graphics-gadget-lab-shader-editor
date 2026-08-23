@@ -10,6 +10,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
     addConnection,
+    removeConnection,
+    isEditingTextTarget,
     addNode,
     addParameter,
     autoLayout,
@@ -114,6 +116,13 @@ export function App() {
     // Right inspector rail: layout session state, same model as the
     // library rail (the app owns which column is collapsed).
     const [inspectorOpen, setInspectorOpen] = useState(true);
+    // Connection selection — SESSION state (canvas interaction), never
+    // document data: selecting or deselecting an edge must not dirty the
+    // document. The projection (documentToFlow) receives it and renders
+    // emphasis only; the core stays untouched by a selection.
+    const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
+    // The edge context menu position (cursor point), null = closed.
+    const [edgeMenu, setEdgeMenu] = useState<{ x: number; y: number } | null>(null);
     // Viewport fit trigger (registered by the flow adapter via onInit).
     const fitRef = useRef<(() => void) | null>(null);
     // Desktop slice 1: native document I/O channel (absent in the browser
@@ -415,7 +424,7 @@ export function App() {
 
     const descriptor: SurfaceProfileDescriptor | null = descriptorState.kind === "ready" ? descriptorState.descriptor : null;
 
-    const flow = useMemo(() => documentToFlow(document, focus), [document, focus]);
+    const flow = useMemo(() => documentToFlow(document, focus, selectedConnectionId), [document, focus, selectedConnectionId]);
 
     const graphSets = useMemo<readonly DiagnosticSet[]>(() => {
         const validation = validateShaderGraph(document);
@@ -469,6 +478,56 @@ export function App() {
     const onConnectRequest = (request: ConnectionRequest): void => {
         applyAuthoring(addConnection(document, request.from, request.to));
     };
+
+    // ---- connection selection + removal (session state, core semantics) ----
+    // The viewport reports raw gestures with the edge id; this is where the
+    // app gives them meaning. Selection never touches the document.
+    const onEdgeSelect = (connectionId: string): void => {
+        setSelectedConnectionId(connectionId);
+        setEdgeMenu(null);
+    };
+    const onCanvasClick = (): void => {
+        setSelectedConnectionId(null);
+        setEdgeMenu(null);
+    };
+    const onEdgeContextMenu = (event: { clientX: number; clientY: number }, connectionId: string): void => {
+        // Right-click selects (if needed) and offers the one destructive
+        // action; the menu is pure UI state — it never touches the edges.
+        setSelectedConnectionId(connectionId);
+        setEdgeMenu({ x: event.clientX, y: event.clientY });
+    };
+    // Deleting a connection is a DOCUMENT change: it flows through the core's
+    // atomic removeConnection on the authoring path (dirty/validation/
+    // serialization ride the same transaction). A stale id is refused by the
+    // core and surfaces as an operation note — never silently swallowed.
+    const applyRemoveConnection = (connectionId: string): void => {
+        applyAuthoring(removeConnection(document, connectionId));
+        setSelectedConnectionId(null);
+        setEdgeMenu(null);
+    };
+
+    // Delete / Backspace remove the selected connection — but only when the
+    // keyboard belongs to the editor. While a text field (library search,
+    // the JSON viewport, any input) is active the key is the field's: the
+    // shared guard predicate keeps graph shortcuts out of text editing.
+    // Escape closes the context menu.
+    useEffect(() => {
+        const onKeyDown = (event: KeyboardEvent): void => {
+            if (event.key === "Escape") {
+                setEdgeMenu(null);
+                return;
+            }
+            if ((event.key === "Delete" || event.key === "Backspace") && selectedConnectionId !== null) {
+                if (isEditingTextTarget(event.target)) {
+                    return;
+                }
+                event.preventDefault();
+                applyRemoveConnection(selectedConnectionId);
+            }
+        };
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+    }, [selectedConnectionId, document]);
     const onNodePlaced = (nodeId: string, position: { x: number; y: number }): void => {
         // Session state (canvas layout): the shared position-patch helper
         // updates ONLY the position, preserving the node's existing
@@ -614,10 +673,36 @@ export function App() {
                         onConnectRequest={onConnectRequest}
                         onNodePlaced={onNodePlaced}
                         onDropRequest={onDropRequest}
+                        onEdgeSelect={onEdgeSelect}
+                        onCanvasClick={onCanvasClick}
+                        onEdgeContextMenu={onEdgeContextMenu}
                         onFlowReady={(fitView) => {
                             fitRef.current = fitView;
                         }}
                     />
+                    {/* Edge context menu — one item, the app's core-judged
+                        operation. It never calls into React Flow edges. */}
+                    {edgeMenu !== null && (
+                        <>
+                            <div className="gglab-menu-overlay" onPointerDown={() => setEdgeMenu(null)} />
+                            <div className="gglab-edge-menu" style={{ left: edgeMenu.x, top: edgeMenu.y }} role="menu" aria-label="Connection actions">
+                                <Button
+                                    variant="ghost"
+                                    className="gglab-edge-menu-item"
+                                    role="menuitem"
+                                    onClick={() => {
+                                        if (selectedConnectionId !== null) {
+                                            applyRemoveConnection(selectedConnectionId);
+                                        }
+                                    }}>
+                                    <span>Delete Connection</span>
+                                    <span className="gglab-kbd" aria-hidden>
+                                        Del
+                                    </span>
+                                </Button>
+                            </div>
+                        </>
+                    )}
                 </main>
                 <aside className="gglab-side gglab-side-right">
                     {inspectorOpen ? (

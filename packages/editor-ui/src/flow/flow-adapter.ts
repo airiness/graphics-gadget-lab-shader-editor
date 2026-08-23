@@ -178,7 +178,18 @@ function portFacts(ports: readonly { readonly id: string; readonly types: readon
     return { displays, kinds };
 }
 
-export function documentToFlow(document: ShaderGraphDocument, focus: CanvasFocus | null = null): {
+/**
+ * The clickable width of an edge (React Flow hit testing), independent of
+ * the rendered 2px stroke. Wires are thin to read but must stay easy to
+ * press — especially once the user has zoomed out.
+ */
+export const EDGE_HIT_WIDTH = 12;
+
+export function documentToFlow(
+    document: ShaderGraphDocument,
+    focus: CanvasFocus | null = null,
+    selectedConnectionId: string | null = null,
+): {
     readonly nodes: readonly ShaderFlowNode[];
     readonly edges: readonly Edge[];
 } {
@@ -222,6 +233,12 @@ export function documentToFlow(document: ShaderGraphDocument, focus: CanvasFocus
     });
     const edges: Edge[] = document.connections.map((connection) => {
         const focused = focus?.connectionHighlights.includes(connection.id) ?? false;
+        // Selection is SESSION state (the app's selectedConnectionId) poured
+        // into the projection — exactly like `focus`. It marks emphasis only
+        // (class + selected flag); the kind class below keeps the semantic
+        // color, which selection must never overwrite. React Flow owns
+        // neither the selection state nor the deletion.
+        const selected = selectedConnectionId !== null && connection.id === selectedConnectionId;
         // Edge data category comes from the source (producer) port's type — the
         // same core fact the source handle is colored from.
         const kind = edgeKind(document, resolvedTypes, connection.from.nodeId, connection.from.portId);
@@ -232,7 +249,12 @@ export function documentToFlow(document: ShaderGraphDocument, focus: CanvasFocus
             sourceHandle: connection.from.portId,
             targetHandle: connection.to.portId,
             data: { kind },
-            className: `gglab-edge gglab-edge-kind-${kind}${focused ? " gglab-edge-focus" : ""}`,
+            className: `gglab-edge gglab-edge-kind-${kind}${focused ? " gglab-edge-focus" : ""}${selected ? " gglab-edge-selected" : ""}`,
+            selected,
+            // The visual line stays a 2px stroke (the CSS kind rules); the
+            // hit target is WIDER so a wire stays clickable at any zoom —
+            // thick to press, thin to read.
+            interactionWidth: EDGE_HIT_WIDTH,
         };
     });
     return { nodes, edges };

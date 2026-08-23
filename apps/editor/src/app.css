@@ -935,9 +935,19 @@ body {
 
 /* edges: stroke by data category (a muted mix so the graph stays calm);
    the base stroke is the fallback for older engines without color-mix. */
+.react-flow__edge {
+    /* Per-kind selection glow: the SAME hue, softened — selection
+       emphasizes, it never re-colors the semantic category. */
+    --gglab-edge-glow: color-mix(in srgb, #56637a 55%, transparent);
+}
+
 .react-flow__edge .react-flow__edge-path {
     stroke: #56637a;
     stroke-width: 2;
+}
+
+.react-flow__edge.gglab-edge-kind-scalar {
+    --gglab-edge-glow: color-mix(in srgb, var(--kind-scalar) 55%, transparent);
 }
 
 .react-flow__edge.gglab-edge-kind-scalar .react-flow__edge-path {
@@ -945,9 +955,17 @@ body {
     stroke: color-mix(in srgb, var(--kind-scalar) 70%, #3a4658);
 }
 
+.react-flow__edge.gglab-edge-kind-vector {
+    --gglab-edge-glow: color-mix(in srgb, var(--kind-vector) 55%, transparent);
+}
+
 .react-flow__edge.gglab-edge-kind-vector .react-flow__edge-path {
     stroke: var(--kind-vector);
     stroke: color-mix(in srgb, var(--kind-vector) 70%, #3a4658);
+}
+
+.react-flow__edge.gglab-edge-kind-texture {
+    --gglab-edge-glow: color-mix(in srgb, var(--kind-texture) 55%, transparent);
 }
 
 .react-flow__edge.gglab-edge-kind-texture .react-flow__edge-path {
@@ -959,9 +977,66 @@ body {
     stroke: #56637a;
 }
 
+/* Hover: same hue, slightly brighter (brightness cannot change the hue),
+   thick to press (the projection's 12px interactionWidth) but still thin
+   to read (the 2px stroke stays). */
+.react-flow__edge:hover .react-flow__edge-path {
+    filter: brightness(1.35);
+}
+
+/* Selected: emphasis ONLY — the kind's own hue thickened + a soft
+   same-hue glow. Semantic color is never overwritten by selection. */
+.react-flow__edge.gglab-edge-selected .react-flow__edge-path {
+    stroke-width: 3;
+    filter: drop-shadow(0 0 5px var(--gglab-edge-glow));
+}
+
+.react-flow__edge.gglab-edge-selected:hover .react-flow__edge-path {
+    filter: drop-shadow(0 0 5px var(--gglab-edge-glow)) brightness(1.35);
+}
+
 .react-flow__edge.gglab-edge-focus .react-flow__edge-path {
     stroke: var(--accent) !important;
     stroke-width: 3;
+}
+
+/* ---- edge context menu -----------------------------------------------------
+   Pure UI state, chrome card on the top elevation; the action behind the
+   menu item is the core's atomic operation, reached through the app. */
+.gglab-menu-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: transparent;
+}
+
+.gglab-edge-menu {
+    position: fixed;
+    z-index: 41;
+    min-width: 190px;
+    padding: 4px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    box-shadow: var(--shadow-2);
+}
+
+.gglab-edge-menu-item {
+    width: 100%;
+    justify-content: space-between;
+    gap: 24px;
+    white-space: nowrap;
+}
+
+.gglab-kbd {
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    color: var(--faint);
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    border-radius: 3px;
+    padding: 0 5px;
+    line-height: 1.5;
 }
 
 /* ---- canvas chrome ---------------------------------------------------------- */

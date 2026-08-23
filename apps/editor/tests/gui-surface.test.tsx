@@ -32,10 +32,12 @@ import {
     documentToFlow,
     DescriptorPanel,
     encodeAuthoringDrop,
+    EDGE_HIT_WIDTH,
     FLOW_GEOMETRY,
     flowGeometryCssVars,
     handleStyle,
     handleTop,
+    isEditingTextTarget,
     libraryMatchesQuery,
     nodeCardHeight,
     nodeCatalogGroups,
@@ -45,6 +47,7 @@ import {
     portRowTop,
     portTop,
     readDescriptorText,
+    removeConnection,
     resolveDropCoordinate,
     textureSignatureSerialized,
     DiagnosticsPanel,
@@ -572,6 +575,132 @@ describe("typed port presentation (core types → data categories)", () => {
         expect(discardRow).toContain('variant="secondary"');
         const cancelRow = appSource.slice(cancel - 220, cancel);
         expect(cancelRow).toContain('variant="ghost"');
+    });
+
+    // ---- connection lifecycle (first interaction slice) -------------------
+    describe("connection lifecycle", () => {
+        it("removes exactly the selected connection through the authoring path, preserving everything else", () => {
+            const document = loaded(validV1Document()); // c1..c5
+            const result = removeConnection(document, "c3");
+            expect(result.applied).toBe(true);
+            expect(result.refusal).toBeUndefined();
+            expect(result.document).not.toBe(document); // a new document, not a mutation
+            expect(result.document?.nodes).toEqual(document.nodes);
+            expect(result.document?.parameters).toEqual(document.parameters);
+            expect(result.document?.editorMetadata).toEqual(document.editorMetadata);
+            const remaining = result.document?.connections ?? [];
+            expect(remaining.map((entry) => entry.id)).toEqual(["c1", "c2", "c4", "c5"]); // order + ids untouched
+            // The input document is untouched (atomic).
+            expect(document.connections).toHaveLength(5);
+        });
+
+        it("refuses a stale connection id without mutating, instead of silently succeeding", () => {
+            const document = loaded(validV1Document());
+            const result = removeConnection(document, "c99");
+            expect(result.applied).toBe(false);
+            expect(result.document).toBe(document); // the unchanged input, by reference
+            expect(result.refusal?.reason).toContain("c99");
+            expect(document.connections).toHaveLength(5);
+        });
+
+        it("never treats selection as a document change: the same document, emphasis only", () => {
+            const document = loaded(validV1Document());
+            const withSelection = documentToFlow(document, null, "c2");
+            const withoutSelection = documentToFlow(document, null, null);
+            expect(document.connections).toHaveLength(5); // selecting never edits
+            const selectedEdge = withSelection.edges.find((edge) => edge.id === "c2");
+            expect(selectedEdge).toBeDefined();
+            expect(selectedEdge?.selected).toBe(true);
+            expect(selectedEdge?.className).toContain("gglab-edge-selected");
+            // The kind class stays — selection emphasizes, it never re-colors.
+            expect(selectedEdge?.className).toMatch(/gglab-edge-kind-(scalar|vector|texture|generic)/);
+            // Every other edge stays unselected.
+            expect(withSelection.edges.filter((edge) => edge.selected === true)).toHaveLength(1);
+            expect(withSelection.edges.find((edge) => edge.id === "c5")?.selected).toBe(false);
+            expect(withoutSelection.edges.every((edge) => edge.selected === false)).toBe(true);
+        });
+
+        it("keeps wires thin to read (2px stroke) but wide to press (hit width) at any zoom", () => {
+            expect(EDGE_HIT_WIDTH).toBeGreaterThanOrEqual(10);
+            expect(EDGE_HIT_WIDTH).toBeLessThanOrEqual(14);
+            const projection = documentToFlow(loaded(validV1Document()));
+            expect(projection.edges.every((edge) => edge.interactionWidth === EDGE_HIT_WIDTH)).toBe(true);
+        });
+
+        it("keeps removal possible on an invalid graph (removal does not judge validity)", () => {
+            const base = loaded(validV1Document());
+            // Break the graph first: a self-loop makes the document invalid.
+            const broken: GraphConnection = {
+                id: "c.loop",
+                from: { nodeId: "n.out", portId: "BaseColor", unknownFields: {} },
+                to: { nodeId: "n.out", portId: "BaseColor", unknownFields: {} },
+                unknownFields: {},
+            };
+            const invalid = { ...base, connections: [...base.connections, broken] };
+            const validation = validateShaderGraph(invalid);
+            expect(validation.diagnostics.length).toBeGreaterThan(0);
+            // ...and the selection → deletion path still works exactly as
+            // it would on a valid graph.
+            const result = removeConnection(invalid, "c.loop");
+            expect(result.applied).toBe(true);
+            expect(result.document?.connections).toEqual(base.connections);
+        });
+
+        it("guards graph shortcuts away from text fields via one shared predicate", () => {
+            const input = document.createElement("input");
+            const textarea = document.createElement("textarea");
+            document.body.appendChild(input);
+            document.body.appendChild(textarea);
+            const editable = document.createElement("div");
+            editable.setAttribute("contenteditable", "true");
+            document.body.appendChild(editable);
+            const plain = document.createElement("div");
+            document.body.appendChild(plain);
+            expect(isEditingTextTarget(input)).toBe(true);
+            expect(isEditingTextTarget(textarea)).toBe(true);
+            expect(isEditingTextTarget(editable)).toBe(true);
+            expect(isEditingTextTarget(plain)).toBe(false);
+            expect(isEditingTextTarget(document.body)).toBe(false);
+            expect(isEditingTextTarget(null)).toBe(false);
+            input.remove();
+            textarea.remove();
+            editable.remove();
+            plain.remove();
+        });
+
+        it("wires the loop end to end: core-owned deletion, session selection, guarded Delete/Backspace, one-item RMB menu", () => {
+            const viewport = read("../../../packages/editor-ui/src/flow/flow-viewport.tsx");
+            // React Flow must not own the key-delete (it would bypass the
+            // session state and the core's atomic operation).
+            expect(viewport).toContain("deleteKeyCode={null}");
+            expect(viewport).toContain("onEdgeClick=");
+            expect(viewport).toContain("onEdgeContextMenu=");
+            expect(viewport).toContain("onPaneClick=");
+            const app = read("../src/app.tsx");
+            // Delete/Backspace only when the shared guard says the
+            // keyboard belongs to the editor.
+            expect(app).toMatch(/isEditingTextTarget\(event\.target\)/);
+            expect(app).toMatch(/event\.key === "Delete" \|\| event\.key === "Backspace"/);
+            // The deletion always rides the core's operation through the
+            // authoring path — never `edges.filter`.
+            expect(app).toMatch(/applyAuthoring\(removeConnection\(document, connectionId\)\)/);
+            expect(app).not.toMatch(/setEdges\(/);
+            // Selection is session state; the projection receives it.
+            expect(app).toMatch(/documentToFlow\(document, focus, selectedConnectionId\)/);
+            expect(app).not.toMatch(/selected.*\.shadergraph/);
+            // The context menu carries the ONE destructive action + the key
+            // hint, on the kit's button (no parallel button classes).
+            expect(app).toContain("Delete Connection");
+            expect(app).toMatch(/className="gglab-kbd"[^]*?>\s*Del\s*</);
+            expect(app).toContain('aria-label="Connection actions"');
+            // CSS: selection = same-hue emphasis (thicker + glow), hover =
+            // brightness (hue cannot change), wide hit target is in the
+            // projection (not a stroked line), menu on the top chrome card.
+            expect(appCss).toMatch(/\.gglab-edge-selected \.react-flow__edge-path \{[\s\S]*?stroke-width: 3;[\s\S]*?drop-shadow\(0 0 5px var\(--gglab-edge-glow\)\)/);
+            expect(appCss).toMatch(/\.react-flow__edge:hover \.react-flow__edge-path \{[\s\S]*?filter: brightness\(1\.35\)/);
+            expect(appCss).toMatch(/\.react-flow__edge\.gglab-edge-kind-scalar \{[\s\S]*?--gglab-edge-glow: color-mix\(in srgb, var\(--kind-scalar\) 55%, transparent\)/);
+            expect(appCss).toMatch(/\.gglab-edge-menu \{[\s\S]*?background: var\(--panel-2\);[\s\S]*?box-shadow: var\(--shadow-2\)/);
+        });
     });
 
     it("keeps both side rails on one language: library and inspector collapse to the same 48px rail", () => {
