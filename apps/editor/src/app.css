@@ -691,15 +691,17 @@ body {
     box-shadow: var(--shadow-1);
 }
 
-/* category rail — the color itself is defined on the category class */
+/* category rail — full height (the node's identity stripe; the color
+   itself is defined on the category class). Left corners follow the
+   card radius; the right edge is a straight stripe edge. */
 .gglab-node::before {
     content: "";
     position: absolute;
     left: 0;
-    top: 10px;
-    bottom: 10px;
+    top: 0;
+    bottom: 0;
     width: 3px;
-    border-radius: 0 3px 3px 0;
+    border-radius: var(--r-2) 0 0 var(--r-2);
     background: var(--cat, var(--cat-unknown));
 }
 
@@ -741,12 +743,16 @@ body {
     color: var(--warn);
 }
 
+/* Header: title + meta, then a 1px divider — the structural line that
+   separates "what it is" from "its ports", tightening the three-tier
+   hierarchy (display name → type/category → ports) without a resize. */
 .gglab-node-header {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
     height: var(--gglab-geom-header-h, 56px);
-    padding: var(--gglab-geom-pad-top, 9px) var(--gglab-geom-pad-right, 12px) 0 var(--gglab-geom-pad-left, 15px);
+    padding: var(--gglab-geom-pad-top, 8px) var(--gglab-geom-pad-right, 12px) 0 var(--gglab-geom-pad-left, 15px);
+    border-bottom: 1px solid var(--border);
     overflow: hidden;
 }
 
@@ -777,7 +783,7 @@ body {
     text-transform: lowercase;
     background: var(--panel-hi);
     padding: 1px 6px;
-    border-radius: 3px;
+    border-radius: var(--r-1);
 }
 
 .gglab-node-flag {
@@ -786,17 +792,18 @@ body {
 }
 
 /* One integrated port per row (Unity-style): the side cell is the
-   Handle's positioning context (position: relative), so the socket sits
-   at the row center and straddles the card border; the rows themselves
-   own no side padding (the cells indent their labels). */
+   Handle's positioning context (position: relative), so the socket is
+   vertically centered on the row and sits OUTSIDE the card, its inner
+   edge tangent to the border line; the rows themselves own no side
+   padding (the cells indent their labels). */
 .gglab-node-rows {
-    padding: 0 0 var(--gglab-geom-rows-pad, 10px);
+    padding: 0 0 var(--gglab-geom-rows-pad, 8px);
 }
 
 .gglab-port-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    height: var(--gglab-geom-row-h, 26px);
+    height: var(--gglab-geom-row-h, 24px);
     align-items: center;
 }
 

@@ -276,7 +276,7 @@ describe("port layout (ShaderNode)", () => {
                 expect(portTop(index)).not.toBe(portTop(other));
             }
         }
-        expect(portTop(5) - portTop(0)).toBe(5 * 26);
+        expect(portTop(5) - portTop(0)).toBe(5 * FLOW_GEOMETRY.portRowHeight);
     });
 
     it("renders a SampleTexture2D card with six labeled, individually present outputs", () => {
@@ -402,6 +402,20 @@ describe("typed port presentation (core types → data categories)", () => {
             const handles = html.match(/class="[^"]*react-flow__handle[^"]*"/g) ?? [];
             expect(handles.length).toBe(5);
         }
+    });
+
+    it("keeps the tightened anatomy: header divider, full-height category rail, compact port rhythm", () => {
+        // The three-tier separation is structural, not just typographic:
+        // a 1px divider between the identity header and the port body.
+        expect(appCss).toMatch(/\.gglab-node-header[\s\S]*?border-bottom: 1px solid var\(--border\)/);
+        // The category identity stripe runs the FULL height of the card
+        // (left corners follow the card radius; straight right edge).
+        expect(appCss).toMatch(/\.gglab-node::before[\s\S]*?top: 0;[\s\S]*?bottom: 0;[\s\S]*?border-radius: var\(--r-2\) 0 0 var\(--r-2\)/);
+        // The category chip uses the kit's corner token, not a stray px.
+        expect(appCss).toMatch(/\.gglab-node-category[\s\S]*?border-radius: var\(--r-1\)/);
+        // The compacted port rhythm lives in the single geometry source.
+        expect(FLOW_GEOMETRY.portRowHeight).toBe(24);
+        expect(FLOW_GEOMETRY.rowsBottomPad).toBe(8);
     });
 
     it("port rows carry the core's type facts — resolved concrete type, else the declared set; never a UI guess", () => {
