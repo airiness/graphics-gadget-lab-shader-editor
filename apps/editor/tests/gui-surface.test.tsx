@@ -755,6 +755,21 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(result.refusal?.reason).toContain("c99");
         });
 
+        it("keeps the wire's color authority in EVERY state: the library's selected hook can't turn it gray, and selection really thickens", () => {
+            // The library ships a default "selected" rule that re-colors the
+            // path to a flat gray. Counter it at higher specificity (4 vs 3
+            // classes) with the SAME per-kind value, order-independent.
+            expect(appCss).toMatch(/\.react-flow__edge\.gglab-edge\.selected \.react-flow__edge-path \{[\s\S]*?stroke: var\(--gglab-edge-stroke, #56637a\)/);
+            // One color authority per kind (resting, selected, and the
+            // counter-rule all read the same variable).
+            expect(appCss).toMatch(/\.react-flow__edge\.gglab-edge-kind-vector \{[\s\S]*?--gglab-edge-stroke: color-mix\(in srgb, var\(--kind-vector\) 70%, #3a4658\)/);
+            expect(appCss).toMatch(/\.react-flow__edge\.gglab-edge-selected \.react-flow__edge-path \{[\s\S]*?stroke: var\(--gglab-edge-stroke, #56637a\);[\s\S]*?stroke-width: 3;/);
+            // The selected width (3px) must not be squashed by an inline
+            // default — the stroke width is CSS alone.
+            const viewport = read("../../../packages/editor-ui/src/flow/flow-viewport.tsx");
+            expect(viewport).not.toContain("defaultEdgeOptions");
+        });
+
         it("wires the advanced gestures: Alt+port = core port disconnect; Ctrl+edge → armed → port click = ONE atomic reconnect; Esc/blank cancel untouched", () => {
             const viewport = read("../../../packages/editor-ui/src/flow/flow-viewport.tsx");
             // Ctrl(+Meta) click arms the reconnect of THAT connection; a

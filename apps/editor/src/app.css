@@ -957,8 +957,12 @@ body {
    the base stroke is the fallback for older engines without color-mix. */
 .react-flow__edge {
     /* Per-kind selection glow: the SAME hue, softened — selection
-       emphasizes, it never re-colors the semantic category. */
+       emphasizes, it never re-colors the semantic category.
+       --gglab-edge-stroke: the wire's ONE color authority per kind,
+       reused by every state (resting, the library's selected hook, and
+       our own selected emphasis). */
     --gglab-edge-glow: color-mix(in srgb, #56637a 55%, transparent);
+    --gglab-edge-stroke: #56637a;
 }
 
 .react-flow__edge .react-flow__edge-path {
@@ -968,6 +972,7 @@ body {
 
 .react-flow__edge.gglab-edge-kind-scalar {
     --gglab-edge-glow: color-mix(in srgb, var(--kind-scalar) 55%, transparent);
+    --gglab-edge-stroke: color-mix(in srgb, var(--kind-scalar) 70%, #3a4658);
 }
 
 .react-flow__edge.gglab-edge-kind-scalar .react-flow__edge-path {
@@ -977,6 +982,7 @@ body {
 
 .react-flow__edge.gglab-edge-kind-vector {
     --gglab-edge-glow: color-mix(in srgb, var(--kind-vector) 55%, transparent);
+    --gglab-edge-stroke: color-mix(in srgb, var(--kind-vector) 70%, #3a4658);
 }
 
 .react-flow__edge.gglab-edge-kind-vector .react-flow__edge-path {
@@ -986,6 +992,7 @@ body {
 
 .react-flow__edge.gglab-edge-kind-texture {
     --gglab-edge-glow: color-mix(in srgb, var(--kind-texture) 55%, transparent);
+    --gglab-edge-stroke: color-mix(in srgb, var(--kind-texture) 70%, #3a4658);
 }
 
 .react-flow__edge.gglab-edge-kind-texture .react-flow__edge-path {
@@ -1007,8 +1014,17 @@ body {
 /* Selected: emphasis ONLY — the kind's own hue thickened + a soft
    same-hue glow. Semantic color is never overwritten by selection. */
 .react-flow__edge.gglab-edge-selected .react-flow__edge-path {
+    stroke: var(--gglab-edge-stroke, #56637a);
     stroke-width: 3;
     filter: drop-shadow(0 0 5px var(--gglab-edge-glow));
+}
+
+/* The library's own "selected" hook must never re-color the wire (its
+   default is a flat gray). Counter it at HIGHER specificity than its
+   rule so our per-kind color wins regardless of stylesheet order —
+   one color authority per edge, in every state. */
+.react-flow__edge.gglab-edge.selected .react-flow__edge-path {
+    stroke: var(--gglab-edge-stroke, #56637a);
 }
 
 .react-flow__edge.gglab-edge-selected:hover .react-flow__edge-path {

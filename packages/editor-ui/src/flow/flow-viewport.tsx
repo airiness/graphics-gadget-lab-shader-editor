@@ -295,7 +295,6 @@ export function FlowViewport(props: FlowViewportProps) {
                     flowInstanceRef.current = instance;
                     props.onFlowReady?.(() => instance.fitView({ duration: 160 }));
                 }}
-                defaultEdgeOptions={{ style: { strokeWidth: 2 } }}
                 minZoom={0.2}
                 maxZoom={2.5}
                 onConnect={(connection: Connection) => {
