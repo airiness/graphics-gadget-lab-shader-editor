@@ -21,7 +21,7 @@
 import { useState, type DragEvent, type ReactNode } from "react";
 import { isGraphType, NODE_DEFINITIONS, type GraphType, type NodeCategory, type SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
 import { Button } from "../components/ui/button.js";
-import { ChevronsDownIcon, ChevronsUpIcon } from "../components/icons.js";
+import { ChevronsDownIcon, ChevronsUpIcon, PanelCloseIcon, PanelOpenIcon } from "../components/icons.js";
 import { CollapsibleContent, CollapsibleSection } from "../components/ui/collapsible.js";
 import { portKind, type PortKind } from "../flow/flow-adapter.js";
 import { AUTHORING_DROP_MIME, encodeAuthoringDrop, type AuthoringDropPayload, type ParameterRequest } from "../session/authoring-operations.js";
@@ -100,27 +100,6 @@ function ChevronIcon({ open }: { open: boolean }) {
     );
 }
 
-/** Panel collapse glyph (presentation only). */
-function PanelCloseIcon() {
-    return (
-        <svg width="13" height="13" viewBox="0 0 13 13" aria-hidden>
-            <rect x="1" y="1.5" width="11" height="10" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
-            <line x1="5.5" y1="1.5" x2="5.5" y2="11.5" stroke="currentColor" strokeWidth="1.2" />
-        </svg>
-    );
-}
-
-/** Panel expand glyph (presentation only). */
-function PanelOpenIcon() {
-    return (
-        <svg width="13" height="13" viewBox="0 0 13 13" aria-hidden>
-            <rect x="1" y="1.5" width="11" height="10" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
-            <line x1="5.5" y1="1.5" x2="5.5" y2="11.5" stroke="currentColor" strokeWidth="1.2" />
-            <path d="M7.6 5.4l1.9 1.6-1.9 1.6" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-    );
-}
-
 export interface NodePaletteProps {
     readonly onAddNode: (type: string) => void;
     readonly onAddParameter: (request: ParameterRequest) => void;
@@ -172,7 +151,7 @@ export function NodePalette(props: NodePaletteProps) {
 
     if (props.rail) {
         return (
-            <div className="gglab-library-rail" aria-label="Node library (collapsed)">
+            <div className="gglab-side-rail" aria-label="Node library (collapsed)">
                 <button type="button" className="gglab-rail-btn" onClick={() => props.onExpandLibrary?.()} title="Expand the node library">
                     <PanelOpenIcon />
                     <span className="gglab-rail-text">Node Library</span>

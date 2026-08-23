@@ -44,7 +44,7 @@ export {
 } from "./session/authoring-operations.js";
 export type { AuthoringResult, AuthoringRefusal, ParameterRequest, AuthoringDropPayload } from "./session/authoring-operations.js";
 export { withNodePosition } from "./session/node-position.js";
-export { LayoutIcon, FileIcon } from "./components/icons.js";
+export { LayoutIcon, FileIcon, PanelCloseIcon, PanelOpenIcon } from "./components/icons.js";
 export { diagnosticFocus } from "./session/diagnostic-focus.js";
 export { autoLayout } from "./session/auto-layout.js";
 export type { AutoLayoutResult } from "./session/auto-layout.js";

@@ -24,6 +24,8 @@ import {
     FlowViewport,
     Input,
     LayoutIcon,
+    PanelCloseIcon,
+    PanelOpenIcon,
     NodePalette,
     type AuthoringDropPayload,
     type AuthoringResult,
@@ -109,6 +111,9 @@ export function App() {
     const [libraryQuery, setLibraryQuery] = useState("");
     // Whole-library collapse — UI session state (layout), never document data.
     const [libraryOpen, setLibraryOpen] = useState(true);
+    // Right inspector rail: layout session state, same model as the
+    // library rail (the app owns which column is collapsed).
+    const [inspectorOpen, setInspectorOpen] = useState(true);
     // Viewport fit trigger (registered by the flow adapter via onInit).
     const fitRef = useRef<(() => void) | null>(null);
     // Desktop slice 1: native document I/O channel (absent in the browser
@@ -562,7 +567,7 @@ export function App() {
                     </Badge>
                 </div>
             </header>
-            <div className={`gglab-body${libraryOpen ? "" : " gglab-body-library-collapsed"}`}>
+            <div className={`gglab-body${libraryOpen ? "" : " gglab-body-library-collapsed"}${inspectorOpen ? "" : " gglab-body-inspector-collapsed"}`}>
                 <aside className="gglab-side gglab-side-left">
                     {libraryOpen ? (
                         <>
@@ -615,7 +620,20 @@ export function App() {
                     />
                 </main>
                 <aside className="gglab-side gglab-side-right">
-                    <DescriptorPanel state={descriptorState} onStateChange={(state) => setDescriptorState(state)} openDescriptorFile={openDescriptorFile} />
+                    {inspectorOpen ? (
+                        <>
+                        {/* Same rail language as the node library: head +
+                            one panel-control; collapsed it becomes the
+                            48px rail with the vertical re-open button. */}
+                        <div className="gglab-library-head">
+                            <h2 className="gglab-library-title">Inspector</h2>
+                            <div className="gglab-library-bulk" role="group" aria-label="Inspector controls">
+                                <Button variant="icon" size="icon" aria-label="Collapse the inspector" title="Collapse the inspector" onClick={() => setInspectorOpen(false)}>
+                                    <PanelCloseIcon />
+                                </Button>
+                            </div>
+                        </div>
+                        <DescriptorPanel state={descriptorState} onStateChange={(state) => setDescriptorState(state)} openDescriptorFile={openDescriptorFile} />
                     {graphSets.map((set) => (
                         <DiagnosticsPanel key={set.title} title={set.title} diagnostics={set.diagnostics} ok={set.ok} passedText={set.passedText} onSelect={selectDiagnostic} />
                     ))}
@@ -675,7 +693,16 @@ export function App() {
                             </Button>
                         </ButtonGroup>
                         {emission !== null && <EmissionPreview emission={emission} />}
-                    </section>
+                        </section>
+                        </>
+                    ) : (
+                        <div className="gglab-side-rail" aria-label="Inspector (collapsed)">
+                            <button type="button" className="gglab-rail-btn" onClick={() => setInspectorOpen(true)} title="Expand the inspector">
+                                <PanelOpenIcon />
+                                <span className="gglab-rail-text">Inspector</span>
+                            </button>
+                        </div>
+                    )}
                 </aside>
             </div>
             {closePrompt && (

@@ -50,6 +50,12 @@ shader compilation, or backend target policy.
   mapping per the owner's choice) plus the collapse-sidebar button, each
   26×26 with `aria-label` + `title`; the meaning lives in the labels,
   never in two-line wrapped text in the narrow sidebar.
+- **Both side rails collapse** — the node library (left) and the
+   inspector (right) share ONE rail language (shared PanelOpen/PanelClose
+   icons, the 48px `.gglab-side-rail` with vertical re-open text); each
+   rail alone, or both together, maximize the canvas (composed
+   `gglab-body-*-collapsed` grid states). The state is app-level layout
+   state; the sections reappear unchanged on re-open.
 - **Unity-style integrated port** — a PortRow IS one visual port: the
   real React Flow Handle (the sole socket glyph, carrying the
   data-category color, the connection state, and the focus state) and

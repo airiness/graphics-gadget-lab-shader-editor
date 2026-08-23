@@ -42,6 +42,29 @@ export function ChevronsUpIcon(props: IconProps = {}) {
     );
 }
 
+/** Side panel collapse glyph (panel divider, no action mark). */
+export function PanelCloseIcon(props: IconProps = {}) {
+    const size = props.size ?? 13;
+    return (
+        <svg width={size} height={size} viewBox="0 0 13 13" aria-hidden>
+            <rect x="1" y="1.5" width="11" height="10" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
+            <line x1="5.5" y1="1.5" x2="5.5" y2="11.5" stroke="currentColor" strokeWidth="1.2" />
+        </svg>
+    );
+}
+
+/** Side panel expand glyph (panel divider + outward arrow). */
+export function PanelOpenIcon(props: IconProps = {}) {
+    const size = props.size ?? 13;
+    return (
+        <svg width={size} height={size} viewBox="0 0 13 13" aria-hidden>
+            <rect x="1" y="1.5" width="11" height="10" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
+            <line x1="5.5" y1="1.5" x2="5.5" y2="11.5" stroke="currentColor" strokeWidth="1.2" />
+            <path d="M7.6 5.4l1.9 1.6-1.9 1.6" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+    );
+}
+
 /** Document glyph (open a descriptor file). */
 export function FileIcon(props: IconProps = {}) {
     const size = props.size ?? 14;

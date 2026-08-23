@@ -61,7 +61,9 @@
     --border-hi: #3b4859;
     --text: #dde5ef;
     --muted: #93a0b1;
-    --faint: #66748a;
+    /* ≈4.5:1 on --panel-2 (AA for small text) — raised from #66748a
+       (≈3.4:1) so meta text, hints, and diagnostic paths stay readable. */
+    --faint: #7b89a1;
     /* semantics */
     --accent: #5aa9ff;
     --accent-soft: rgba(90, 169, 255, 0.14);
@@ -155,15 +157,25 @@ body {
     -webkit-font-smoothing: antialiased;
 }
 
+/* Slim, surface-agnostic scrollbar (dense-tool style): the transparent
+   inset lets whatever surface is underneath show through, so one rule
+   serves every scroll region. */
 ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
 }
 
 ::-webkit-scrollbar-thumb {
     background: var(--border);
-    border-radius: 6px;
-    border: 2px solid var(--panel);
+    background-clip: padding-box;
+    border-radius: 4px;
+    border: 2px solid transparent;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--border-hi);
+    background-clip: padding-box;
+    border: 2px solid transparent;
 }
 
 ::-webkit-scrollbar-track {
@@ -217,9 +229,19 @@ body {
     min-height: 0;
 }
 
-/* Whole-library collapsed: the left column shrinks to a rail. */
+/* Either side can collapse to its 48px rail; both together maximize
+   the canvas (library / inspector / both states are composed here,
+   each owned as app-level layout state). */
 .gglab-body-library-collapsed {
     grid-template-columns: 48px minmax(0, 1fr) 336px;
+}
+
+.gglab-body-inspector-collapsed {
+    grid-template-columns: 252px minmax(0, 1fr) 48px;
+}
+
+.gglab-body-library-collapsed.gglab-body-inspector-collapsed {
+    grid-template-columns: 48px minmax(0, 1fr) 48px;
 }
 
 .gglab-side {
@@ -268,16 +290,17 @@ body {
 .gglab-status-group {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 10px;
     min-width: 0;
     overflow: hidden;
     white-space: nowrap;
 }
 
+/* Items keep an even internal gap (dot + label reads as one unit). */
 .gglab-status-item {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
 }
 
 .gglab-status-item.mono,
@@ -551,8 +574,9 @@ body {
     padding: 2px 0 10px;
 }
 
-/* whole-library collapsed rail (layout state owned by the composition root) */
-.gglab-library-rail {
+/* Collapsed-column rail — shared by BOTH sides (library left,
+   inspector right); layout state is owned by the composition root. */
+.gglab-side-rail {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -560,12 +584,13 @@ body {
     padding: 10px 0;
 }
 
+/* 4px side padding keeps the button inside the 48px column. */
 .gglab-rail-btn {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 10px;
-    padding: 12px 8px;
+    padding: 12px 4px;
     background: transparent;
     color: var(--muted);
     border: 1px solid var(--border-soft);
@@ -1018,6 +1043,10 @@ body {
     font-size: var(--type-body);
 }
 
+/* Dense developer list, not SaaS cards: items separate on hairlines
+   (the same language as the .gglab-fact list), roomy padding, and a
+   clear line hierarchy — code (severity-tinted) > message > severity
+   word and path (subordinate). */
 .gglab-diagnostics-item {
     display: block;
     width: 100%;
@@ -1026,9 +1055,13 @@ body {
     color: inherit;
     border: 1px solid transparent;
     border-radius: var(--r-1);
-    padding: 6px;
-    margin: 2px 0;
+    padding: 8px 6px;
+    margin: 0;
     font: inherit;
+}
+
+.gglab-diagnostics-item + .gglab-diagnostics-item {
+    border-top: 1px solid var(--border-soft);
 }
 
 button.gglab-diagnostics-item:hover {
@@ -1042,6 +1075,13 @@ button.gglab-diagnostics-item:hover {
     gap: 6px;
     align-items: baseline;
     font-size: var(--type-meta);
+}
+
+/* The severity word is subordinate context — the tinted CODE carries
+   the signal; the word just names it. */
+.gglab-diagnostics-severity {
+    color: var(--faint);
+    font-size: var(--type-micro);
 }
 
 .gglab-diagnostics-code {
@@ -1060,7 +1100,7 @@ button.gglab-diagnostics-item:hover {
 
 .gglab-diagnostics-message {
     display: block;
-    margin: 2px 0;
+    margin: 4px 0 2px;
     line-height: var(--lh-body);
 }
 

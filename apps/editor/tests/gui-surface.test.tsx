@@ -21,6 +21,7 @@ import { describe, expect, it } from "vitest";
 
 const uiRoot = join(dirname(fileURLToPath(import.meta.url)), "../../../packages/editor-ui/src");
 const appCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../src/app.css"), "utf8");
+const read = (relative: string): string => readFileSync(join(dirname(fileURLToPath(import.meta.url)), relative), "utf8");
 import {
     addConnection,
     addNode,
@@ -529,6 +530,55 @@ describe("typed port presentation (core types → data categories)", () => {
         // The compacted port rhythm lives in the single geometry source.
         expect(FLOW_GEOMETRY.portRowHeight).toBe(24);
         expect(FLOW_GEOMETRY.rowsBottomPad).toBe(8);
+    });
+
+    it("keeps both side rails on one language: library and inspector collapse to the same 48px rail", () => {
+        // Grid states compose: each rail alone, and both together
+        // (canvas maximization) — 48px on the collapsed side(s).
+        expect(appCss).toMatch(/\.gglab-body-inspector-collapsed \{[\s\S]*?grid-template-columns: 252px minmax\(0, 1fr\) 48px;/);
+        expect(appCss).toMatch(/\.gglab-body-library-collapsed\.gglab-body-inspector-collapsed \{[\s\S]*?grid-template-columns: 48px minmax\(0, 1fr\) 48px;/);
+        // ONE shared rail language (renamed from the library private):
+        // both sides use .gglab-side-rail / .gglab-rail-btn / .gglab-rail-text.
+        expect(appCss).toMatch(/\.gglab-side-rail \{[\s\S]*?display: flex;/);
+        const paletteSource = read("../../../packages/editor-ui/src/palette/node-palette.tsx");
+        expect(paletteSource).toContain("gglab-side-rail");
+        expect(paletteSource).not.toContain("gglab-library-rail");
+        // The composition root owns BOTH rail states and the same button
+        // pair (shared icons, one source in components/icons).
+        const appSource = read("../src/app.tsx");
+        expect(appSource).toContain("gglab-body-inspector-collapsed");
+        expect(appSource).toContain('aria-label="Collapse the inspector"');
+        expect(appSource).toContain('<span className="gglab-rail-text">Inspector</span>');
+        expect(appSource).toContain("PanelCloseIcon");
+        expect(appSource).toContain("PanelOpenIcon");
+    });
+
+    it("keeps the chrome ladder: canvas recedes, frame and raised content stay ordered, faint reads at AA", () => {
+        // Elevation order (darkest → lightest): canvas < chrome frame <
+        // raised content < hover surface. Canvas and frame already use
+        // the lowest steps in the existing design; lock that the ladder
+        // stays a single ordered scale.
+        expect(appCss).toMatch(/--bg: #0f1319;[\s\S]*--panel: #151b23;[\s\S]*--panel-2: #1a222d;[\s\S]*--panel-hi: #202a37;/);
+        expect(appCss).toMatch(/\.gglab-viewport[\s\S]*?background: var\(--bg\)/);
+        expect(appCss).toMatch(/\.gglab-header[\s\S]*?background: var\(--panel\)/);
+        expect(appCss).toMatch(/\.gglab-statusbar[\s\S]*?background: var\(--panel\)/);
+        // Faint text meets AA on the raised surface (small meta text,
+        // diagnostic paths, hints must stay readable).
+        expect(appCss).toContain("--faint: #7b89a1");
+        // Slim, surface-agnostic scrollbar (transparent inset, hover step).
+        expect(appCss).toMatch(/::-webkit-scrollbar[\s\S]*?width: 8px;/);
+        expect(appCss).toMatch(/::-webkit-scrollbar-thumb[\s\S]*?border: 2px solid transparent/);
+        expect(appCss).toMatch(/::-webkit-scrollbar-thumb:hover[\s\S]*?background: var\(--border-hi\)/);
+    });
+
+    it("keeps diagnostics as a dense list: hairline separation and a clear code > message > meta hierarchy", () => {
+        expect(appCss).toMatch(/\.gglab-diagnostics-item[\s\S]*?padding: 8px 6px/);
+        expect(appCss).toMatch(/\.gglab-diagnostics-item \+ \.gglab-diagnostics-item[\s\S]*?border-top: 1px solid var\(--border-soft\)/);
+        expect(appCss).toMatch(/\.gglab-diagnostics-severity[\s\S]*?color: var\(--faint\)/);
+        // The severity SIGNAL stays on the tinted code (core's severity
+        // string drives the class; the panel renders it).
+        expect(appCss).toMatch(/\.gglab-diagnostics-severity-error \.gglab-diagnostics-code[\s\S]*?color: var\(--error\)/);
+        expect(appCss).toMatch(/\.gglab-diagnostics-severity-warning \.gglab-diagnostics-code[\s\S]*?color: var\(--warn\)/);
     });
 
     it("port rows carry the core's type facts — resolved concrete type, else the declared set; never a UI guess", () => {
