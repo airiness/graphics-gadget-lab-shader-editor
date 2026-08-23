@@ -17,7 +17,14 @@ import { cn } from "./cn.js";
  *   - 28px text buttons / 26×26 icon buttons, the --r-1 radius,
  *   - ONE uniform 1px NEUTRAL border on every variant (the edge never
  *     varies in width or tint — a border-color difference reads as a
- *     width difference; variants are distinguished by fill/brightness),
+ *     width difference),
+ *   - ONE shared RAISED surface on every ordinary variant (bg-raised):
+ *     a button never blends into the app background and never invents
+ *     its own shade — the only filled exceptions are the semantic ones
+ *     (primary: the accent fill; destructive: the error tint);
+ *   - ONE label color on every ordinary variant (text-foreground):
+ *     hierarchy comes from the semantic fill and position, never from a
+ *     per-variant label tint;
  *   - 10px horizontal padding, 6px icon gap,
  *   - 14px icons, nowrap,
  *   - text on the type scale (--type-body / --weight-strong — 12px/600),
@@ -43,9 +50,9 @@ const buttonVariants = cva(
             variant: {
                 primary: "border-border bg-primary text-primary-foreground hover:bg-primary/90",
                 secondary: "border-border bg-raised text-foreground hover:border-border-hi hover:bg-raised-hi",
-                toolbar: "border-border bg-background text-muted-foreground hover:border-border-hi hover:bg-raised hover:text-foreground",
-                ghost: "border-border bg-panel text-muted-foreground hover:border-border-hi hover:bg-raised hover:text-foreground",
-                icon: "border-border bg-raised text-muted-foreground hover:border-border-hi hover:bg-raised-hi hover:text-foreground",
+                toolbar: "border-border bg-raised text-foreground hover:border-border-hi hover:bg-raised-hi",
+                ghost: "border-border bg-raised text-foreground hover:border-border-hi hover:bg-raised-hi",
+                icon: "border-border bg-raised text-foreground hover:border-border-hi hover:bg-raised-hi",
                 destructive:
                     "border-border bg-[color-mix(in_srgb,var(--destructive)_16%,var(--panel-hi))] text-[var(--error)] hover:bg-[color-mix(in_srgb,var(--destructive)_26%,var(--panel-hi))]",
             },
@@ -78,7 +85,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
     return (
         <button ref={ref} type={type} className={cn(buttonVariants({ variant, size }), className)} {...props}>
             {React.Children.map(children, (child, index) =>
-                React.isValidElement(child) || child == null ? (
+                child == null ? (
                     child
                 ) : (
                     <span key={index} className="inline-block [transform:translateY(1.5px)]">

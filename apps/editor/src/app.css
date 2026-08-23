@@ -12,6 +12,12 @@
 
 @import "tailwindcss";
 
+/* The component kit lives in the editor-ui package, outside this
+   package's default utility candidate scan. Scan it explicitly, or its
+   classes (flex-col, gap-2, ...) silently never compile and only the
+   ones accidentally echoed in local strings survive. */
+@source "../../../packages/editor-ui";
+
 /* shadcn-style semantic tokens → this app's design tokens (one palette). */
 @theme inline {
     --color-background: var(--bg);

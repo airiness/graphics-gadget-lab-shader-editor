@@ -156,11 +156,15 @@ the app sheet, and no parallel button vocabulary anywhere.
 - **Frozen geometry** — 28px text buttons / 26×26 icon buttons, the
   `--r-1` radius, 10px horizontal padding, 6px icon gap, 14px icons,
   nowrap; control text sits on the type scale (`--type-body` /
-  `--weight-strong` — 12px/600). **ONE uniform 1px neutral edge on
-  every variant** — a border-color difference reads as a width
-  difference, so the edge never encodes the variant; variants are
-  distinguished by fill/brightness (ghost is the darkest raised fill,
-  secondary the mid, primary the accent fill).
+  `--weight-strong` — 12px/600). **ONE uniform 1px neutral edge, ONE
+  shared raised surface, and ONE label color on every ordinary
+  variant** — no variant blends into the app background, invents its
+  own border/shade/label tint; hierarchy comes from the semantic fills
+  (primary: the accent fill, destructive: the error tint) and position.
+- **Library bulk** — the node library has ONE bulk toggle: its arrow
+  and action derive from the section state — every section collapsed
+  means an up arrow (expand all), any open section means a down arrow
+  (collapse all); no second control.
 - **Five states, all explicit** — rest (raised off the panel with a
   visible border: **a button must read as a button in a still
   screenshot, never only on hover**), hover (brighter background +
@@ -182,6 +186,11 @@ the app sheet, and no parallel button vocabulary anywhere.
   can never degrade into loose inline text; order and the
   primary/secondary/ghost hierarchy belong to the caller (see the
   Dialog order bullet).
+- **Utility scan scope** — the kit's Tailwind classes live in the
+  editor-ui package, outside this package's default candidate scan; the
+  app sheet declares an explicit `@source` for that package, so kit
+  classes compile from their home (the lock test guards the directive —
+  without it, a class like `flex-col` silently never generates).
 - **Lock** — the button-kit regression test freezes the variant set,
   the geometry baseline, the scale typography, the five states, and
   asserts that no parallel button language survives in the app sheet.

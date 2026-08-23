@@ -207,15 +207,19 @@ export function NodePalette(props: NodePaletteProps) {
         <nav className="gglab-palette" aria-label="Node library">
             <div className="gglab-library-head">
                 <h2 className="gglab-library-title">Node Library</h2>
-                {/* Compact icon controls — no text wrapping in the narrow
-                    sidebar; the names live in label/title. */}
+                {/* ONE bulk toggle — its arrow and action derive from the
+                    section state: fully collapsed → up / expand, otherwise
+                    down / collapse. No second control. */}
                 <div className="gglab-library-bulk" role="group" aria-label="Library controls">
-                    <Button variant="icon" size="icon" aria-label="Collapse all sections" title="Collapse all sections" onClick={() => setAll(true)}>
-                        <ChevronsDownIcon />
-                    </Button>
-                    <Button variant="icon" size="icon" aria-label="Expand all sections" title="Expand all sections" onClick={() => setAll(false)}>
-                        <ChevronsUpIcon />
-                    </Button>
+                    {(() => {
+                        const allCollapsed = sectionKeys.length > 0 && sectionKeys.every((key) => collapsed[key] === true);
+                        const label = allCollapsed ? "Expand all sections" : "Collapse all sections";
+                        return (
+                            <Button variant="icon" size="icon" aria-label={label} title={label} onClick={() => setAll(allCollapsed)}>
+                                {allCollapsed ? <ChevronsUpIcon /> : <ChevronsDownIcon />}
+                            </Button>
+                        );
+                    })()}
                     {props.onCollapseLibrary !== undefined && (
                         <Button variant="icon" size="icon" aria-label="Collapse the node library" title="Collapse library" onClick={() => props.onCollapseLibrary?.()}>
                             <PanelCloseIcon />

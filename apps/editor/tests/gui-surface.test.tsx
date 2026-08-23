@@ -933,6 +933,9 @@ describe("node library collapse (UI session state)", () => {
             Array.from(container.querySelectorAll('[data-slot="collapsible-section"]')) as HTMLElement[];
         expect(sections().length).toBeGreaterThan(1);
 
+        // The bulk is ONE toggle (its name/arrow flip with the state).
+        expect(within(container).getAllByRole("button", { name: /all sections/i }).length).toBe(1);
+
         // Collapse all → every section closed.
         const collapseAll = within(container).getByRole("button", { name: /collapse all/i });
         await act(async () => {

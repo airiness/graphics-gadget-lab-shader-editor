@@ -74,6 +74,13 @@ it("keeps ONE uniform neutral edge on every variant (the edge never encodes the 
         expect(line).not.toContain("border-primary");
         expect(line).not.toContain("border-destructive");
         expect(line).not.toContain("border-transparent");
+        if (!/primary:|destructive:/.test(line)) {
+            expect(line).toContain("bg-raised ");
+            expect(line).not.toContain("bg-background");
+            expect(line).not.toContain("bg-panel ");
+            expect(line).toContain("text-foreground");
+            expect(line).not.toContain("text-muted-foreground");
+        }
     }
 });
 
@@ -84,6 +91,10 @@ it("keeps ONE focus ring for every interactive control (the user-agent frame mus
     expect(appCss).toContain("outline-offset: 1px;");
     // One rule only — no per-class ring declarations may remain.
     expect((appCss.match(/outline: 2px solid var\(--accent\);/g) ?? []).length).toBe(1);
+});
+
+it("keeps the editor-ui package inside the utility candidate scan (kit classes must compile from their home, not accident)", () => {
+    expect(appCss).toContain('@source "../../../packages/editor-ui"');
 });
 
 it("leaves no parallel button language in the app sheet", () => {
