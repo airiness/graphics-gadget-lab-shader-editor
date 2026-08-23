@@ -1,5 +1,6 @@
 // Role: REGRESSION EVIDENCE — the chrome ladder (canvas < frame < raised
-// content), AA-legible faint text, and the slim scrollbar in the live app.
+// content), AA-legible faint text, the slim scrollbar, and the ONE
+// canvas-chrome toolbar language (controls / auto layout / minimap).
 // CDP probe (Node's built-in WebSocket, no deps). Launch Edge headless
 // with --remote-debugging-port=PORT first.
 /* eslint-disable */
@@ -51,6 +52,22 @@ const EXPRESSION = `(() => {
             const cs = getComputedStyle(side, "::-webkit-scrollbar");
             return cs ? cs.width : "n/a";
         })() : null,
+        canvasChrome: (() => {
+            const frame = document.querySelector(".react-flow__controls");
+            const button = document.querySelector(".react-flow__controls-button");
+            const svg = button ? button.querySelector("svg") : null;
+            const mini = document.querySelector(".react-flow__minimap");
+            const card = document.querySelector(".react-flow__pane");
+            const rect = (el) => el ? (() => { const r = el.getBoundingClientRect(); const c = card.getBoundingClientRect(); return { top: Math.round(r.top - c.top), left: Math.round(r.left - c.left), bottomGap: Math.round(c.bottom - r.bottom), rightGap: Math.round(c.right - r.right) }; })() : null;
+            return {
+                frame: frame ? { border: getComputedStyle(frame).borderColor, radius: getComputedStyle(frame).borderRadius } : null,
+                button: button ? { size: getComputedStyle(button).width + "x" + getComputedStyle(button).height, rest: getComputedStyle(button).backgroundColor } : null,
+                icon: svg ? svg.getAttribute("width") || getComputedStyle(svg).maxWidth : null,
+                minimap: mini ? { bg: getComputedStyle(mini).backgroundColor, border: getComputedStyle(mini).border + "", radius: getComputedStyle(mini).borderRadius } : null,
+                controlsPos: rect(frame),
+                minimapPos: rect(mini),
+            };
+        })(),
     }, null, 1);
 })()`;
 

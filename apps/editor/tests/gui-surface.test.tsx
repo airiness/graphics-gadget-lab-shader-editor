@@ -532,6 +532,24 @@ describe("typed port presentation (core types → data categories)", () => {
         expect(FLOW_GEOMETRY.rowsBottomPad).toBe(8);
     });
 
+    it("keeps the three canvas overlays on ONE toolbar language (positions frozen)", () => {
+        // Same recipe on all three: raised surface + 1px --border + --r-1.
+        expect(appCss).toMatch(/\.react-flow__controls \{[\s\S]*?border: 1px solid var\(--border\);[\s\S]*?border-radius: var\(--r-1\)/);
+        expect(appCss).toMatch(/\.react-flow__controls-button \{[\s\S]*?width: 28px;[\s\S]*?height: 28px;[\s\S]*?background: var\(--panel-hi\)/);
+        // Icons at the kit's 14px, hover = the kit's one-step-brighter surface.
+        expect(appCss).toMatch(/\.react-flow__controls-button svg \{[\s\S]*?max-width: 14px;/);
+        expect(appCss).toMatch(/\.react-flow__controls-button:hover:not\(:disabled\) \{[\s\S]*?background: var\(--border-soft\)/);
+        // The minimap frame joins the same recipe (was a step darker).
+        expect(appCss).toMatch(/\.react-flow__minimap \{[\s\S]*?background: var\(--panel-hi\) !important;[\s\S]*?border: 1px solid var\(--border\);[\s\S]*?border-radius: var\(--r-1\)/);
+        // Corners and equal margins frozen (controls top-right, minimap
+        // bottom-right) — the language unifies, the layout does not move.
+        expect(appCss).toMatch(/\.react-flow__controls \{[\s\S]*?margin: 12px;/);
+        expect(appCss).toMatch(/\.gglab-minimap \{[\s\S]*?margin: 12px;/);
+        const viewportSource = read("../../../packages/editor-ui/src/flow/flow-viewport.tsx");
+        expect(viewportSource).toContain('position="top-right"');
+        expect(viewportSource).toContain('position="bottom-right"');
+    });
+
     it("keeps both side rails on one language: library and inspector collapse to the same 48px rail", () => {
         // Grid states compose: each rail alone, and both together
         // (canvas maximization) — 48px on the collapsed side(s).

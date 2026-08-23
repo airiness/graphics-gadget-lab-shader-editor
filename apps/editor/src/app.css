@@ -966,9 +966,11 @@ body {
     background: transparent;
 }
 
+/* Same chrome-card recipe as the controls frame and the Auto-layout
+   kit button (raised surface + 1px --border + --r-1). */
 .react-flow__minimap {
-    background: var(--panel) !important;
-    border: 1px solid var(--border-soft);
+    background: var(--panel-hi) !important;
+    border: 1px solid var(--border);
     border-radius: var(--r-1);
     overflow: hidden;
 }
@@ -977,20 +979,24 @@ body {
     margin: 12px;
 }
 
-/* Overlay layout: controls top-right, minimap bottom-right — fixed
-   corners with equal margins; they cannot overlap each other. */
+/* Canvas chrome — ONE toolbar language for all three overlays (the
+   Auto-layout kit button, the +/-/Fit controls, the minimap frame):
+   raised surface (--panel-hi) + 1px --border + --r-1 + 28px hit area
+   + 14px icons; hover = the kit's one-step-brighter surface. Fixed
+   corners with equal margins (controls top-right, minimap
+   bottom-right); they cannot overlap. POSITIONS ARE FROZEN HERE and
+   must not move. */
 .react-flow__controls {
-    border: 1px solid var(--border-soft);
+    border: 1px solid var(--border);
     border-radius: var(--r-1);
     overflow: hidden;
-    box-shadow: var(--shadow-1);
     margin: 12px;
 }
 
 .react-flow__controls-button {
     width: 28px;
     height: 28px;
-    background: var(--panel-2);
+    background: var(--panel-hi);
     border-bottom: 1px solid var(--border-soft);
 }
 
@@ -1000,12 +1006,17 @@ body {
 
 .react-flow__controls-button svg {
     fill: var(--muted);
-    max-width: 12px;
-    max-height: 12px;
+    max-width: 14px;
+    max-height: 14px;
 }
 
 .react-flow__controls-button:hover:not(:disabled) {
-    background: var(--panel-hi);
+    background: var(--border-soft);
+    fill: var(--text);
+}
+
+.react-flow__controls-button:hover:not(:disabled) svg {
+    fill: var(--text);
 }
 
 /* ---- diagnostics ------------------------------------------------------------ */
