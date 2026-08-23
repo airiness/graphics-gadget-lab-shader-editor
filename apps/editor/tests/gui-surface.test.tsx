@@ -897,22 +897,49 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(again.present).toBe("b");
         });
 
-        it("a document transition clears the ENTIRE canvas session: selection, armed, menu, focus AND emission", () => {
-            // Stable ids are document-scoped: a stale selection naming an
-            // id that ALSO exists in the new document is a delete/reconnect
-            // hazard. Focus and emission are bound to the revision they
-            // came from. One helper, three callers, no forgotten state.
+        it("a document transition clears the canvas interaction state AND invalidates the revision-derived state", () => {
+            // Two distinct concepts, no forgotten state:
+            //  - canvas interaction (selection/armed/menu) — stable ids
+            //    are document-scoped, a stale selection is a
+            //    delete/reconnect hazard;
+            //  - revision-derived state (focus + emission preview) —
+            //    emission = f(document, descriptor), and a derivative
+            //    must never outlive the revision it describes.
             const app = read("../src/app.tsx");
-            expect(app).toMatch(/function clearCanvasInteractionSession\(\): void/);
-            const helper = app.match(/function clearCanvasInteractionSession\(\): void \{[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
-            expect(helper).toContain("setSelectedConnectionId(null)");
-            expect(helper).toContain("setReconnectArmed(null)");
-            expect(helper).toContain("setEdgeMenu(null)");
-            expect(helper).toContain("setFocus(null)"); // a stale highlight is never shown
-            expect(helper).toContain("setEmission(null)"); // HLSL stays bound to its revision
-            expect(app).toMatch(/const replaceDocumentSession[\s\S]*?clearCanvasInteractionSession\(\)/);
-            expect(app).toMatch(/const onUndo[\s\S]*?clearCanvasInteractionSession\(\)/);
-            expect(app).toMatch(/const onRedo[\s\S]*?clearCanvasInteractionSession\(\)/);
+            expect(app).toMatch(/function clearCanvasInteractionState\(\): void/);
+            expect(app).toMatch(/function invalidateRevisionDerivedState\(\): void/);
+            const interaction = app.match(/function clearCanvasInteractionState\(\): void \{[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
+            expect(interaction).toContain("setSelectedConnectionId(null)");
+            expect(interaction).toContain("setReconnectArmed(null)");
+            expect(interaction).toContain("setEdgeMenu(null)");
+            const derived = app.match(/function invalidateRevisionDerivedState\(\): void \{[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
+            expect(derived).toContain("setFocus(null)"); // a stale highlight is never shown
+            expect(derived).toContain("setEmission(null)"); // HLSL stays bound to its revision
+            for (const caller of ["replaceDocumentSession", "onUndo", "onRedo"]) {
+                const block = app.match(new RegExp(`(?:const|function) ${caller}([\\s\\S]*?\\n\\s{4}\\})`))?.[0] ?? "";
+                expect(block).toContain("clearCanvasInteractionState()");
+                expect(block).toContain("invalidateRevisionDerivedState()");
+            }
+        });
+
+        it("an APPLIED authoring mutation invalidates the revision-derived state — and ONLY when the document identity actually moved", () => {
+            // A preview showing another revision's HLSL is a wrong
+            // statement: every real mutation (add/remove/connect/
+            // disconnect/reconnect) must clear it. An accepted no-op
+            // (same identity) must NOT — no meaningless preview churn.
+            const app = read("../src/app.tsx");
+            const body = app.match(/function applyAuthoring\([^\n]*\n[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
+            expect(body).toMatch(/if \(!Object\.is\(result\.document, document\)\)/);
+            expect(body).toContain("invalidateRevisionDerivedState()");
+        });
+
+        it("a descriptor change invalidates the emission preview too — emission = f(document, descriptor)", () => {
+            const app = read("../src/app.tsx");
+            const body = app.match(/const onDescriptorStateChange = \([^\n]*\n[\s\S]*?\n\s{4}\};/)?.[0] ?? "";
+            expect(body).toMatch(/if \(!Object\.is\(next, descriptorState\)\)/);
+            expect(body).toContain("invalidateRevisionDerivedState()");
+            expect(body).toContain("setDescriptorState(next)");
+            expect(app).toContain("onStateChange={onDescriptorStateChange}");
         });
 
         it("discards the redo branch when a new intent is recorded after an undo", () => {
@@ -933,7 +960,12 @@ describe("typed port presentation (core types → data categories)", () => {
             // Applied changes record one labeled step; refused ones note but
             // never record.
             expect(app).toMatch(/function applyAuthoring\(result: AuthoringResult, label: string\)/);
-            expect(app).toMatch(/if \(result\.applied\) \{[\s\S]{0,300}?recordHistory\(previous, result\.document, label\)/);
+            // Applied ≠ mutated: only an identity change records history —
+            // and invalidates the revision-derived state.
+            const applied = app.match(/function applyAuthoring\([^\n]*\{[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
+            expect(applied).toContain("if (!Object.is(result.document, document)) {");
+            expect(applied).toContain("recordHistory(previous, result.document, label)");
+            expect(applied).toContain("invalidateRevisionDerivedState()");
             // Provenance transitions (open / import) reset the line.
             expect(app).toMatch(/const replaceDocumentSession[\s\S]*?setHistory\(createHistory\(next\)\)/);
             // Keyboard: the guard predicate runs BEFORE the graph shortcut.

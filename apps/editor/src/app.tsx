@@ -200,20 +200,35 @@ export function App() {
      * current), and the operation notes — while the saved-text pane shows
      * the new document's canonical serialization.
      */
-    function clearCanvasInteractionSession(): void {
-        // Connection ids are DOCUMENT-scoped: a stable id is meaningful
-        // inside one document and is NOT a cross-document identity. Any
-        // transition that changes which document is current (open/import,
-        // or a history step back/forward) MUST invalidate the canvas
-        // selection — a stale selection pointing at an id that happens to
-        // exist in the new document is an outright delete/reconnect
-        // hazard. The diagnostic focus and the emission preview are
-        // bound to the document revision they were derived from, so they
-        // go with the document change (conservative: generate again
-        // rather than show another revision's HLSL).
+    /**
+     * Canvas interaction state: the selected connection, the pending
+     * reconnection, and the edge menu.
+     *
+     * Connection ids are DOCUMENT-scoped: a stable id is meaningful
+     * inside one document and is NOT a cross-document identity. Any
+     * transition that changes which document is current (open/import,
+     * or a history step back/forward) MUST clear this state — a stale
+     * selection pointing at an id that happens to exist in the new
+     * document is an outright delete/reconnect hazard.
+     */
+    function clearCanvasInteractionState(): void {
         setSelectedConnectionId(null);
         setReconnectArmed(null);
         setEdgeMenu(null);
+    }
+
+    /**
+     * Revision-derived session state: the diagnostic focus and the
+     * emission preview.
+     *
+     * The focus is derived from the document revision that produced its
+     * diagnostics, and the emission preview is `f(document, descriptor)` —
+     * BOTH inputs are its authority. A derivative must never outlive the
+     * revision (and contract) it describes: a preview showing another
+     * revision's HLSL is a wrong statement, not a stale convenience —
+     * regenerate it instead.
+     */
+    function invalidateRevisionDerivedState(): void {
         setFocus(null);
         setEmission(null);
     }
@@ -222,7 +237,8 @@ export function App() {
         // A new document is a NEW history line, not an undoable step —
         // and every canvas state bound to the old document is stale.
         setHistory(createHistory(next));
-        clearCanvasInteractionSession();
+        clearCanvasInteractionState();
+        invalidateRevisionDerivedState();
         // A new document becomes the new baseline — the session is not
         // dirty merely because its text was imported or a file was
         // opened.
@@ -494,11 +510,22 @@ export function App() {
 
     function applyAuthoring(result: AuthoringResult, label: string): void {
         if (result.applied) {
-            // One user intent = one history step (the label names it);
-            // the before/after pair is exactly what undo/redo restore.
-            setHistory((previous) => recordHistory(previous, result.document, label));
+            // An ACCEPTED operation is not necessarily a mutation: an
+            // accepted no-op (a same-endpoint reconnect, a zero-attachment
+            // disconnect) returns the SAME document instance, and it
+            // invalidates nothing — the focus and the emission preview
+            // still describe the current revision, and no fake history
+            // step is recorded.
+            if (!Object.is(result.document, document)) {
+                // One user intent = one history step (the label names it);
+                // the before/after pair is exactly what undo/redo restore.
+                setHistory((previous) => recordHistory(previous, result.document, label));
+                // The revision moved: the derivative state (focus and
+                // emission preview) described the former revision and is
+                // now stale — the preview must never outlive its revision.
+                invalidateRevisionDerivedState();
+            }
             setOperationNotes([]);
-            setFocus(null); // the document changed — any highlighted target would be stale
             return;
         }
         // A REFUSED operation is not a change: it is exposed (the note
@@ -565,14 +592,16 @@ export function App() {
             return;
         }
         setHistory((previous) => undoHistory(previous));
-        clearCanvasInteractionSession();
+        clearCanvasInteractionState();
+        invalidateRevisionDerivedState();
     };
     const onRedo = (): void => {
         if (canRedoHistory(history) === false) {
             return;
         }
         setHistory((previous) => redoHistory(previous));
-        clearCanvasInteractionSession();
+        clearCanvasInteractionState();
+        invalidateRevisionDerivedState();
     };
 
     // ---- advanced gestures (port disconnect + reconnect) ------------------
@@ -745,6 +774,18 @@ export function App() {
         setLoadResult({ title: "Load result", ok: false, diagnostics: parsed.diagnostics, passedText: "" });
     };
 
+    const onDescriptorStateChange = (next: DescriptorPanelState): void => {
+        // Emission = f(document, descriptor): the descriptor is the
+        // preview's OTHER authority input, so a descriptor change
+        // invalidates the revision-derived state exactly as a document
+        // change does. The identity check keeps a pure re-set (the very
+        // same state object) an honest no-op.
+        if (!Object.is(next, descriptorState)) {
+            invalidateRevisionDerivedState();
+        }
+        setDescriptorState(next);
+    };
+
     const onEmit = (): void => {
         if (descriptor === null) {
             setEmission(null);
@@ -891,7 +932,7 @@ export function App() {
                                 </Button>
                             </div>
                         </div>
-                        <DescriptorPanel state={descriptorState} onStateChange={(state) => setDescriptorState(state)} openDescriptorFile={openDescriptorFile} />
+                        <DescriptorPanel state={descriptorState} onStateChange={onDescriptorStateChange} openDescriptorFile={openDescriptorFile} />
                     {graphSets.map((set) => (
                         <DiagnosticsPanel key={set.title} title={set.title} diagnostics={set.diagnostics} ok={set.ok} passedText={set.passedText} onSelect={selectDiagnostic} />
                     ))}

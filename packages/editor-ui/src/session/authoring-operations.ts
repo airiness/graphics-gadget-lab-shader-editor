@@ -110,12 +110,35 @@ export interface AuthoringRefusal {
     readonly reason: string;
 }
 
+/**
+ * The result of a core-judged authoring operation.
+ *
+ * There are THREE distinct outcomes, and consumers must read them as
+ * three:
+ *
+ *   - CHANGED — `applied === true` and `document !== input` (by
+ *     identity): a new document instance carrying the mutation;
+ *   - ACCEPTED NO-OP — `applied === true` and `document === input`: the
+ *     core accepted the operation and it was judged a no-op at this
+ *     revision (a same-endpoint reconnect, a zero-attachment port
+ *     disconnect), so the ORIGINAL document instance is returned
+ *     unchanged;
+ *   - REFUSED — `applied === false`: the input is returned unchanged
+ *     together with a structured `refusal`.
+ *
+ * `applied` therefore means "the operation was ACCEPTED by the core" —
+ * not "the document changed". Document IDENTITY is the mutation fact,
+ * and the consumer decides what a change implies (history, invalidation
+ * of derivative state); an accepted no-op implies neither, and a
+ * derivation built on `applied` alone would be wrong.
+ */
 export interface AuthoringResult {
-    /** The new document — or the unchanged input when `applied` is false. */
+    /** The new document; the unchanged input when the core refused or accepted a no-op. */
     readonly document: ShaderGraphDocument;
+    /** The operation was accepted by the core (CHANGED or ACCEPTED NO-OP). */
     readonly applied: boolean;
     readonly refusal: AuthoringRefusal | undefined;
-    /** The id of the entry this operation created (`applied` only). */
+    /** The id of the entry this operation created (`applied` only, CHANGED). */
     readonly createdId: string | undefined;
 }
 

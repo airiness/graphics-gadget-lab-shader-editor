@@ -70,12 +70,17 @@ shader compilation, or backend target policy.
    editor; dirty stays derived (undoing back to the baseline un-dirties).
    Undo/Redo land as a disabled-aware toolbar pair (Ctrl+Z / Ctrl+Y /
    Ctrl+Shift+Z); and every document transition (open/import, undo,
-   redo) clears the whole canvas session through one shared helper —
-   selection, armed reconnect and menu (connection ids are
-   document-scoped: a stale selection naming an id that ALSO exists in
-   the new document is a delete/reconnect hazard) plus the diagnostic
-   focus and the emission preview, both of which are bound to the
-   revision they were derived from.
+   redo) applies two distinct session-hygiene concepts —
+   (1) the CANVAS INTERACTION state — selection, armed reconnect and
+   menu (connection ids are document-scoped: a stale selection naming an
+   id that ALSO exists in the new document is a delete/reconnect
+   hazard); (2) the REVISION-DERIVED state — the diagnostic focus and
+   the emission preview. The preview is `f(document, descriptor)`, so
+   it is invalidated by BOTH authority inputs: any applied authoring
+   mutation (only when the document identity actually moved — an
+   accepted no-op churns nothing) and any descriptor change; a preview
+   showing another revision's HLSL is a wrong statement, never a stale
+   convenience. Open/import, undo and redo clear both.
 - **Rendering error — the second line of defense** — the
   first line is "no session operation may throw" (the auto-layout
   crash on the diagnostics scene was fixed exactly there). The

@@ -579,6 +579,15 @@ describe("reconnectConnection", () => {
         expect(after.to).toMatchObject({ nodeId: "node.output", portId: "Emissive" });
         expect(after.to.unknownFields["futureAnnotation"]).toEqual({ foo: 42 }); // the MOVE kept it, did not destroy it
         expect(after.from).toEqual(moved.from); // other end untouched
+        // The contract is FORWARD-COMPATIBLE PERSISTENCE, so the whole
+        // chain must close: the reconnected document serializes (the
+        // serializer flattens retained unknown fields back into bytes)
+        // and re-parses with the annotation still present — a break is
+        // caught whether the serializer or the move drops the data.
+        const bytes = serializeShaderGraphDocument(result.document);
+        const roundTripped = expectParsed(parseShaderGraphDocument(bytes).value);
+        const surviving = expectElement(roundTripped.connections, 0);
+        expect(surviving.to.unknownFields["futureAnnotation"]).toEqual({ foo: 42 }); // survived the disk round-trip
     });
 
     it("is a no-op of the SAME instance when the endpoint already sits where the change sends it", () => {
