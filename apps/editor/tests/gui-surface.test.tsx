@@ -755,6 +755,31 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(result.refusal?.reason).toContain("c99");
         });
 
+        it("locks the owner's decision: a connected socket follows the type it carries (concrete), exactly like its wire", () => {
+            // Deliberate mismatch case: a `float` producer (n.r.value)
+            // feeds the float3-declared BaseColor input. Socket AND wire
+            // both show the carried type (scalar) — one fact, ONE color;
+            // the connection state (hollow ring vs solid) stays its own
+            // axis, and the type mismatch is the graph's diagnostic to
+            // report, not a color clash to spell out.
+            const record: Record<string, unknown> = JSON.parse(validV1Document()) as Record<string, unknown>;
+            // Drop c1 (the float3 feed of BaseColor) so the input has
+            // exactly ONE incoming — the discriminator stays clean.
+            const connections = (record["connections"] as Record<string, unknown>[]).filter((entry) => entry.id !== "c1");
+            connections.push({
+                id: "c6",
+                from: { nodeId: "n.r", portId: "value" },
+                to: { nodeId: "n.out", portId: "BaseColor" },
+            });
+            record["connections"] = connections;
+            const document = loaded(JSON.stringify(record));
+            const projection = documentToFlow(document);
+            const outputNode = projection.nodes.find((node) => node.id === "n.out");
+            expect(outputNode?.data.inputPortKinds[0]).toBe("scalar"); // BaseColor carries float — socket says scalar
+            const wire = projection.edges.find((edge) => edge.id === "c6");
+            expect(wire?.data?.kind).toBe("scalar"); // and the wire says the SAME fact
+        });
+
         it("keeps the wire's color authority in EVERY state: the library's selected hook can't turn it gray, and selection really thickens", () => {
             // The library ships a default "selected" rule that re-colors the
             // path to a flat gray. Counter it at higher specificity (4 vs 3

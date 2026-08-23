@@ -56,6 +56,14 @@ shader compilation, or backend target policy.
    rail alone, or both together, maximize the canvas (composed
    `gglab-body-*-collapsed` grid states). The state is app-level layout
    state; the sections reappear unchanged on re-open.
+- **One fact, one color (owner decision, locked)** — a connected input
+   socket is colored by the type it ACTUALLY carries (the concrete
+   resolved type of its incoming wire), so the socket, the wire, and the
+   hover tooltip all state the same fact; an unconnected socket shows its
+   declared kind instead. The connection STATE (hollow ring vs solid dot)
+   is the other axis, and a wrong-type feed is the graph's diagnostic to
+   report — never a color clash to spell out. Do not re-color the socket
+   back to a stable "own" color without revisiting this decision.
 - **Connection lifecycle (port gestures)** — the advanced pair, on the
    same "core owns the semantics" rule. Both land as ONE atomic core
    operation each (never a UI-side remove+add sequence):
