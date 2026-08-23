@@ -1541,6 +1541,26 @@ describe("auto layout (session state only)", () => {
         return { ...document, editorMetadata: { ...document.editorMetadata, nodes } };
     }
 
+    it("lays out a CYCLIC graph (the diagnostics scene) without throwing — the cycle stays the core's diagnostic to name", () => {
+        // The fixed SurfaceDiagnostics scene is the one that crashed the
+        // app: dagre is a DAG layout engine, and that scene combines an
+        // Add ⇄ Multiply cycle with PARALLEL wires into a tall node —
+        // both used to blow up the layout pass, and the exception
+        // escaped into the session path, blanking the app. Layout is a
+        // visual convenience: it may not crash, it does not claim
+        // acyclicity (the core names the cycle), and parallel wires
+        // contribute nothing the layout does not already see.
+        const scene = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../../packages/shader-graph-core/tests/fixtures/SurfaceDiagnostics.shadergraph"), "utf8");
+        const parsed = parseShaderGraphDocument(scene);
+        expect(parsed.ok).toBe(true);
+        const document = parsed.value as ShaderGraphDocument;
+        const layout = autoLayout(document); // must not throw
+        expect(layout.nodeCount).toBe(8);
+        expect(Object.keys(layout.positions).sort()).toEqual([...document.nodes.map((node) => node.id)].sort()); // every node, BogusOp included
+        const again = autoLayout(document);
+        expect(again.positions).toEqual(layout.positions); // deterministic
+    });
+
     it("is deterministic and covers every node", () => {
         const document = loaded(validV1Document());
         const first = autoLayout(document);
