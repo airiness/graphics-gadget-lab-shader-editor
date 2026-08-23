@@ -550,6 +550,30 @@ describe("typed port presentation (core types → data categories)", () => {
         expect(viewportSource).toContain('position="bottom-right"');
     });
 
+    it("keeps the close prompt: strong veil, topmost card on token elevation, frozen Save/Don't Save/Cancel order", () => {
+        // Visual language (this block's only mandate; the close state
+        // machine itself is frozen behavior and stays in app.tsx).
+        expect(appCss).toMatch(/\.gglab-close-prompt \{[\s\S]*?color-mix\(in srgb, var\(--bg\) 70%, transparent\)/);
+        expect(appCss).toMatch(/\.gglab-close-prompt-card \{[\s\S]*?background: var\(--panel-2\);[\s\S]*?border-radius: var\(--r-2\);[\s\S]*?box-shadow: var\(--shadow-2\)/);
+        expect(appCss).toMatch(/\.gglab-close-prompt-title \{[\s\S]*?font-size: var\(--type-display\);[\s\S]*?font-weight: var\(--weight-strong\)/);
+        expect(appCss).toMatch(/\.gglab-close-prompt-text \{[\s\S]*?margin: 0 0 14px;/);
+        // Button system: the kit (no parallel classes), Save is the ONE
+        // primary action, and the owner-chosen order holds in the source.
+        const appSource = read("../src/app.tsx");
+        const save = appSource.indexOf('chooseCloseChoice("save")');
+        const discard = appSource.indexOf('chooseCloseChoice("discard")');
+        const cancel = appSource.indexOf('chooseCloseChoice("cancel")');
+        expect(save).toBeGreaterThan(-1);
+        expect(discard).toBeGreaterThan(save);
+        expect(cancel).toBeGreaterThan(discard);
+        const saveRow = appSource.slice(save - 220, save);
+        expect(saveRow).toContain('variant="primary"');
+        const discardRow = appSource.slice(discard - 220, discard);
+        expect(discardRow).toContain('variant="secondary"');
+        const cancelRow = appSource.slice(cancel - 220, cancel);
+        expect(cancelRow).toContain('variant="ghost"');
+    });
+
     it("keeps both side rails on one language: library and inspector collapse to the same 48px rail", () => {
         // Grid states compose: each rail alone, and both together
         // (canvas maximization) — 48px on the collapsed side(s).

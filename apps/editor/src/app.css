@@ -309,8 +309,13 @@ body {
 }
 
 /* ---- unsaved-close confirmation ------------------------------------------
-   The in-page surface shown while a close attempt is pending. */
+   The in-page surface shown while a close attempt is pending.
+   VISUAL LANGUAGE ONLY in this block: the close state machine (event /
+   Promise / ref / host behavior) is frozen behavior and must never be
+   reached from styling. */
 
+/* Stronger veil: the dialog owns the moment, the app stays visible
+   but clearly behind it. */
 .gglab-close-prompt {
     position: fixed;
     inset: 0;
@@ -318,27 +323,32 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: color-mix(in srgb, var(--bg) 55%, transparent);
+    background: color-mix(in srgb, var(--bg) 70%, transparent);
 }
 
+/* The card is the TOPMOST surface of the ladder (dialog > chrome card
+   raised surface), on token shadow and the kit's rounded card corner. */
 .gglab-close-prompt-card {
     width: min(420px, calc(100vw - 48px));
-    background: var(--panel);
+    background: var(--panel-2);
     border: 1px solid var(--border);
-    border-radius: calc(var(--r-1) + 4px);
-    padding: 20px 22px;
-    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+    border-radius: var(--r-2);
+    padding: 18px 20px;
+    box-shadow: var(--shadow-2);
 }
 
 .gglab-close-prompt-title {
-    margin: 0 0 6px;
+    margin: 0 0 8px;
     font-size: var(--type-display);
+    font-weight: var(--weight-strong);
+    letter-spacing: 0.01em;
     color: var(--text);
 }
 
 .gglab-close-prompt-text {
-    margin: 0 0 16px;
+    margin: 0 0 14px;
     font-size: var(--type-body);
+    line-height: var(--lh-body);
     color: var(--muted);
 }
 
