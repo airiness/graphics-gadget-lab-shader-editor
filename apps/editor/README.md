@@ -10,8 +10,36 @@ the `@gglab/shader-graph-core` semantic services.
 Never owns: graph semantics, type rules, validation, HLSL generation,
 shader compilation, or backend target policy.
 
+## Stage state (owner decision, 2026-07-21)
+
+The core authoring loop is closed for this stage — creation (click or
+drag), connection, disconnection, armed endpoint reconnection,
+selection, diagnostics navigation, auto layout, deterministic HLSL
+with the pinned golden fingerprints, save/load with provenance and
+derived dirty state, and labeled undo/redo — and it is locked by the
+golden fixed scenes (semantics in the core's suite) plus this
+package's projection and behavior suites. Decided owner list: **node
+deletion** has landed (see below); **parameter value editing** lands
+next, before the toolchain slice starts; the interaction
+refinements (multi-selection, box selection, dangling-wire node
+creation, edge rerouting, the history panel, recent files, and a
+dedicated code pane) are intentionally deferred until the toolchain
+loop (native compilation + toolchain diagnostics surfacing) closes.
+These are decisions, not unfinished defects.
+
 ## Editor structure and canvas chrome
 
+- **Node deletion — one gesture, the whole node** — each card carries a
+  header delete action (the kit's own compact icon control). It is a
+  raw INTENT (the node id): the composition root applies the core-judged
+  `removeNode` as ONE authoring operation and ONE history step — the
+  node, EVERY connection touching it (either end), and its placement
+  entry, with everything around preserved. A refusal (an id not in
+  this document) returns the unchanged instance with a structured
+  reason and is never recorded. A canvas selection or armed reconnect
+  naming a removed wire is stale the instant the removal lands and is
+  cleared exactly; a selection on a survivor stays put. The saved bytes
+  round-trip pure: no placement ghost for the removed node.
 - **Collapsible node library** — every library section collapses/expands
   through its header, `Collapse all` / `Expand all` drive the whole
   library, and the whole sidebar collapses to a rail (expand intent).
