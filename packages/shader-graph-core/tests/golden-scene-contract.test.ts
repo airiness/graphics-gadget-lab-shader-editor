@@ -1,29 +1,36 @@
 /**
  * Golden graphs — the fixed content scenes for the editor and the
- * toolchain alike (the fixtures live with the semantic owner, in
- * shader-graph-core's test assets, and are referenced at that stable
- * path so every smoke test screenshots the SAME scene).
+ * toolchain alike. This file is the CORE's home for them: what the
+ * graphs MEAN (parse strictness, validation vocabulary, and the
+ * deterministic emission fingerprint) is core contract; how they
+ * project visually is the editor's, and lives in the editor tests.
  *
  * SurfaceTextureGolden.shadergraph is the ONE fully-legal surface graph
- * that exercises the broadest slice of editor capability: the whole
- * parameter vocabulary (scalar, vector, texture), UV, a sample with
- * typed channel outputs, the math set, FAN-OUT from one output into
- * several inputs, and all five SurfaceOutput inputs. Opening it must be
- * a clean session: zero diagnostics of any severity, and a successful,
- * deterministic HLSL emission (the SHA-256 below is the durable
- * fingerprint of its generated source — a regression is a byte-level
- * difference, not a "it still compiles" hand-wave).
+ * that exercises the broadest slice of shader authoring: the whole
+ * parameter vocabulary (texture / vector / scalar), UV, a sample whose
+ * typed channel outputs are all consumed for what they are —
+ *
+ *   Texture → SampleTexture2D,  UV0 → uv
+ *   RGB (float3) → BaseColor path AND Emissive path (the fan-out)
+ *   R   (float)  → Metallic
+ *   G   (float)  → Roughness
+ *   A   (float)  → Opacity
+ *
+ * — with the math set propagating over the RGB paths and all five
+ * SurfaceOutput inputs claimed. Opening it must be a clean session
+ * (zero diagnostics of any severity) and its HLSL emission must be
+ * byte-durable: the SHA-256 below is the fingerprint. The B channel
+ * and RGBA are deliberately left to the core unit tests — the golden
+ * is a scene, not a circuit-board.
  *
  * SurfaceDiagnostics.shadergraph is its deliberate dark twin: the same
- * node vocabulary wired into as many distinct semantic defects as the
- * catalog allows, so the diagnostics panel always has a scene with real
- * material to render. It must stay OPENABLE (structural references
- * resolve — the panel, not a load failure, is the scene) and must REFUSE
- * emission with the structured error set.
+ * catalog wired into as many distinct semantic defects as possible, so
+ * the diagnostics panel always has a scene with real material to
+ * render. It must stay OPENABLE (structural references resolve — the
+ * panel, not a load failure, is the scene) and must REFUSE emission
+ * with the structured error set.
  */
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
     DiagnosticCode,
@@ -33,15 +40,13 @@ import {
     sha256Hex,
     utf8Encode,
     validateShaderGraph,
-} from "@gglab/shader-graph-core";
-import type { ShaderGraphDocument, SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
-import { canonicalV1Fixture } from "../../../packages/shader-graph-core/tests/fixtures/descriptor-v1.js";
-import { canonicalV2Fixture } from "../../../packages/shader-graph-core/tests/fixtures/descriptor-v2.js";
-
-const CORE_FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "../../../packages/shader-graph-core/tests/fixtures");
+} from "../src/index.js";
+import type { ShaderGraphDocument, SurfaceProfileDescriptor } from "../src/index.js";
+import { canonicalV1Fixture } from "./fixtures/descriptor-v1.js";
+import { canonicalV2Fixture } from "./fixtures/descriptor-v2.js";
 
 function fixture(name: string): string {
-    return readFileSync(join(CORE_FIXTURES, name), "utf8");
+    return readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8");
 }
 
 const parsedV1Descriptor = parseSurfaceProfileDescriptor(JSON.stringify(canonicalV1Fixture));
@@ -67,8 +72,9 @@ function expectParsed(raw: string): ShaderGraphDocument {
 describe("SurfaceTextureGolden.shadergraph", () => {
     const golden = fixture("SurfaceTextureGolden.shadergraph");
     // The durable fingerprint of the golden's generated source (the
-    // SHA-256 of the exact HLSL bytes; lower-case hex).
-    const GOLDEN_SOURCE_FINGERPRINT = "d37062da11f32ee2bb7c738661b81757c811241e5399a242874333f3e27c145d";
+    // SHA-256 of the exact HLSL bytes; lower-case hex). A change is a
+    // content- or lowering-level decision, never a silent drift.
+    const GOLDEN_SOURCE_FINGERPRINT = "ab14a2d526925a56a3b41e64eb4558905e12c2fa26f8a287cb3ef91eba17e7ba";
 
     it("opens as a fully legal v2 graph: zero diagnostics of any severity", () => {
         const parsed = parseShaderGraphDocument(golden);
@@ -81,41 +87,47 @@ describe("SurfaceTextureGolden.shadergraph", () => {
         expect(validateShaderGraph(document).diagnostics).toEqual([]);
     });
 
-    it("is the broadest-coverage scene: every parameter class, UV, sampling, math, fan-out, and all surface inputs", () => {
+    it("consumes the sample's typed channels for what they are: RGB float3 paths, R/G/A float scalars, no B", () => {
         const document = expectParsed(golden);
-        const types = document.nodes.map((node) => node.type).sort();
-        expect(types).toEqual(
-            [
-                "Lerp",
-                "Multiply",
-                "OneMinus",
-                "SampleTexture2D",
-                "Saturate",
-                "Saturate",
-                "ScalarParameter",
-                "ScalarParameter",
-                "ScalarParameter",
-                "ScalarParameter",
-                "ScalarParameter",
-                "SurfaceOutput",
-                "Texture2DParameter",
-                "UV0",
-                "VectorParameter",
-            ].sort(),
+        // The broadest-coverage node set (texture, vector, scalar,
+        // UV, sample, math, output).
+        expect(document.nodes.map((node) => node.type).sort()).toEqual(
+            ["Lerp", "Multiply", "SampleTexture2D", "Saturate", "Saturate", "ScalarParameter", "ScalarParameter", "SurfaceOutput", "Texture2DParameter", "UV0", "VectorParameter"].sort(),
         );
-        expect(document.parameters).toHaveLength(7);
-        const classes = document.parameters.map((entry) => entry.class).sort();
-        expect(classes).toEqual(["ScalarParameter", "ScalarParameter", "ScalarParameter", "ScalarParameter", "ScalarParameter", "Texture2DParameter", "VectorParameter"]);
-        // Fan-out: one output feeding TWO inputs (the Lerp result drives
-        // both the BaseColor clamp and the emissive mix).
-        const fanSources = document.connections.filter((entry) => entry.from.nodeId === "n.mix" && entry.from.portId === "value").length;
-        expect(fanSources).toBe(2);
+        expect(document.parameters).toHaveLength(4);
+        expect(document.parameters.map((entry) => entry.class).sort()).toEqual(["ScalarParameter", "ScalarParameter", "Texture2DParameter", "VectorParameter"]);
+        // The typed channel outputs, each consumed exactly once — the
+        // frozen SampleTexture2D contract exercised channel by channel.
+        const sampleOutputs = document.connections.filter((entry) => entry.from.nodeId === "n.sample").map((entry) => entry.from.portId).sort();
+        expect(sampleOutputs).toEqual(["A", "G", "R", "RGB", "RGB"]);
+        // RGB (float3) is the FAN-OUT: one output drives BOTH the
+        // BaseColor path and the Emissive path (Lerp.a of each).
+        const rgbTargets = document.connections
+            .filter((entry) => entry.from.nodeId === "n.sample" && entry.from.portId === "RGB")
+            .map((entry) => entry.to.portId)
+            .sort();
+        expect(rgbTargets).toEqual(["a", "a"]);
+        // ...while the float channels land on the float surface inputs:
+        const scalarChannelTargets = document.connections
+            .filter((entry) => entry.from.nodeId === "n.sample" && entry.from.portId !== "RGB")
+            .map((entry) => [entry.from.portId, entry.to.portId])
+            .sort();
+        expect(scalarChannelTargets).toEqual([
+            ["A", "Opacity"],
+            ["G", "Roughness"],
+            ["R", "Metallic"],
+        ]);
+        // And the graph never consumes B or RGBA (deliberate: the
+        // six-output matrix belongs to the core unit tests, not to the
+        // scene).
+        expect(sampleOutputs).not.toContain("B");
+        expect(sampleOutputs).not.toContain("RGBA");
         // All five SurfaceOutput inputs are claimed exactly once.
         const inputClaims = document.connections.filter((entry) => entry.to.nodeId === "n.out").map((entry) => entry.to.portId).sort();
         expect(inputClaims).toEqual(["BaseColor", "Emissive", "Metallic", "Opacity", "Roughness"]);
     });
 
-    it("emits HLSL deterministically with the durable fingerprint (v2 profile)", () => {
+    it("emits HLSL deterministically with the durable fingerprint (v2 profile), channel lowering included", () => {
         const document = expectParsed(golden);
         const first = emitHlsl(document, v2Descriptor);
         expect(first.ok).toBe(true);
@@ -128,8 +140,16 @@ describe("SurfaceTextureGolden.shadergraph", () => {
         // …and of the canonical generated source of THIS graph (durable
         // fingerprint — a change here is a content-level decision).
         expect(map?.generatedSourceIdentity).toBe(GOLDEN_SOURCE_FINGERPRINT);
-        // The sampling contract is really in the source, not just claimed.
+        // The sample is in the source (helper contract)…
         expect(first.source).toContain("gglab_sampleTexture2D");
+        // …and the channels the graph CONSUMED lowered visibly: .r/.g/.a
+        // are there (R/G/A feed Metallic/Roughness/Opacity), .b is NOT
+        // (the graph consumes no B channel) — the lowering mirrors the
+        // wiring, it is not a constant template.
+        expect(/\b\.r\b/.test(first.source)).toBe(true);
+        expect(/\b\.g\b/.test(first.source)).toBe(true);
+        expect(/\b\.a\b/.test(first.source)).toBe(true);
+        expect(/\b\.b\b/.test(first.source)).toBe(false);
         // Deterministic: the second emission is byte-identical.
         expect(emitHlsl(document, v2Descriptor).sourceMap?.generatedSourceIdentity).toBe(map?.generatedSourceIdentity);
     });

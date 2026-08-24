@@ -1,9 +1,12 @@
 /**
  * Authoring operations on the graph document — presentation-side data
  * construction only, and only where a frontend legitimately owns the answer
- * (stable-id derivation, document location). Every operation returns a new
- * document (or a structured refusal) and is atomic: a refusal returns the
- * unchanged input, never a halfway state.
+ * (stable-id derivation, document location). Every operation is atomic: a
+ * REFUSAL returns the unchanged input together with a structured refusal,
+ * never a halfway state; every ACCEPTED MUTATION returns a new document;
+ * an ACCEPTED NO-OP (a same-endpoint reconnect, a zero-attachment port
+ * disconnect) preserves the input instance — document identity, not the
+ * `applied` flag, is the mutation fact (see `AuthoringResult`).
  *
  * What this module does NOT own (each has exactly one authority):
  *   - node version + creation-time property defaults → the core's

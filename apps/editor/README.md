@@ -92,16 +92,24 @@ shader compilation, or backend target policy.
   render tree), shows the error's first line verbatim in a mono
   slot, and offers the single action: **Reload the window**.
 - **Golden graphs — the fixed smoke scenes** — `…/tests/fixtures/
-  SurfaceTextureGolden.shadergraph` (fully legal v2 surface: scalar,
-  vector and texture parameters, UV, typed-channel sampling, the math
-  set, a fan-out, and all five SurfaceOutput inputs; opens with ZERO
-  diagnostics and emits HLSL with a pinned durable SHA-256 fingerprint)
-  and `…/tests/fixtures/SurfaceDiagnostics.shadergraph` (opens cleanly
-  as a session — structural references resolve — then exposes the full
-  semantic defect set with core-owned codes/severities, and refuses
-  emission with the structured errors). These paths are the ONE stable
-  scene reference for every editor screenshot and smoke test: new
-  visual work renders against them, not ad-hoc state.
+  SurfaceTextureGolden.shadergraph` (fully legal v2 surface, and a
+  true `SurfaceTexture` scene: the sample's TYPED channels consumed
+  for what they are — RGB (float3) driving BOTH the BaseColor and the
+  Emissive path (the fan-out), R→Metallic, G→Roughness, A→Opacity,
+  the math set propagating over the RGB paths, all five SurfaceOutput
+  inputs; zero diagnostics on open; deterministic HLSL with a pinned
+  durable SHA-256 fingerprint whose lowering visibly mirrors the
+  consumed channels) and `…/tests/fixtures/
+  SurfaceDiagnostics.shadergraph` (opens cleanly as a session —
+  structural references resolve — then exposes the full semantic
+  defect set with core-owned codes/severities, and refuses emission
+  with the structured errors). Ownership of the proofs follows the
+  meaning: WHAT the scenes mean (parse, validation vocabulary, the
+  fingerprint, the defect set) is locked in the core's golden suite;
+  HOW they project (typed socket/edge kinds, the fan-out on canvas,
+  projection on a broken graph) in the editor's. These paths are the
+  ONE stable scene reference for every editor screenshot and smoke
+  test: new visual work renders against them, not ad-hoc state.
 - **One fact, one color (owner decision, locked)** — a connected input
    socket is colored by the type it ACTUALLY carries (the concrete
    resolved type of its incoming wire), so the socket, the wire, and the
