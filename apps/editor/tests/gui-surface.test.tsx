@@ -50,6 +50,7 @@ import {
     readDescriptorText,
     removeConnection,
     removeConnectionsAtPort,
+    removeNode,
     reconnectConnection,
     resolveDropCoordinate,
     createHistory,
@@ -975,6 +976,96 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(app).toMatch(/title="Undo the last change \(Ctrl\+Z\)"/);
             expect(app).toMatch(/disabled=\{!canUndoHistory\(history\)\}/);
             expect(app).toMatch(/disabled=\{!canRedoHistory\(history\)\}/);
+        });
+    });
+
+    // ---- node deletion: the whole node goes (node + wires + placement) -----
+    describe("node deletion (one gesture, whole node, round-trip pure)", () => {
+        function threeNodeDocument() {
+            const parsed = parseShaderGraphDocument(
+                JSON.stringify({
+                    schemaVersion: 1,
+                    graphId: "graph.node-removal",
+                    profile: "gglab.surface",
+                    profileVersion: 1,
+                    parameters: [],
+                    nodes: [
+                        { id: "n.a", type: "Float", version: 1, properties: { value: 1 } },
+                        { id: "n.b", type: "Float3", version: 1, properties: { value: [1, 1, 1] } },
+                        { id: "n.c", type: "Float", version: 1, properties: { value: 2 } },
+                    ],
+                    connections: [
+                        { id: "c.ab", from: { nodeId: "n.a", portId: "value" }, to: { nodeId: "n.b", portId: "a" } },
+                        { id: "c.ac", from: { nodeId: "n.a", portId: "value" }, to: { nodeId: "n.c", portId: "value" } },
+                    ],
+                    editorMetadata: {
+                        nodes: {
+                            "n.a": { position: { x: 10, y: 10 } },
+                            "n.b": { position: { x: 200, y: 10 } },
+                            "n.c": { position: { x: 10, y: 200 } },
+                        },
+                    },
+                }),
+            );
+            if (!parsed.ok || parsed.value === null) {
+                throw new Error(JSON.stringify(parsed.diagnostics));
+            }
+            return parsed.value;
+        }
+
+        it("removes the node, BOTH of its connections, and its placement — and preserves everything around them", () => {
+            const input = threeNodeDocument();
+            const result = removeNode(input, "n.a");
+            expect(result.applied).toBe(true);
+            expect(result.refusal).toBeUndefined();
+            expect(result.document).not.toBe(input); // a real mutation
+            expect(result.document.nodes.map((node) => node.id)).toEqual(["n.b", "n.c"]);
+            expect(result.document.connections).toEqual([]); // BOTH wires touching n.a go with it
+            // The placement of the removed node is GONE (no stranded session
+            // metadata, no persisted ghost, no id-reuse position resurrection)…
+            expect(result.document.editorMetadata.nodes["n.a"]).toBeUndefined();
+            // …and the other nodes' placements survive the removal.
+            expect(result.document.editorMetadata.nodes["n.b"]).toEqual({ position: { x: 200, y: 10 }, unknownFields: {} });
+            expect(input.nodes).toHaveLength(3); // the input was not mutated (atomic)
+        });
+
+        it("keeps the removal round-trip-pure: serialize → parse leaves NO trace of the removed node", () => {
+            const input = threeNodeDocument();
+            const result = removeNode(input, "n.a");
+            expect(result.applied).toBe(true);
+            const bytes = serializeShaderGraphDocument(result.document);
+            const roundTripped = parseShaderGraphDocument(bytes);
+            expect(roundTripped.ok).toBe(true);
+            if (roundTripped.value === null) {
+                throw new Error(JSON.stringify(roundTripped.diagnostics));
+            }
+            expect(roundTripped.value.nodes.map((node) => node.id)).toEqual(["n.b", "n.c"]);
+            expect(roundTripped.value.editorMetadata.nodes["n.a"]).toBeUndefined(); // no placement ghost in the saved bytes
+        });
+
+        it("refuses an id that is not in this document: unchanged input, structured reason, no silent success", () => {
+            const input = threeNodeDocument();
+            const result = removeNode(input, "n.ghost");
+            expect(result.applied).toBe(false);
+            expect(result.document).toBe(input); // the SAME instance (a refusal is never a change)
+            expect(result.refusal).not.toBeUndefined();
+            expect(result.refusal?.reason).toContain("n.ghost");
+        });
+
+        it("the card carries the removal action (kit icon control) and the viewport reports only the intent", () => {
+            const viewport = read("../../../packages/editor-ui/src/flow/flow-viewport.tsx");
+            expect(viewport).toContain('aria-label={`Remove node ${data.label}`}');
+            expect(viewport).toContain('<TrashIcon />');
+            expect(viewport).toContain("readonly onRemoveNode?: (nodeId: string) => void;");
+            expect(viewport).toContain("NodeRemoveContext");
+        });
+
+        it("the app applies the core-judged removal as ONE step and clears exactly the stale canvas state", () => {
+            const app = read("../src/app.tsx");
+            const handler = app.match(/const onRemoveNode = [^\n]*\n[\s\S]*?\n\s{4}\};/)?.[0] ?? "";
+            expect(handler).toContain("applyAuthoring(removeNode(document, nodeId), `removed node ${nodeId}`)");
+            expect(handler).toContain("clearCanvasInteractionState()"); // a selection on a removed wire is stale
+            expect(app).toContain("onRemoveNode={onRemoveNode}");
         });
     });
 

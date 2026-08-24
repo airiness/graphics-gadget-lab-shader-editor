@@ -36,6 +36,8 @@ import "@xyflow/react/dist/style.css";
 import type { ShaderFlowNode, ShaderNodeData } from "./flow-adapter.js";
 import { FLOW_NODE_TYPE, flowGeometryCssVars, handleStyle } from "./flow-adapter.js";
 import { AUTHORING_DROP_MIME, decodeAuthoringDrop, resolveDropCoordinate, type AuthoringDropPayload } from "../session/authoring-operations.js";
+import { Button } from "../components/ui/button.js";
+import { TrashIcon } from "../components/icons.js";
 
 export { ReactFlowProvider };
 
@@ -56,6 +58,14 @@ export type PortActivation = {
 };
 
 const PortGestureContext = createContext<((activation: PortActivation) => void) | null>(null);
+
+/**
+ * Node removal — the raw INTENT (which node). The composition root gives
+ * it meaning: it applies the core-judged removeNode (the node plus every
+ * connection that touches it, plus the placement) as ONE authoring
+ * operation. Absent (null) means the card has no delete action.
+ */
+const NodeRemoveContext = createContext<((nodeId: string) => void) | null>(null);
 
 function portRows(inputPorts: readonly string[], outputPorts: readonly string[]): { key: string; inputId: string | undefined; outputId: string | undefined }[] {
     const rows = Math.max(inputPorts.length, outputPorts.length, 1);
@@ -88,10 +98,25 @@ export function ShaderNode(props: NodeProps<ShaderNodeT>) {
         activatePort !== null
             ? (event: { readonly altKey: boolean }) => activatePort({ nodeId: props.id, portId, isInput, altKey: event.altKey })
             : undefined;
+    const removeNode = useContext(NodeRemoveContext);
     return (
         <div className={`gglab-node gglab-node-cat-${data.nodeCategory ?? "unknown"}${data.knownToCatalog === false ? " gglab-node-unknown" : ""}${data.focused ? " gglab-node-focus" : ""}`}>
             <div className="gglab-node-header">
-                <div className="gglab-node-title">{data.label}</div>
+                <div className="gglab-node-title-row">
+                    <div className="gglab-node-title">{data.label}</div>
+                    {removeNode !== null && (
+                        <Button
+                            variant="icon"
+                            size="icon"
+                            className="gglab-node-remove"
+                            aria-label={`Remove node ${data.label}`}
+                            title="Remove this node and every connection that touches it"
+                            onClick={() => removeNode(props.id)}
+                        >
+                            <TrashIcon />
+                        </Button>
+                    )}
+                </div>
                 <div className="gglab-node-meta">
                     <span className="gglab-node-type">{data.nodeType}</span>
                     <span className="gglab-node-category">{data.nodeCategory ?? "unknown"}</span>
@@ -196,6 +221,13 @@ export interface FlowViewportProps {
      */
     readonly onEdgeReconnectArm?: (connectionId: string) => void;
     readonly onPortActivate?: (activation: PortActivation) => void;
+    /**
+     * Node removal intent (the card's header action): the raw node id.
+     * The app applies the core-judged removal (node + touching
+     * connections + placement) as one authoring operation; the viewport
+     * owns no deletion.
+     */
+    readonly onRemoveNode?: (nodeId: string) => void;
 }
 
 /**
@@ -282,6 +314,7 @@ export function FlowViewport(props: FlowViewportProps) {
         // the TS projection uses — no parallel literals to drift.
         <div className="gglab-viewport" style={flowGeometryCssVars()}>
             <PortGestureContext.Provider value={props.onPortActivate ?? null}>
+            <NodeRemoveContext.Provider value={props.onRemoveNode ?? null}>
             <ReactFlow<ShaderNodeT>
                 nodes={nodes}
                 onNodesChange={onNodesChange}
@@ -351,6 +384,7 @@ export function FlowViewport(props: FlowViewportProps) {
                 <Controls showInteractive={false} position="top-right" />
                 <MiniMap pannable zoomable nodeColor={minimapNodeColor} maskColor="rgba(15,19,25,0.78)" position="bottom-right" className="gglab-minimap" />
             </ReactFlow>
+            </NodeRemoveContext.Provider>
             </PortGestureContext.Provider>
         </div>
     );

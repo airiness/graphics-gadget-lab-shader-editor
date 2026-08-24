@@ -42,6 +42,19 @@ export function ChevronsUpIcon(props: IconProps = {}) {
     );
 }
 
+/** Trash glyph (node removal — the card's delete action). */
+export function TrashIcon(props: IconProps = {}) {
+    const size = props.size ?? 14;
+    return (
+        <svg width={size} height={size} viewBox="0 0 14 14" aria-hidden>
+            <path d="M2.8 4h8.4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+            <path d="M5.4 4V2.7h3.2V4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M3.7 4l.6 7.5h5.4L10.3 4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M5.9 6v3.4M8.1 6v3.4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+        </svg>
+    );
+}
+
 /** Side panel collapse glyph (panel divider, no action mark). */
 export function PanelCloseIcon(props: IconProps = {}) {
     const size = props.size ?? 13;

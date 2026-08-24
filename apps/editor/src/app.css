@@ -870,6 +870,21 @@ body {
     overflow: hidden;
 }
 
+/* The title row: the name + the card's delete action on one line. The
+   button is the kit's own compact icon control (26×26) — a button must
+   read as a button at rest, never only on hover. */
+.gglab-node-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+}
+
+.gglab-node-remove {
+    flex: none;
+}
+
 .gglab-node-title {
     font-weight: var(--weight-strong);
     font-size: var(--type-node);
@@ -877,6 +892,7 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    min-width: 0;
 }
 
 .gglab-node-meta {

@@ -12,6 +12,7 @@ import {
     addConnection,
     removeConnection,
     removeConnectionsAtPort,
+    removeNode,
     reconnectConnection,
     isEditingTextTarget,
     createHistory,
@@ -557,6 +558,20 @@ export function App() {
     // ---- connection selection + removal (session state, core semantics) ----
     // The viewport reports raw gestures with the edge id; this is where the
     // app gives them meaning. Selection never touches the document.
+    const onRemoveNode = (nodeId: string): void => {
+        // Node removal is ONE intent applied by the core-judged
+        // operation: the node, every connection touching it (either
+        // end), and its placement. A canvas selection or armed reconnect
+        // naming one of the connections that goes with the node is stale
+        // the instant it lands — clear exactly that stale state (a
+        // selection on a survivor stays put).
+        const goneIds = document.connections.filter((connection) => connection.from.nodeId === nodeId || connection.to.nodeId === nodeId).map((connection) => connection.id);
+        applyAuthoring(removeNode(document, nodeId), `removed node ${nodeId}`);
+        if (goneIds.includes(selectedConnectionId ?? "") || goneIds.includes(reconnectArmed ?? "")) {
+            clearCanvasInteractionState();
+        }
+    };
+
     const onEdgeSelect = (connectionId: string): void => {
         setSelectedConnectionId(connectionId);
         setEdgeMenu(null);
@@ -890,6 +905,7 @@ export function App() {
                         onEdgeContextMenu={onEdgeContextMenu}
                         onEdgeReconnectArm={onEdgeReconnectArm}
                         onPortActivate={onPortActivate}
+                        onRemoveNode={onRemoveNode}
                         onFlowReady={(fitView) => {
                             fitRef.current = fitView;
                         }}

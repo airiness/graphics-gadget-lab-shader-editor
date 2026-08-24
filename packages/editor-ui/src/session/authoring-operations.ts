@@ -213,11 +213,20 @@ export function addNode(
     };
 }
 
-/** Remove a node and every connection that touches it (data integrity). */
+/**
+ * Remove a node and every connection that touches it (data integrity).
+ *
+ * The removal is WHOLE: the node, its connections (either end), AND its
+ * placement entry in `editorMetadata.nodes` — a removed node must not
+ * leave session metadata behind that would be persisted (or resurrect a
+ * position if the id is ever reused). Everything else, including the
+ * other nodes' placements and all retained unknown fields, is preserved.
+ */
 export function removeNode(document: ShaderGraphDocument, nodeId: string): AuthoringResult {
     if (document.nodes.some((node) => node.id === nodeId) === false) {
         return refused(document, `No node with id "${nodeId}".`);
     }
+    const placements = document.editorMetadata.nodes;
     const documentOut: ShaderGraphDocument = {
         ...document,
         nodes: document.nodes.filter((node) => node.id !== nodeId),
@@ -226,6 +235,7 @@ export function removeNode(document: ShaderGraphDocument, nodeId: string): Autho
             const to: ConnectionEnd = connection.to;
             return from.nodeId !== nodeId && to.nodeId !== nodeId;
         }),
+        ...(nodeId in placements ? { editorMetadata: { ...document.editorMetadata, nodes: Object.fromEntries(Object.entries(placements).filter(([id]) => id !== nodeId)) } } : {}),
     };
     return { document: documentOut, applied: true, refusal: undefined, createdId: undefined };
 }

@@ -1618,6 +1618,36 @@ command surface is derived from the mature `ShaderGraphCore` API and is not
 pre-built into the slices below; establishing the `apps/cli` package boundary
 does not change this sequence.
 
+### Stage record (owner, 2026-07-21)
+
+The Slice 1 authoring loop is closed for the first stage:
+author → connect → validated → deterministic, conformance-gated
+HLSL (pinned golden fingerprints) → save/reopen with the same
+semantic graph, HLSL and source identity. This is backed by the
+core's golden suite, the headless CLI surface, and the editor's GUI
+suite; a dedicated fixed scene (the texture golden and its
+diagnostics dark twin) references the same paths for every later
+screenshot and smoke test. Decisions recorded here:
+
+1. Connected sockets present their RESOLVED concrete type — one fact,
+   one color; a connected story never contradicts an unresolved one
+   (owner decision, locked).
+2. Authoring operations report three outcomes — a mutation (new
+   document), an accepted no-op (the input instance is preserved;
+   document identity, not the applied flag, is the mutation fact),
+   and a refusal (the input with a structured refusal). Derivative
+   session behavior builds on identity, never on the flag alone.
+3. Editor session state uses small pure per-domain stores composed
+   in the shell (history, position, gestures, layout) rather than a
+   general-purpose UI state library — consistent with the non-goal
+   that session state must never become a persisted contract.
+4. Node deletion and parameter value editing land before the
+   toolchain slice starts. The remaining canvas interaction
+   refinements (multi-selection, box selection, dangling-wire node
+   creation, edge rerouting, the history panel, recent files, a
+   dedicated code pane) are deferred until after the toolchain loop
+   (Slice 2/3) closes.
+
 ## Gate 0 — Surface Integration Probe
 
 Before editor Slice 1, implement the narrow GGLab-side probe defined in §5.
