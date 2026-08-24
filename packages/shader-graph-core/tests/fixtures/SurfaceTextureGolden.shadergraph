@@ -1,0 +1,334 @@
+{
+  "schemaVersion": 1,
+  "graphId": "graph.surface-texture-golden",
+  "profile": "gglab.surface",
+  "profileVersion": 2,
+  "parameters": [
+    {
+      "id": "p.albedo",
+      "name": "Albedo Texture",
+      "class": "Texture2DParameter",
+      "valueType": "Texture2D"
+    },
+    {
+      "id": "p.baseTint",
+      "name": "Base Tint",
+      "class": "VectorParameter",
+      "valueType": "float3"
+    },
+    {
+      "id": "p.mixStrength",
+      "name": "Mix Strength",
+      "class": "ScalarParameter",
+      "valueType": "float"
+    },
+    {
+      "id": "p.emission",
+      "name": "Emission",
+      "class": "ScalarParameter",
+      "valueType": "float"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "n.albedo",
+      "type": "Texture2DParameter",
+      "version": 1,
+      "properties": {
+        "parameterId": "p.albedo"
+      }
+    },
+    {
+      "id": "n.uv",
+      "type": "UV0",
+      "version": 1,
+      "properties": {}
+    },
+    {
+      "id": "n.sample",
+      "type": "SampleTexture2D",
+      "version": 1,
+      "properties": {}
+    },
+    {
+      "id": "n.baseTint",
+      "type": "VectorParameter",
+      "version": 1,
+      "properties": {
+        "parameterId": "p.baseTint"
+      }
+    },
+    {
+      "id": "n.mixStrength",
+      "type": "ScalarParameter",
+      "version": 1,
+      "properties": {
+        "parameterId": "p.mixStrength"
+      }
+    },
+    {
+      "id": "n.emission",
+      "type": "ScalarParameter",
+      "version": 1,
+      "properties": {
+        "parameterId": "p.emission"
+      }
+    },
+    {
+      "id": "n.mix",
+      "type": "Lerp",
+      "version": 1,
+      "properties": {}
+    },
+    {
+      "id": "n.clamp",
+      "type": "Saturate",
+      "version": 1,
+      "properties": {}
+    },
+    {
+      "id": "n.emis",
+      "type": "Multiply",
+      "version": 1,
+      "properties": {}
+    },
+    {
+      "id": "n.emisClamp",
+      "type": "Saturate",
+      "version": 1,
+      "properties": {}
+    },
+    {
+      "id": "n.out",
+      "type": "SurfaceOutput",
+      "version": 1,
+      "properties": {}
+    }
+  ],
+  "connections": [
+    {
+      "id": "c.albedoSample",
+      "from": {
+        "nodeId": "n.albedo",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.sample",
+        "portId": "texture"
+      }
+    },
+    {
+      "id": "c.uvSample",
+      "from": {
+        "nodeId": "n.uv",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.sample",
+        "portId": "uv"
+      }
+    },
+    {
+      "id": "c.rgbBaseColor",
+      "from": {
+        "nodeId": "n.sample",
+        "portId": "RGB"
+      },
+      "to": {
+        "nodeId": "n.mix",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c.tintMix",
+      "from": {
+        "nodeId": "n.baseTint",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.mix",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c.strideMix",
+      "from": {
+        "nodeId": "n.mixStrength",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.mix",
+        "portId": "t"
+      }
+    },
+    {
+      "id": "c.mixClamp",
+      "from": {
+        "nodeId": "n.mix",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.clamp",
+        "portId": "value"
+      }
+    },
+    {
+      "id": "c.clampOut",
+      "from": {
+        "nodeId": "n.clamp",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.out",
+        "portId": "BaseColor"
+      }
+    },
+    {
+      "id": "c.rgbEmissive",
+      "from": {
+        "nodeId": "n.sample",
+        "portId": "RGB"
+      },
+      "to": {
+        "nodeId": "n.emis",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c.emisStrength",
+      "from": {
+        "nodeId": "n.emission",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.emis",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c.emisClamp",
+      "from": {
+        "nodeId": "n.emis",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.emisClamp",
+        "portId": "value"
+      }
+    },
+    {
+      "id": "c.emisOut",
+      "from": {
+        "nodeId": "n.emisClamp",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.out",
+        "portId": "Emissive"
+      }
+    },
+    {
+      "id": "c.rMetallic",
+      "from": {
+        "nodeId": "n.sample",
+        "portId": "R"
+      },
+      "to": {
+        "nodeId": "n.out",
+        "portId": "Metallic"
+      }
+    },
+    {
+      "id": "c.gRoughness",
+      "from": {
+        "nodeId": "n.sample",
+        "portId": "G"
+      },
+      "to": {
+        "nodeId": "n.out",
+        "portId": "Roughness"
+      }
+    },
+    {
+      "id": "c.aOpacity",
+      "from": {
+        "nodeId": "n.sample",
+        "portId": "A"
+      },
+      "to": {
+        "nodeId": "n.out",
+        "portId": "Opacity"
+      }
+    }
+  ],
+  "editorMetadata": {
+    "nodes": {
+      "n.albedo": {
+        "position": {
+          "x": 40,
+          "y": 80
+        }
+      },
+      "n.baseTint": {
+        "position": {
+          "x": 40,
+          "y": 460
+        }
+      },
+      "n.clamp": {
+        "position": {
+          "x": 840,
+          "y": 120
+        }
+      },
+      "n.emis": {
+        "position": {
+          "x": 620,
+          "y": 420
+        }
+      },
+      "n.emisClamp": {
+        "position": {
+          "x": 840,
+          "y": 420
+        }
+      },
+      "n.emission": {
+        "position": {
+          "x": 40,
+          "y": 740
+        }
+      },
+      "n.mix": {
+        "position": {
+          "x": 620,
+          "y": 120
+        }
+      },
+      "n.mixStrength": {
+        "position": {
+          "x": 40,
+          "y": 600
+        }
+      },
+      "n.out": {
+        "position": {
+          "x": 1060,
+          "y": 360
+        }
+      },
+      "n.sample": {
+        "position": {
+          "x": 320,
+          "y": 200
+        }
+      },
+      "n.uv": {
+        "position": {
+          "x": 40,
+          "y": 220
+        }
+      }
+    }
+  }
+}

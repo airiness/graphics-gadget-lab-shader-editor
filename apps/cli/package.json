@@ -1,0 +1,23 @@
+{
+  "name": "@gglab/shader-graph-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Machine/automation authoring frontend for GGLab ShaderGraph: structured, agent-, CI-, and automation-friendly access to the headless core.",
+  "type": "module",
+  "bin": {
+    "shader-graph": "./bin/shader-graph.js"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@gglab/shader-graph-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "tsx": "^4.23.12",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
+  }
+}

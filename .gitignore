@@ -2,6 +2,10 @@
 # Dependencies
 node_modules/
 
+# Local pnpm content-addressed store (pinned in-repo via storeDir in
+# pnpm-workspace.yaml)
+.pnpm-store/
+
 # Logs
 *.log
 
@@ -14,12 +18,34 @@ coverage/
 *.lcov
 .nyc_output
 
+# Test runner artifacts
+test-results/
+playwright-report/
+
 # Build output
 dist/
+dist-ssr/
 build/Release
+
+# Vite
+.vite/
+*.timestamp-*
+*.local
 
 # TypeScript cache
 *.tsbuildinfo
+
+# Rust / Tauri build output
+target/
+# Tauri generated ACL/state schemas. NOTE: a pattern that contains a slash
+# is anchored to THIS .gitignore's directory (repo root), so it must be
+# glob-prefixed to reach apps/editor/src-tauri/gen/ (the same trap the
+# slash-less "target/" rule already avoids — bare names match at any depth).
+**/src-tauri/gen/
+
+# ESLint cache
+.eslint-cache
+.eslintcache
 
 # Framework build output and caches
 .cache

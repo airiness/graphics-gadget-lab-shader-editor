@@ -1,0 +1,24 @@
+{
+  "name": "graphics-gadget-lab-shader-editor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Authoring tool repository for the GGLab node-based shader graph editor.",
+  "type": "module",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=24.0.0"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r --if-present run test",
+    "lint": "eslint .",
+    "tauri": "pnpm --filter @gglab/editor tauri"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.8.1",
+    "globals": "^17.11.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.67.0"
+  }
+}

@@ -1,0 +1,1400 @@
+/* ============================================================================
+   GGLab Shader Editor — design system (tokens + primitives + node language).
+   Every visual fact is a token on :root; components reference tokens, not
+   raw values. Tailwind v4 supplies the chrome utilities; the shadcn-style
+   semantic tokens are bridged from these same root tokens below
+   (`@theme inline`), so the kit themes the one existing palette.
+   Node card geometry uses the --gglab-geom-* custom properties, which the
+   viewport injects from flow-geometry.ts (FLOW_GEOMETRY) — one source of
+   truth for header/row/handle/width; the fallbacks below only serve
+   standalone card renders outside a viewport.
+   ========================================================================= */
+
+@import "tailwindcss";
+
+/* The component kit lives in the editor-ui package, outside this
+   package's default utility candidate scan. Scan it explicitly, or its
+   classes (flex-col, gap-2, ...) silently never compile and only the
+   ones accidentally echoed in local strings survive. */
+@source "../../../packages/editor-ui";
+
+/* shadcn-style semantic tokens → this app's design tokens (one palette). */
+@theme inline {
+    --color-background: var(--bg);
+    --color-foreground: var(--text);
+    --color-card: var(--panel-2);
+    --color-card-foreground: var(--text);
+    --color-popover: var(--panel-hi);
+    --color-popover-foreground: var(--text);
+    --color-primary: var(--accent);
+    --color-primary-foreground: #0b1220;
+    --color-secondary: var(--panel-hi);
+    --color-secondary-foreground: var(--text);
+    --color-muted: var(--panel-2);
+    --color-muted-foreground: var(--muted);
+    --color-accent: var(--accent);
+    --color-accent-foreground: #0b1220;
+    --color-accent-soft: var(--accent-soft);
+    --color-destructive: var(--error);
+    --color-destructive-foreground: #1a0b0b;
+    --color-border: var(--border);
+    --color-border-soft: var(--border-soft);
+    --color-border-hi: var(--border-hi);
+    /* raised interactive surfaces (buttons): one and two steps above panel */
+    --color-raised: var(--panel-hi);
+    --color-raised-hi: var(--border-soft);
+    --color-input: var(--bg);
+    --color-ring: var(--accent);
+    --font-sans: var(--font-ui);
+    --font-mono: var(--font-mono);
+}
+
+:root {
+    color-scheme: dark;
+    /* neutral scale */
+    --bg: #0f1319;
+    --panel: #151b23;
+    --panel-2: #1a222d;
+    --panel-hi: #202a37;
+    --border: #2b3442;
+    --border-soft: #232d3a;
+    --border-hi: #3b4859;
+    --text: #dde5ef;
+    --muted: #93a0b1;
+    /* ≈4.5:1 on --panel-2 (AA for small text) — raised from #66748a
+       (≈3.4:1) so meta text, hints, and diagnostic paths stay readable. */
+    --faint: #7b89a1;
+    /* semantics */
+    --accent: #5aa9ff;
+    --accent-soft: rgba(90, 169, 255, 0.14);
+    --ok: #6fd39a;
+    --warn: #e8b45a;
+    --error: #ff7a7a;
+    /* data categories (port handles, dots, edge strokes) — a presentation
+       mapping over the core catalog's type vocabulary */
+    --kind-scalar: #d9a85f;
+    --kind-vector: #6fbfa8;
+    --kind-texture: #a58fd9;
+    --kind-generic: #7c8b9e;
+    /* node categories (card rail) — a presentation mapping over the core's
+       node categories */
+    --cat-constant: #d9a85f;
+    --cat-parameter: #cf8a6a;
+    --cat-math: #6fbfa8;
+    --cat-input: #7fa7d9;
+    --cat-texture: #a58fd9;
+    --cat-output: #d98fa5;
+    --cat-unknown: #7c8b9e;
+    /* structure */
+    --r-1: 4px;
+    --r-2: 8px;
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45), 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+
+    /* ---- typography -------------------------------------------------------
+       ONE family stack, one mono stack, and a fixed role scale. Every
+       font-size / weight / line-height in the app MUST come from these
+       tokens (enforced by the typography lock test).
+
+       The UI stack is a single unified family — Noto Sans CJK first
+       (one family covers Latin + CJK when installed), then CJK-capable
+       local faces (real registered names), then the Latin system face.
+       CJK-capable faces stay AHEAD of pure-Latin ones so a missing
+       Noto never re-introduces a random cross-family CJK fallback.
+       When the UI gains real localization, this is the single place to
+       branch per language (e.g. :lang(zh-CN) → SC-first stack). */
+    --font-ui:
+        "Noto Sans CJK JP", "Noto Sans JP", "Noto Sans",
+        "BIZ UDGothic", "Microsoft YaHei",
+        "Segoe UI", system-ui, sans-serif;
+    /* Mono: equal-width Latin first (Cascadia → Consolas), the CJK
+       fallback AFTER Consolas (a proportional CJK face in front of the
+       mono Latin would break code alignment), then the generic tail. */
+    --font-mono:
+        "Cascadia Mono", "Cascadia Code", "Consolas",
+        "Microsoft YaHei", ui-monospace, monospace;
+
+    /* role scale — six sizes, three semantic weights, two line heights */
+    --type-micro: 10.5px;  /* category tags, flags, micro meta */
+    --type-meta: 11px;     /* chips, hints, meta text, micro-caps titles, status bar */
+    --type-body: 12px;     /* UI body: panels, buttons, list entries, node body */
+    --type-code: 11.5px;   /* mono: type ids, diagnostic code, paths, code blocks */
+    --type-node: 13.5px;   /* node title (the canvas's headline voice) */
+    --type-display: 15px;  /* dialog / overlay headings */
+    --weight-strong: 600;  /* buttons, emphasized body (node title, port focus) */
+    --weight-heading: 700; /* micro-caps panel titles, diagnostic code */
+    --lh-body: 1.5;
+    --lh-code: 1.6;
+    --tracking-caps: 0.09em;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+/* ONE focus language for every interactive control: the kit's ring,
+   guaranteed here so the user-agent default focus frame can never leak
+   through a raw <button> (section heads, rail controls, list rows).
+   The kit's own focus-visible classes carry the same values. */
+button:focus-visible,
+[role="button"]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+html,
+body,
+#gglab-root {
+    height: 100%;
+    margin: 0;
+}
+
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: var(--type-body);
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Slim, surface-agnostic scrollbar (dense-tool style): the transparent
+   inset lets whatever surface is underneath show through, so one rule
+   serves every scroll region. */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border);
+    background-clip: padding-box;
+    border-radius: 4px;
+    border: 2px solid transparent;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--border-hi);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+/* ---- shell ----------------------------------------------------------------
+   The canvas is the protagonist: a full-bleed center with grid + chrome,
+   flanked by a compact library and an inspector; the brand bar and the
+   status bar bookend it. */
+
+.gglab-app {
+    display: grid;
+    grid-template-rows: 46px minmax(0, 1fr) 30px;
+    height: 100%;
+}
+
+.gglab-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border-soft);
+}
+
+.gglab-header-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.gglab-brand {
+    font-size: var(--type-body);
+    font-weight: var(--weight-strong);
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+}
+
+.gglab-brand-sub {
+    color: var(--faint);
+    font-size: var(--type-meta);
+    white-space: nowrap;
+}
+
+.gglab-body {
+    display: grid;
+    grid-template-columns: 252px minmax(0, 1fr) 336px;
+    min-height: 0;
+}
+
+/* Either side can collapse to its 48px rail; both together maximize
+   the canvas (library / inspector / both states are composed here,
+   each owned as app-level layout state). */
+.gglab-body-library-collapsed {
+    grid-template-columns: 48px minmax(0, 1fr) 336px;
+}
+
+.gglab-body-inspector-collapsed {
+    grid-template-columns: 252px minmax(0, 1fr) 48px;
+}
+
+.gglab-body-library-collapsed.gglab-body-inspector-collapsed {
+    grid-template-columns: 48px minmax(0, 1fr) 48px;
+}
+
+.gglab-side {
+    overflow-y: auto;
+    background: var(--panel);
+    border-color: var(--border-soft);
+    padding: 12px;
+}
+
+.gglab-canvas {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+}
+
+/* Canvas toolbar (auto layout) — top-left corner, above the grid. */
+.gglab-canvas-actions {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 10;
+    display: flex;
+    gap: 8px;
+}
+
+/* Reconnect armed — the top-center chrome chip (same surface language as
+   the toolbar), the visible state of a PENDING gesture: it means nothing
+   has been changed yet, and Esc/blank returns it to exactly that. */
+.gglab-reconnect-hint {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    max-width: min(560px, calc(100% - 160px));
+    padding: 5px 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    box-shadow: var(--shadow-1);
+    color: var(--muted);
+    font-size: var(--type-body);
+    line-height: var(--lh-body);
+}
+
+.gglab-side-left {
+    border-right: 1px solid var(--border-soft);
+}
+
+.gglab-side-right {
+    border-left: 1px solid var(--border-soft);
+}
+
+.gglab-statusbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0 16px;
+    background: var(--panel);
+    border-top: 1px solid var(--border-soft);
+    color: var(--muted);
+    font-size: var(--type-meta);
+}
+
+.gglab-status-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+/* Items keep an even internal gap (dot + label reads as one unit). */
+.gglab-status-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.gglab-status-item.mono,
+.gglab-statusbar .mono {
+    font-family: var(--font-mono);
+}
+
+/* ---- unsaved-close confirmation ------------------------------------------
+   The in-page surface shown while a close attempt is pending.
+   VISUAL LANGUAGE ONLY in this block: the close state machine (event /
+   Promise / ref / host behavior) is frozen behavior and must never be
+   reached from styling. */
+
+/* Stronger veil: the dialog owns the moment, the app stays visible
+   but clearly behind it. */
+.gglab-close-prompt {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--bg) 70%, transparent);
+}
+
+/* The card is the TOPMOST surface of the ladder (dialog > chrome card
+   raised surface), on token shadow and the kit's rounded card corner. */
+.gglab-close-prompt-card {
+    width: min(420px, calc(100vw - 48px));
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    padding: 18px 20px;
+    box-shadow: var(--shadow-2);
+}
+
+.gglab-close-prompt-title {
+    margin: 0 0 8px;
+    font-size: var(--type-display);
+    font-weight: var(--weight-strong);
+    letter-spacing: 0.01em;
+    color: var(--text);
+}
+
+.gglab-close-prompt-text {
+    margin: 0 0 14px;
+    font-size: var(--type-body);
+    line-height: var(--lh-body);
+    color: var(--muted);
+}
+
+/* ---- application-level rendering error ------------------------------------
+   The second line of defense against an uncaught throw in the render path:
+   the window stays open, holding the topmost recovery card (one rank above
+   the close prompt on the same ladder). The in-memory session is gone by
+   definition (it lived in the dead render tree) — the card says so plainly
+   and offers the single recovery action. Same chrome-card recipe as the
+   close prompt: one stronger veil, the same ladder surface. */
+
+.gglab-error-veil {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--bg) 76%, transparent);
+}
+
+.gglab-error-card {
+    width: min(440px, calc(100vw - 48px));
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    padding: 18px 20px;
+    box-shadow: var(--shadow-2);
+}
+
+.gglab-error-title {
+    margin: 0 0 8px;
+    font-size: var(--type-display);
+    font-weight: var(--weight-strong);
+    letter-spacing: 0.01em;
+    color: var(--text);
+}
+
+.gglab-error-text {
+    margin: 0 0 14px;
+    font-size: var(--type-body);
+    line-height: var(--lh-body);
+    color: var(--muted);
+}
+
+/* The error's first line: verbatim, mono, undecorated — a diagnostic slot,
+   not a status chip. */
+.gglab-error-line {
+    display: block;
+    margin: 0 0 14px;
+    padding: 8px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-1);
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+    line-height: var(--lh-code);
+    color: var(--muted);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+/* ---- primitives -----------------------------------------------------------
+   Field / Chip / Panel / Fact — the shared language. The button language
+   lives in the editor-ui Button kit (one base, six variants, five states);
+   there are no button classes in this sheet. */
+
+.gglab-field {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    color: var(--text);
+    border-radius: var(--r-1);
+    padding: 7px 10px;
+    font-family: var(--font-ui);
+    font-size: var(--type-body);
+}
+
+.gglab-field::placeholder {
+    color: var(--faint);
+}
+
+.gglab-field:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.gglab-field-mono {
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+    line-height: var(--lh-code);
+    resize: vertical;
+    tab-size: 4;
+}
+
+.gglab-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 10px;
+    border: 1px solid var(--border-soft);
+    border-radius: 999px;
+    background: var(--panel-2);
+    color: var(--muted);
+    font-size: var(--type-meta);
+    white-space: nowrap;
+}
+
+.gglab-chip-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--faint);
+}
+
+.gglab-chip-ok {
+    color: var(--ok);
+}
+
+.gglab-chip-ok .gglab-chip-dot {
+    background: var(--ok);
+}
+
+.gglab-chip-warn {
+    color: var(--warn);
+}
+
+.gglab-chip-warn .gglab-chip-dot {
+    background: var(--warn);
+}
+
+.gglab-chip-error {
+    color: var(--error);
+}
+
+.gglab-chip-error .gglab-chip-dot {
+    background: var(--error);
+}
+
+.gglab-chip-mono {
+    font-family: var(--font-mono);
+    letter-spacing: 0;
+}
+
+.gglab-panel {
+    background: var(--panel-2);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-2);
+    padding: 12px;
+    margin: 0 0 12px;
+    box-shadow: var(--shadow-1);
+}
+
+.gglab-panel-title {
+    margin: 0 0 8px;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-heading);
+    letter-spacing: var(--tracking-caps);
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.gglab-panel-hint {
+    margin: 0 0 10px;
+    color: var(--faint);
+    font-size: var(--type-meta);
+    line-height: var(--lh-body);
+}
+
+.gglab-panel-status {
+    margin: 8px 0 0;
+    font-size: var(--type-body);
+    line-height: var(--lh-body);
+    color: var(--muted);
+}
+
+.gglab-panel-status-warn {
+    color: var(--warn);
+}
+
+.gglab-panel-code {
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+    font-weight: var(--weight-heading);
+}
+
+.gglab-facts {
+    display: block;
+    margin: 10px 0 0;
+}
+
+.gglab-fact {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border-soft);
+    font-size: var(--type-body);
+}
+
+.gglab-fact:last-child {
+    border-bottom: none;
+}
+
+.gglab-fact dt {
+    color: var(--faint);
+    font-size: var(--type-meta);
+}
+
+.gglab-fact dd {
+    margin: 0;
+    color: var(--text);
+}
+
+.gglab-visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    clip: rect(0 0 0 0);
+    overflow: hidden;
+}
+
+/* ---- node library (left side) -------------------------------------------- */
+
+.gglab-library-search {
+    margin: 0 0 12px;
+}
+
+.gglab-library-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.gglab-library-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-heading);
+    letter-spacing: var(--tracking-caps);
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.gglab-section-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 6px;
+    margin: 0;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid transparent;
+    border-radius: var(--r-1);
+    cursor: pointer;
+    font: inherit;
+}
+
+.gglab-section-head:hover {
+    color: var(--text);
+    background: var(--panel-hi);
+    border-color: var(--border-soft);
+}
+
+.gglab-section-title {
+    margin: 0;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-heading);
+    letter-spacing: var(--tracking-caps);
+    text-transform: uppercase;
+}
+
+.gglab-chevron {
+    color: var(--faint);
+    transition: transform 0.14s ease;
+}
+
+.gglab-chevron-open {
+    transform: rotate(180deg);
+}
+
+.gglab-section-body {
+    padding: 2px 0 10px;
+}
+
+/* Collapsed-column rail — shared by BOTH sides (library left,
+   inspector right); layout state is owned by the composition root. */
+.gglab-side-rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 0;
+}
+
+/* 4px side padding keeps the button inside the 48px column. */
+.gglab-rail-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 4px;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-2);
+    cursor: pointer;
+}
+
+.gglab-rail-btn:hover {
+    color: var(--text);
+    border-color: var(--border-hi);
+    background: var(--panel-hi);
+}
+
+.gglab-rail-text {
+    writing-mode: vertical-rl;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-strong);
+    letter-spacing: var(--tracking-caps);
+    text-transform: uppercase;
+}
+
+/* Bulk section controls (collapse all / expand all). */
+.gglab-library-bulk {
+    display: flex;
+    gap: 2px;
+}
+
+.gglab-palette-usage {
+    margin: 0 0 10px;
+}
+
+/* Palette entries are drag-and-drop sources (HTML5 DnD). */
+.gglab-palette-draggable {
+    cursor: grab;
+}
+
+.gglab-palette-draggable:active {
+    cursor: grabbing;
+}
+
+.gglab-palette-hint {
+    margin: 0 0 8px;
+    color: var(--faint);
+    font-size: var(--type-meta);
+    line-height: var(--lh-body);
+}
+
+.gglab-palette-entry {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding: 5px 8px;
+    margin: 1px 0;
+    background: transparent;
+    color: var(--text);
+    border: 1px solid transparent;
+    border-radius: var(--r-1);
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: var(--type-body);
+    text-align: left;
+}
+
+.gglab-palette-entry:hover {
+    border-color: var(--border-hi);
+    background: var(--panel-2);
+}
+
+.gglab-palette-name {
+    white-space: nowrap;
+}
+
+.gglab-palette-tag {
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    color: var(--faint);
+    white-space: nowrap;
+}
+
+.gglab-parameter-choice {
+    border-left: 2px solid var(--border);
+    margin: 4px 0 4px 6px;
+    padding-left: 10px;
+}
+
+.gglab-parameter-deferred {
+    border-left-color: var(--faint);
+    opacity: 0.85;
+}
+
+.gglab-palette-value {
+    padding: 3px 8px;
+    font-family: var(--font-ui);
+    font-size: var(--type-body);
+}
+
+.gglab-palette-deferred {
+    color: var(--warn);
+    font-size: var(--type-micro);
+    text-transform: lowercase;
+}
+
+.gglab-palette-deferred-note {
+    display: block;
+    font-size: var(--type-meta);
+    color: var(--faint);
+    margin: 2px 0 4px;
+}
+
+/* ---- node language (canvas cards) -----------------------------------------
+   The port is the visual core: labeled row + own handle + data-category
+   dot; the category rail identifies the node family at a glance. */
+
+.gglab-node {
+    position: relative;
+    width: var(--gglab-geom-node-w, 200px);
+    padding: 0;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    box-shadow: var(--shadow-1);
+}
+
+/* category rail — full height (the node's identity stripe; the color
+   itself is defined on the category class). Left corners follow the
+   card radius; the right edge is a straight stripe edge. */
+.gglab-node::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    border-radius: var(--r-2) 0 0 var(--r-2);
+    background: var(--cat, var(--cat-unknown));
+}
+
+.gglab-node-cat-constant {
+    --cat: var(--cat-constant);
+}
+.gglab-node-cat-parameter {
+    --cat: var(--cat-parameter);
+}
+.gglab-node-cat-math {
+    --cat: var(--cat-math);
+}
+.gglab-node-cat-input {
+    --cat: var(--cat-input);
+}
+.gglab-node-cat-texture {
+    --cat: var(--cat-texture);
+}
+.gglab-node-cat-output {
+    --cat: var(--cat-output);
+}
+.gglab-node-cat-unknown {
+    --cat: var(--cat-unknown);
+}
+
+.gglab-node:hover,
+.react-flow__node:hover .gglab-node {
+    border-color: var(--border-hi);
+    box-shadow: var(--shadow-2);
+}
+
+.react-flow__node.selected .gglab-node,
+.gglab-node-focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow-2);
+}
+
+.gglab-node-unknown .gglab-node-category {
+    color: var(--warn);
+}
+
+/* Header: title + meta, then a 1px divider — the structural line that
+   separates "what it is" from "its ports", tightening the three-tier
+   hierarchy (display name → type/category → ports) without a resize. */
+.gglab-node-header {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    height: var(--gglab-geom-header-h, 56px);
+    padding: var(--gglab-geom-pad-top, 8px) var(--gglab-geom-pad-right, 12px) 0 var(--gglab-geom-pad-left, 15px);
+    border-bottom: 1px solid var(--border);
+    overflow: hidden;
+}
+
+/* The title row: the name + the card's action-menu affordance on one
+   line. The toggle is the kit's own compact icon control (26×26) — a
+   button must read as a button at rest, never only on hover. */
+.gglab-node-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+}
+
+.gglab-node-menu-toggle {
+    flex: none;
+}
+
+.gglab-node-title {
+    font-weight: var(--weight-strong);
+    font-size: var(--type-node);
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+
+.gglab-node-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.gglab-node-type {
+    color: var(--faint);
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+}
+
+.gglab-node-category {
+    color: var(--muted);
+    font-size: var(--type-micro);
+    text-transform: lowercase;
+    background: var(--panel-hi);
+    padding: 1px 6px;
+    border-radius: var(--r-1);
+}
+
+.gglab-node-flag {
+    color: var(--warn);
+    font-size: var(--type-micro);
+}
+
+/* One integrated port per row (Unity-style): the side cell is the
+   Handle's positioning context (position: relative), so the socket is
+   vertically centered on the row and sits OUTSIDE the card, its inner
+   edge tangent to the border line; the rows themselves own no side
+   padding (the cells indent their labels). */
+.gglab-node-rows {
+    padding: 0 0 var(--gglab-geom-rows-pad, 8px);
+}
+
+.gglab-port-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    height: var(--gglab-geom-row-h, 24px);
+    align-items: center;
+}
+
+.gglab-port {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font-size: var(--type-body);
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: visible;
+}
+
+.gglab-port-in {
+    padding-left: 16px;
+}
+
+.gglab-port-out {
+    justify-content: flex-end;
+    padding-right: 16px;
+}
+
+/* Port name: the only permanent text on the row; the port TYPE is
+   on-demand (hover tooltip) — the card width belongs to the names. */
+.gglab-port-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gglab-port-focus {
+    color: var(--text);
+    font-weight: var(--weight-strong);
+}
+
+/* data-category socket colors (Handle + palette dots) — tokens above */
+.gglab-dot {
+    width: 7px;
+    height: 7px;
+    min-width: 7px;
+    border-radius: 50%;
+    background: var(--kind-generic);
+}
+
+.gglab-dot-scalar {
+    background: var(--kind-scalar);
+}
+
+.gglab-dot-vector {
+    background: var(--kind-vector);
+}
+
+.gglab-dot-texture {
+    background: var(--kind-texture);
+}
+
+.gglab-dot-generic {
+    background: var(--kind-generic);
+}
+
+/* Handles: geometry inline from FLOW_GEOMETRY; the socket STATE language
+   lives here. Unconnected = a HOLLOW ring (the ring reads the data
+   category, the hole shows the boundary line it sits on); connected = a
+   SOLID dot of the same category color. One color variable per kind. */
+.react-flow__handle {
+    --gglab-socket: var(--kind-generic);
+    box-sizing: border-box;
+    border: 2px solid var(--gglab-socket);
+    background: transparent;
+    border-radius: 50%;
+}
+
+.react-flow__handle.gglab-handle-kind-scalar {
+    --gglab-socket: var(--kind-scalar);
+}
+
+.react-flow__handle.gglab-handle-kind-vector {
+    --gglab-socket: var(--kind-vector);
+}
+
+.react-flow__handle.gglab-handle-kind-texture {
+    --gglab-socket: var(--kind-texture);
+}
+
+.react-flow__handle.gglab-handle-connected {
+    background: var(--gglab-socket);
+}
+
+.react-flow__handle.gglab-handle-focus {
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* edges: stroke by data category (a muted mix so the graph stays calm);
+   the base stroke is the fallback for older engines without color-mix. */
+.react-flow__edge {
+    /* Per-kind selection glow: the SAME hue, softened — selection
+       emphasizes, it never re-colors the semantic category.
+       --gglab-edge-stroke: the wire's ONE color authority per kind,
+       reused by every state (resting, the library's selected hook, and
+       our own selected emphasis). */
+    --gglab-edge-glow: color-mix(in srgb, #56637a 55%, transparent);
+    --gglab-edge-stroke: #56637a;
+}
+
+.react-flow__edge .react-flow__edge-path {
+    stroke: #56637a;
+    stroke-width: 2;
+}
+
+.react-flow__edge.gglab-edge-kind-scalar {
+    --gglab-edge-glow: color-mix(in srgb, var(--kind-scalar) 55%, transparent);
+    --gglab-edge-stroke: color-mix(in srgb, var(--kind-scalar) 70%, #3a4658);
+}
+
+.react-flow__edge.gglab-edge-kind-scalar .react-flow__edge-path {
+    stroke: var(--kind-scalar);
+    stroke: color-mix(in srgb, var(--kind-scalar) 70%, #3a4658);
+}
+
+.react-flow__edge.gglab-edge-kind-vector {
+    --gglab-edge-glow: color-mix(in srgb, var(--kind-vector) 55%, transparent);
+    --gglab-edge-stroke: color-mix(in srgb, var(--kind-vector) 70%, #3a4658);
+}
+
+.react-flow__edge.gglab-edge-kind-vector .react-flow__edge-path {
+    stroke: var(--kind-vector);
+    stroke: color-mix(in srgb, var(--kind-vector) 70%, #3a4658);
+}
+
+.react-flow__edge.gglab-edge-kind-texture {
+    --gglab-edge-glow: color-mix(in srgb, var(--kind-texture) 55%, transparent);
+    --gglab-edge-stroke: color-mix(in srgb, var(--kind-texture) 70%, #3a4658);
+}
+
+.react-flow__edge.gglab-edge-kind-texture .react-flow__edge-path {
+    stroke: var(--kind-texture);
+    stroke: color-mix(in srgb, var(--kind-texture) 70%, #3a4658);
+}
+
+.react-flow__edge.gglab-edge-kind-generic .react-flow__edge-path {
+    stroke: #56637a;
+}
+
+/* Hover: same hue, slightly brighter (brightness cannot change the hue),
+   thick to press (the projection's 12px interactionWidth) but still thin
+   to read (the 2px stroke stays). */
+.react-flow__edge:hover .react-flow__edge-path {
+    filter: brightness(1.35);
+}
+
+/* Selected: emphasis ONLY — the kind's own hue thickened + a soft
+   same-hue glow. Semantic color is never overwritten by selection. */
+.react-flow__edge.gglab-edge-selected .react-flow__edge-path {
+    stroke: var(--gglab-edge-stroke, #56637a);
+    stroke-width: 3;
+    filter: drop-shadow(0 0 5px var(--gglab-edge-glow));
+}
+
+/* The library's own "selected" hook must never re-color the wire (its
+   default is a flat gray). Counter it at HIGHER specificity than its
+   rule so our per-kind color wins regardless of stylesheet order —
+   one color authority per edge, in every state. */
+.react-flow__edge.gglab-edge.selected .react-flow__edge-path {
+    stroke: var(--gglab-edge-stroke, #56637a);
+}
+
+.react-flow__edge.gglab-edge-selected:hover .react-flow__edge-path {
+    filter: drop-shadow(0 0 5px var(--gglab-edge-glow)) brightness(1.35);
+}
+
+.react-flow__edge.gglab-edge-focus .react-flow__edge-path {
+    stroke: var(--accent) !important;
+    stroke-width: 3;
+}
+
+/* ---- edge context menu -----------------------------------------------------
+   Pure UI state, chrome card on the top elevation; the action behind the
+   menu item is the core's atomic operation, reached through the app. */
+.gglab-menu-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: transparent;
+}
+
+.gglab-edge-menu {
+    position: fixed;
+    z-index: 41;
+    min-width: 190px;
+    padding: 4px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    box-shadow: var(--shadow-2);
+}
+
+.gglab-edge-menu-item {
+    width: 100%;
+    justify-content: space-between;
+    gap: 24px;
+    white-space: nowrap;
+}
+
+/* The node action menu: the SAME chrome recipes as the edge menu (one
+   menu language for the canvas), opened from the card's chevron. */
+.gglab-node-menu {
+    position: fixed;
+    z-index: 41;
+    min-width: 190px;
+    padding: 4px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    box-shadow: var(--shadow-2);
+}
+
+.gglab-node-menu-item {
+    width: 100%;
+    justify-content: space-between;
+    gap: 24px;
+    white-space: nowrap;
+}
+
+.gglab-node-menu-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.gglab-kbd {
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    color: var(--faint);
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    border-radius: 3px;
+    padding: 0 5px;
+    line-height: 1.5;
+}
+
+/* ---- canvas chrome ---------------------------------------------------------- */
+
+.gglab-viewport {
+    position: absolute;
+    inset: 0;
+    background: var(--bg);
+}
+
+.react-flow {
+    background: transparent;
+}
+
+/* Same chrome-card recipe as the controls frame and the Auto-layout
+   kit button (raised surface + 1px --border + --r-1). */
+.react-flow__minimap {
+    background: var(--panel-hi) !important;
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    overflow: hidden;
+}
+
+.gglab-minimap {
+    margin: 12px;
+}
+
+/* Canvas chrome — ONE toolbar language for all three overlays (the
+   Auto-layout kit button, the +/-/Fit controls, the minimap frame):
+   raised surface (--panel-hi) + 1px --border + --r-1 + 28px hit area
+   + 14px icons; hover = the kit's one-step-brighter surface. Fixed
+   corners with equal margins (controls top-right, minimap
+   bottom-right); they cannot overlap. POSITIONS ARE FROZEN HERE and
+   must not move. */
+.react-flow__controls {
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    overflow: hidden;
+    margin: 12px;
+}
+
+.react-flow__controls-button {
+    width: 28px;
+    height: 28px;
+    background: var(--panel-hi);
+    border-bottom: 1px solid var(--border-soft);
+}
+
+.react-flow__controls-button:last-child {
+    border-bottom: none;
+}
+
+.react-flow__controls-button svg {
+    fill: var(--muted);
+    max-width: 14px;
+    max-height: 14px;
+}
+
+.react-flow__controls-button:hover:not(:disabled) {
+    background: var(--border-soft);
+    fill: var(--text);
+}
+
+.react-flow__controls-button:hover:not(:disabled) svg {
+    fill: var(--text);
+}
+
+/* ---- diagnostics ------------------------------------------------------------ */
+
+.gglab-diagnostics {
+    border-top: none;
+    padding: 0;
+    margin: 0 0 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-2);
+    padding: 12px;
+    box-shadow: var(--shadow-1);
+}
+
+.gglab-diagnostics-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: -2px;
+}
+
+.gglab-diagnostics h2 {
+    margin: 0 0 8px;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-heading);
+    letter-spacing: var(--tracking-caps);
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.gglab-diagnostics-passed {
+    color: var(--ok);
+    margin: 4px 0;
+    font-size: var(--type-body);
+}
+
+/* Dense developer list, not SaaS cards: items separate on hairlines
+   (the same language as the .gglab-fact list), roomy padding, and a
+   clear line hierarchy — code (severity-tinted) > message > severity
+   word and path (subordinate). */
+.gglab-diagnostics-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    color: inherit;
+    border: 1px solid transparent;
+    border-radius: var(--r-1);
+    padding: 8px 6px;
+    margin: 0;
+    font: inherit;
+}
+
+.gglab-diagnostics-item + .gglab-diagnostics-item {
+    border-top: 1px solid var(--border-soft);
+}
+
+button.gglab-diagnostics-item:hover {
+    border-color: var(--border-hi);
+    background: var(--panel-hi);
+}
+
+.gglab-diagnostics-head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: baseline;
+    font-size: var(--type-meta);
+}
+
+/* The severity word is subordinate context — the tinted CODE carries
+   the signal; the word just names it. */
+.gglab-diagnostics-severity {
+    color: var(--faint);
+    font-size: var(--type-micro);
+}
+
+.gglab-diagnostics-code {
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+    font-weight: var(--weight-heading);
+}
+
+.gglab-diagnostics-severity-error .gglab-diagnostics-code {
+    color: var(--error);
+}
+
+.gglab-diagnostics-severity-warning .gglab-diagnostics-code {
+    color: var(--warn);
+}
+
+.gglab-diagnostics-message {
+    display: block;
+    margin: 4px 0 2px;
+    line-height: var(--lh-body);
+}
+
+.gglab-diagnostics-path {
+    color: var(--faint);
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+}
+
+/* ---- notes / document io / emission ----------------------------------------- */
+
+.gglab-notes {
+    background: var(--panel-2);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-2);
+    padding: 12px;
+    margin: 0 0 12px;
+}
+
+.gglab-notes h2 {
+    margin: 0 0 8px;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-heading);
+    letter-spacing: var(--tracking-caps);
+    text-transform: uppercase;
+    color: var(--warn);
+}
+
+.gglab-notes p {
+    font-size: var(--type-body);
+    line-height: var(--lh-body);
+    margin: 4px 0;
+}
+
+.gglab-emission-identity code {
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+    color: var(--muted);
+    word-break: break-all;
+}
+
+.gglab-emission-source {
+    margin: 8px 0 0;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-1);
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+    line-height: var(--lh-code);
+    color: var(--text);
+    white-space: pre;
+}
+
+.gglab-emission-problem.gglab-emission-severity-error {
+    color: var(--error);
+    font-size: var(--type-body);
+}
+
+.gglab-emission-problem.gglab-emission-severity-warning {
+    color: var(--warn);
+    font-size: var(--type-body);
+}
