@@ -1641,12 +1641,23 @@ screenshot and smoke test. Decisions recorded here:
    in the shell (history, position, gestures, layout) rather than a
    general-purpose UI state library — consistent with the non-goal
    that session state must never become a persisted contract.
-4. Node deletion and parameter value editing land before the
-   toolchain slice starts. The remaining canvas interaction
-   refinements (multi-selection, box selection, dangling-wire node
-   creation, edge rerouting, the history panel, recent files, a
-   dedicated code pane) are deferred until after the toolchain loop
-   (Slice 2/3) closes.
+4. Node deletion lands with its quiet header-menu presentation before
+   the toolchain slice starts. Constant value editing lands as the
+   CORE GATE (`setConstantValue`, three-outcome strict), and its UX is
+   deferred to the node-inspector design: a selection-driven inspector
+   (what a selected node — and every other node type — shows and
+   offers) is a design decision of its own, and a global "constants
+   table" was reviewed and rejected as the wrong presentation. (The
+   "parameter value" gap resolved as a boundary, not a feature:
+   parameter values are runtime-owned — they enter through the
+   generated-function signature — and mapping runtime material state
+   into those inputs is a main-repository obligation, so they
+   deliberately never exist in the document. Constants are the only
+   value-bearing authoring data.) The remaining canvas interaction
+   refinements (the node inspector, multi-selection, box selection,
+   dangling-wire node creation, edge rerouting, the history panel,
+   recent files, a dedicated code pane) are deferred until after the
+   toolchain loop (Slice 2/3) closes.
 
 ## Gate 0 — Surface Integration Probe
 

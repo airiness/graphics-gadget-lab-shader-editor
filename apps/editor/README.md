@@ -19,11 +19,17 @@ with the pinned golden fingerprints, save/load with provenance and
 derived dirty state, and labeled undo/redo — and it is locked by the
 golden fixed scenes (semantics in the core's suite) plus this
 package's projection and behavior suites. Decided owner list: **node
-deletion** has landed (see below); **parameter value editing** lands
-next, before the toolchain slice starts; the interaction
-refinements (multi-selection, box selection, dangling-wire node
-creation, edge rerouting, the history panel, recent files, and a
-dedicated code pane) are intentionally deferred until the toolchain
+deletion** has landed, and **constant value editing** landed as the
+core gate with its UX deferred to the node-inspector design (see
+below) — the parameter-value gap itself resolved as a boundary, not a
+feature, because parameter values are runtime-owned by contract (they
+enter through the generated-function signature and deliberately never
+exist in the document). Deferred with the remaining interaction
+refinements (the selection-driven node inspector — including the
+constant-value editing UX — multi-selection, box selection,
+dangling-wire node creation, edge rerouting, the history panel, recent
+files, and a dedicated code pane) are intentionally deferred until the
+toolchain
 loop (native compilation + toolchain diagnostics surfacing) closes.
 These are decisions, not unfinished defects.
 
@@ -46,6 +52,18 @@ These are decisions, not unfinished defects.
   removed wires is stale the instant the removal lands and is cleared
   exactly; a selection on a survivor stays put. The saved bytes
   round-trip pure: no placement ghost for the removed node.
+- **Constants — the gate landed, the UX waits for the node inspector** —
+  `setConstantValue` is the sole core-judged operation over constant
+  values (the only values owned by the document), with the full three-
+  outcome contract: catalog-driven shape (float → one finite number,
+  floatN → exactly N), an equal value = an ACCEPTED NO-OP (same
+  instance, no record), a shape mismatch = a structured refusal. Its
+  presentation was deliberately deferred: a selected-node-driven
+  Inspector (the node-inspector design, together with the selection
+  work) will decide what a constant — and every other node — shows
+  when selected. Parameter nodes have NO value fields by design: their
+  values are supplied at runtime through the generated-function
+  signature (a main-repository obligation), never stored in the graph.
 - **Collapsible node library** — every library section collapses/expands
   through its header, `Collapse all` / `Expand all` drive the whole
   library, and the whole sidebar collapses to a rail (expand intent).

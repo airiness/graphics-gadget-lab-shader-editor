@@ -240,6 +240,77 @@ export function removeNode(document: ShaderGraphDocument, nodeId: string): Autho
     return { document: documentOut, applied: true, refusal: undefined, createdId: undefined };
 }
 
+/** A constant value: one finite number, or an array of finite numbers. */
+export type ConstantValue = number | readonly number[];
+
+/**
+ * The catalog-declared value shapes of the constant family (single node
+ * authority: read from the definition, not invented here). float → 1
+ * component, floatN → N.
+ */
+const CONSTANT_COMPONENT_COUNT: Record<string, number> = { float: 1, float2: 2, float3: 3, float4: 4 };
+
+/**
+ * Set a constant node's value — the only node family whose value lives
+ * in the document. (Parameter values are runtime-owned: they enter
+ * through the generated-function signature and deliberately never exist
+ * in the document, so there is no "set parameter value" to build.)
+ *
+ * Judgment is catalog-driven: the node must be a KNOWN constant with a
+ * "value" property, and the submitted value must match the catalog
+ * shape exactly — a finite number, or exactly N finite numbers for
+ * floatN. Nothing is widened, truncated, or default-filled; the
+ * submitted value is stored as-submitted (or refused).
+ *
+ * The three outcomes, one contract:
+ *   - a valid but EQUAL value → an ACCEPTED NO-OP: the SAME instance
+ *     comes back (identity is the mutation fact, so it records no
+ *     history and churns no preview);
+ *   - a different valid value → a MUTATION: a new instance, the node's
+ *     other properties and everything else preserved;
+ *   - anything else (unknown id, non-constant node, wrong shape) → a
+ *     REFUSAL: the unchanged instance plus a structured reason.
+ */
+export function setConstantValue(document: ShaderGraphDocument, nodeId: string, value: ConstantValue): AuthoringResult {
+    const node = document.nodes.find((candidate) => candidate.id === nodeId);
+    if (node === undefined) {
+        return refused(document, `No node with id "${nodeId}".`);
+    }
+    const definition = getNodeDefinition(node.type);
+    const spec = definition !== undefined && definition.category === "constant" ? definition.properties.find((property) => property.name === "value") : undefined;
+    const expected = spec !== undefined ? CONSTANT_COMPONENT_COUNT[spec.type] : undefined;
+    if (definition === undefined || definition.category !== "constant" || spec === undefined || expected === undefined) {
+        return refused(document, `Node "${nodeId}" (${node.type}) is not a catalog constant with a value property; only constant nodes own their document values.`);
+    }
+    const valid =
+        expected === 1
+            ? typeof value === "number" && Number.isFinite(value)
+            : Array.isArray(value) === true && value.length === expected && value.every((component) => typeof component === "number" && Number.isFinite(component) === true);
+    if (valid === false) {
+        return refused(document, `Node "${nodeId}" (${node.type}) expects ${expected === 1 ? "a finite number" : `an array of exactly ${expected} finite numbers`} for its value; the submitted value was not accepted (nothing was changed).`);
+    }
+    const current = node.properties["value"];
+    const same =
+        expected === 1
+            ? typeof current === "number" && Number.isFinite(current) === true && Object.is(current, value)
+            : Array.isArray(current) === true && Array.isArray(value) === true && current.length === expected && current.every((component, index) => Object.is(component, value[index]));
+    if (same === true) {
+        // ACCEPTED NO-OP — the SAME instance: identity is the mutation
+        // fact, and an equal value is not a mutation.
+        return { document, applied: true, refusal: undefined, createdId: undefined };
+    }
+    const stored: number | number[] = expected === 1 ? (value as number) : [...(value as readonly number[])];
+    return {
+        document: {
+            ...document,
+            nodes: document.nodes.map((candidate) => (candidate.id === nodeId ? { ...candidate, properties: { ...candidate.properties, value: stored } } : candidate)),
+        },
+        applied: true,
+        refusal: undefined,
+        createdId: undefined,
+    };
+}
+
 /**
  * Add a connection (from a node's output port to another node's input
  * port). Duplicate/invalid/cyclic cases are not judged here: the document

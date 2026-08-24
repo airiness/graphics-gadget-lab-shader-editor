@@ -51,6 +51,7 @@ import {
     removeConnection,
     removeConnectionsAtPort,
     removeNode,
+    setConstantValue,
     reconnectConnection,
     resolveDropCoordinate,
     createHistory,
@@ -283,6 +284,41 @@ function loaded(text: string) {
     const parsed = parseShaderGraphDocument(text);
     if (!parsed.ok || parsed.value === null) {
         throw new Error("fixture document must parse (proven shape)");
+    }
+    return parsed.value;
+}
+
+/** A small constant-only scene (n.a Float=1, n.b Float3=[1,1,1], n.c
+ * Float=2, wired a→b, a→c, all placed) — the shared fixture for the
+ * node-deletion and constant-value suites. */
+function threeNodeDocument() {
+    const parsed = parseShaderGraphDocument(
+        JSON.stringify({
+            schemaVersion: 1,
+            graphId: "graph.node-removal",
+            profile: "gglab.surface",
+            profileVersion: 1,
+            parameters: [],
+            nodes: [
+                { id: "n.a", type: "Float", version: 1, properties: { value: 1 } },
+                { id: "n.b", type: "Float3", version: 1, properties: { value: [1, 1, 1] } },
+                { id: "n.c", type: "Float", version: 1, properties: { value: 2 } },
+            ],
+            connections: [
+                { id: "c.ab", from: { nodeId: "n.a", portId: "value" }, to: { nodeId: "n.b", portId: "a" } },
+                { id: "c.ac", from: { nodeId: "n.a", portId: "value" }, to: { nodeId: "n.c", portId: "value" } },
+            ],
+            editorMetadata: {
+                nodes: {
+                    "n.a": { position: { x: 10, y: 10 } },
+                    "n.b": { position: { x: 200, y: 10 } },
+                    "n.c": { position: { x: 10, y: 200 } },
+                },
+            },
+        }),
+    );
+    if (!parsed.ok || parsed.value === null) {
+        throw new Error(JSON.stringify(parsed.diagnostics));
     }
     return parsed.value;
 }
@@ -984,38 +1020,6 @@ describe("typed port presentation (core types → data categories)", () => {
 
     // ---- node deletion: the whole node goes (node + wires + placement) -----
     describe("node deletion (one gesture, whole node, round-trip pure)", () => {
-        function threeNodeDocument() {
-            const parsed = parseShaderGraphDocument(
-                JSON.stringify({
-                    schemaVersion: 1,
-                    graphId: "graph.node-removal",
-                    profile: "gglab.surface",
-                    profileVersion: 1,
-                    parameters: [],
-                    nodes: [
-                        { id: "n.a", type: "Float", version: 1, properties: { value: 1 } },
-                        { id: "n.b", type: "Float3", version: 1, properties: { value: [1, 1, 1] } },
-                        { id: "n.c", type: "Float", version: 1, properties: { value: 2 } },
-                    ],
-                    connections: [
-                        { id: "c.ab", from: { nodeId: "n.a", portId: "value" }, to: { nodeId: "n.b", portId: "a" } },
-                        { id: "c.ac", from: { nodeId: "n.a", portId: "value" }, to: { nodeId: "n.c", portId: "value" } },
-                    ],
-                    editorMetadata: {
-                        nodes: {
-                            "n.a": { position: { x: 10, y: 10 } },
-                            "n.b": { position: { x: 200, y: 10 } },
-                            "n.c": { position: { x: 10, y: 200 } },
-                        },
-                    },
-                }),
-            );
-            if (!parsed.ok || parsed.value === null) {
-                throw new Error(JSON.stringify(parsed.diagnostics));
-            }
-            return parsed.value;
-        }
-
         it("removes the node, BOTH of its connections, and its placement — and preserves everything around them", () => {
             const input = threeNodeDocument();
             const result = removeNode(input, "n.a");
@@ -1132,6 +1136,92 @@ describe("typed port presentation (core types → data categories)", () => {
     });
 
     // ---- golden graphs (the fixed smoke scenes) ----------------------------
+    // ---- constant values: the only values owned by the document ----------
+    // Capability here, presentation later: the core-judged gate is the
+    // deliverable; the Inspector UX waits for the node-inspector design
+    // (selection-driven, with real node identity).
+    describe("constant values (core-judged gate; presentation deferred to the node-inspector design)", () => {
+        // threeNodeDocument (in the node-deletion describe above) has the
+        // constant family: n.a Float = 1, n.b Float3 = [1,1,1], n.c Float =
+        // 2 — with placed positions.
+        it("a different valid value is a MUTATION: exactly that field changes, everything else keeps its identity", () => {
+            const input = threeNodeDocument();
+            const scalar = setConstantValue(input, "n.a", 2.25);
+            expect(scalar.applied).toBe(true);
+            expect(scalar.document).not.toBe(input);
+            expect(scalar.document.nodes.find((node) => node.id === "n.a")?.properties["value"]).toBe(2.25);
+            // The untouched node keeps its object identity (a true no-touch)…
+            expect(scalar.document.nodes.find((node) => node.id === "n.c")).toBe(input.nodes.find((node) => node.id === "n.c"));
+            // …and the placements survive the value edit.
+            expect(scalar.document.editorMetadata.nodes["n.a"]?.position).toEqual({ x: 10, y: 10 });
+            const vector = setConstantValue(input, "n.b", [0.5, 1.5, 2.5]);
+            expect(vector.document).not.toBe(input);
+            expect(vector.document.nodes.find((node) => node.id === "n.b")?.properties["value"]).toEqual([0.5, 1.5, 2.5]);
+            expect(vector.document.nodes.find((node) => node.id === "n.a")?.properties["value"]).toBe(1);
+        });
+
+        it("an EQUAL valid value is an ACCEPTED NO-OP: the SAME instance comes back (no history, no churn)", () => {
+            const input = threeNodeDocument();
+            const scalar = setConstantValue(input, "n.a", 1);
+            expect(scalar.applied).toBe(true);
+            expect(scalar.refusal).toBeUndefined();
+            expect(scalar.document).toBe(input); // identity is the mutation fact — and this is not a mutation
+            const vector = setConstantValue(input, "n.b", [1, 1, 1]);
+            expect(vector.document).toBe(input);
+        });
+
+        it("refuses shape mismatches without changing anything: wrong arity, non-finite numbers, non-constants, unknown ids", () => {
+            const input = threeNodeDocument();
+            const cases: Array<[string, number | readonly number[]]> = [
+                ["n.a", [2.25]], // Float wants one number, not an array
+                ["n.b", [0.5, 1.5]], // float3 wants exactly three
+                ["n.b", [0.5, 1.5, 2.5, 3.5]],
+                ["n.a", Number.NaN], // non-finite
+                ["n.a", Number.POSITIVE_INFINITY],
+                ["n.b", [1, Number.NaN, 3]],
+            ];
+            for (const [nodeId, value] of cases) {
+                const result = setConstantValue(input, nodeId, value);
+                expect(result.applied).toBe(false);
+                expect(result.document).toBe(input); // an unchanged INSTANCE, never a silent change
+                expect(result.refusal).not.toBeUndefined();
+            }
+            const ghost = setConstantValue(input, "n.ghost", 4);
+            expect(ghost.applied).toBe(false);
+            expect(ghost.document).toBe(input);
+        });
+
+        it("refuses a non-constant node: only the constant family owns document values", () => {
+            const input = loaded(validV1Document());
+            const nonConstant = input.nodes.find((node) => {
+                const definition = getNodeDefinition(node.type);
+                return definition !== undefined && definition.category !== "constant";
+            });
+            if (nonConstant === undefined) {
+                throw new Error("the standard scene should contain a non-constant node");
+            }
+            const result = setConstantValue(input, nonConstant.id, 1.5);
+            expect(result.applied).toBe(false);
+            expect(result.document).toBe(input);
+            expect(result.refusal?.reason).toContain("not a catalog constant");
+        });
+
+        it("the gate stays on the package surface — and the deferred presentation must not leak back in", () => {
+            // The core-judged operation is a capability (UI and CLI both
+            // must reach through it); the Inspector presentation was an
+            // intentional deferral, so no constants table, draft
+            // machinery, or field chrome may survive in the app.
+            const barrel = read("../../../packages/editor-ui/src/index.ts");
+            expect(barrel).toContain("setConstantValue");
+            expect(barrel).toContain("ConstantValue");
+            const app = read("../src/app.tsx");
+            expect(app).not.toContain("gglab-constant-");
+            expect(app).not.toContain("commitConstantValue");
+            const css = read("../src/app.css");
+            expect(css).not.toContain(".gglab-constant-");
+        });
+    });
+
     describe("golden graphs (fixed scenes for every screenshot and smoke test)", () => {
         const goldenPath = "../../../packages/shader-graph-core/tests/fixtures/SurfaceTextureGolden.shadergraph";
         const diagnosticsPath = "../../../packages/shader-graph-core/tests/fixtures/SurfaceDiagnostics.shadergraph";

@@ -39,6 +39,7 @@ export {
     addConnection,
     removeConnection,
     removeConnectionsAtPort,
+    setConstantValue,
     reconnectConnection,
     addParameter,
     AUTHORING_DROP_MIME,
@@ -46,7 +47,7 @@ export {
     decodeAuthoringDrop,
     resolveDropCoordinate,
 } from "./session/authoring-operations.js";
-export type { AuthoringResult, AuthoringRefusal, ParameterRequest, AuthoringDropPayload } from "./session/authoring-operations.js";
+export type { AuthoringResult, AuthoringRefusal, ParameterRequest, AuthoringDropPayload, ConstantValue } from "./session/authoring-operations.js";
 export { withNodePosition } from "./session/node-position.js";
 export { isEditingTextTarget } from "./session/keyboard-guard.js";
 export { createHistory, recordHistory, undoHistory, redoHistory, canUndoHistory, canRedoHistory, HISTORY_LIMIT } from "./session/history.js";
