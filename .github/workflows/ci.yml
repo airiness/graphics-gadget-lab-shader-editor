@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: typecheck, tests, lint, web build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        # The version is read from the packageManager field in the root
+        # package.json — the single source of truth for the pin.
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node
+        # Pinned at a major inside the engines range
+        # (^20.19.0 || ^22.13.0 || >=24.0.0): reproducible, not bleeding edge.
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck all workspace projects
+        run: pnpm typecheck
+
+      - name: Run the workspace test suites
+        # Covers the core golden HLSL / profile-conformance suites and the
+        # GUI projection suites (jsdom). Deliberately NOT in this workflow:
+        # the Tauri desktop build (reconsider as its own job when the
+        # desktop shell is actively evolving) and native shader
+        # compilation (owned by the main repository's build and self-test
+        # suites).
+        run: pnpm test
+
+      - name: Lint the repository
+        run: pnpm lint
+
+      - name: Build the web shell
+        run: pnpm --filter @gglab/editor build
+
+      - name: Upload the web shell bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: editor-web-dist
+          path: apps/editor/dist
+          if-no-files-found: error
