@@ -189,6 +189,13 @@ export function documentToFlow(
     document: ShaderGraphDocument,
     focus: CanvasFocus | null = null,
     selectedConnectionId: string | null = null,
+    /**
+     * The selected NODE — session state (the app's single-node selection),
+     * poured into the projection exactly like `focus` and like the
+     * selected connection: emphasis only (focus flag + selected state),
+     * never any semantic fact and never any mutation.
+     */
+    selectedNodeId: string | null = null,
 ): {
     readonly nodes: readonly ShaderFlowNode[];
     readonly edges: readonly Edge[];
@@ -199,6 +206,9 @@ export function documentToFlow(
     const nodes: ShaderFlowNode[] = document.nodes.map((node, index) => {
         const definition = getNodeDefinition(node.type);
         const highlight = focus?.nodeHighlights.find((entry) => entry.nodeId === node.id);
+        // Selection is one node's emphasis, poured in from the session —
+        // the same presentation language as a diagnostic highlight.
+        const selectedAsNode = selectedNodeId !== null && node.id === selectedNodeId;
         // Input ports take their concrete type from the connection's
         // source (document data) as resolved by the core resolver.
         const inputConcrete = (portId: string): GraphType | undefined => {
@@ -219,7 +229,7 @@ export function documentToFlow(
             outputPortTypes: outputs.displays,
             nodeCategory: definition?.category,
             knownToCatalog: definition !== undefined,
-            focused: highlight !== undefined,
+            focused: highlight !== undefined || selectedAsNode,
             focusedPorts: highlight?.portIds ?? [],
         };
         const authored = document.editorMetadata.nodes[node.id]?.position;
@@ -228,7 +238,7 @@ export function documentToFlow(
             type: FLOW_NODE_TYPE,
             position: authored !== undefined ? { ...authored } : gridPosition(index),
             data,
-            selected: highlight !== undefined,
+            selected: highlight !== undefined || selectedAsNode,
         };
     });
     const edges: Edge[] = document.connections.map((connection) => {

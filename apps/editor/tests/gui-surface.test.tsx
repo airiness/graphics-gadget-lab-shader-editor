@@ -705,8 +705,9 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(app).toContain("applyAuthoring(removeConnection(document, connectionId),");
             expect(app).toMatch(/removed connection \$\{connectionId\}/); // the step is labeled with the intent
             expect(app).not.toMatch(/setEdges\(/);
-            // Selection is session state; the projection receives it.
-            expect(app).toMatch(/documentToFlow\(document, focus, selectedConnectionId\)/);
+            // Selection (edge, then node) is session state; the projection
+            // receives it.
+            expect(app).toMatch(/documentToFlow\(document, focus, selectedConnectionId, selectedNodeId\)/);
             expect(app).not.toMatch(/selected.*\.shadergraph/);
             // The context menu carries the ONE destructive action + the key
             // hint, on the kit's button (no parallel button classes).
@@ -911,8 +912,10 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(app).toMatch(/function invalidateRevisionDerivedState\(\): void/);
             const interaction = app.match(/function clearCanvasInteractionState\(\): void \{[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
             expect(interaction).toContain("setSelectedConnectionId(null)");
+            expect(interaction).toContain("setSelectedNodeId(null)"); // node ids are document-scoped too
             expect(interaction).toContain("setReconnectArmed(null)");
             expect(interaction).toContain("setEdgeMenu(null)");
+            expect(interaction).toContain("setNodeMenu(null)");
             const derived = app.match(/function invalidateRevisionDerivedState\(\): void \{[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
             expect(derived).toContain("setFocus(null)"); // a stale highlight is never shown
             expect(derived).toContain("setEmission(null)"); // HLSL stays bound to its revision
@@ -1052,12 +1055,35 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(result.refusal?.reason).toContain("n.ghost");
         });
 
-        it("the card carries the removal action (kit icon control) and the viewport reports only the intent", () => {
+        it("the card carries a SMALL action-menu affordance (the kit's icon button) — not a big trash glyph", () => {
             const viewport = read("../../../packages/editor-ui/src/flow/flow-viewport.tsx");
-            expect(viewport).toContain('aria-label={`Remove node ${data.label}`}');
-            expect(viewport).toContain('<TrashIcon />');
-            expect(viewport).toContain("readonly onRemoveNode?: (nodeId: string) => void;");
-            expect(viewport).toContain("NodeRemoveContext");
+            expect(viewport).toContain('aria-label={`Node actions for ${data.label}`}');
+            expect(viewport).toContain('<ChevronDownIcon />'); // the understated affordance
+            expect(viewport).not.toContain('<TrashIcon />'); // the trash belongs in the MENU, not on the card
+            expect(viewport).toContain("readonly onNodeMenu?: (nodeId: string, anchor: { x: number; y: number }) => void;");
+            expect(viewport).toContain("const NodeMenuContext = createContext");
+            // A genuine click (not a drag) reports selection intent — raw id only.
+            expect(viewport).toContain("onNodeClick={(_event, node) => {");
+            expect(viewport).toContain("readonly onNodeSelect?: (nodeId: string) => void;");
+        });
+
+        it("the app opens the node menu with the target SELECTED (menu and Delete key agree on one target)", () => {
+            const app = read("../src/app.tsx");
+            const handler = app.match(/const onNodeMenu = [^\n]*\n[\s\S]*?\n\s{4}\};/)?.[0] ?? "";
+            expect(handler).toContain("setSelectedNodeId(nodeId)"); // menu open = target selected
+            expect(handler).toContain("setSelectedConnectionId(null)"); // exclusive selection
+            expect(handler).toContain("setReconnectArmed(null)"); // a pending gesture and an open menu contradict
+            expect(handler).toContain("setNodeMenu({ nodeId, x: anchor.x, y: anchor.y })");
+            expect(app).toContain("onNodeMenu={onNodeMenu}");
+        });
+
+        it("the node menu offers the delete item — same chrome language as the edge menu, same Del key behind it", () => {
+            const app = read("../src/app.tsx");
+            expect(app).toContain('className="gglab-node-menu"');
+            expect(app).toContain("Delete Node");
+            const css = read("../src/app.css");
+            expect(css).toContain(".gglab-node-menu {");
+            expect(css).toMatch(/z-index: 41;/); // the same elevation as the edge menu
         });
 
         it("the app applies the core-judged removal as ONE step and clears exactly the stale canvas state", () => {
@@ -1065,7 +1091,43 @@ describe("typed port presentation (core types → data categories)", () => {
             const handler = app.match(/const onRemoveNode = [^\n]*\n[\s\S]*?\n\s{4}\};/)?.[0] ?? "";
             expect(handler).toContain("applyAuthoring(removeNode(document, nodeId), `removed node ${nodeId}`)");
             expect(handler).toContain("clearCanvasInteractionState()"); // a selection on a removed wire is stale
-            expect(app).toContain("onRemoveNode={onRemoveNode}");
+            expect(handler).toContain("setSelectedNodeId(null)"); // the target no longer exists
+            expect(handler).toContain("setNodeMenu(null)");
+        });
+
+        it("the Delete key removes the SELECTED NODE (guarded), and the selection stays exclusive with the edge selection", () => {
+            const app = read("../src/app.tsx");
+            const handler = app.match(/if \(event\.key === "Delete" \|\| event\.key === "Backspace"\) \{[\s\S]*?\n\s{8}\}/)?.[0] ?? "";
+            expect(handler).toContain("isEditingTextTarget(event.target)"); // the shared guard runs FIRST
+            expect(handler).toContain("onRemoveNode(selectedNodeId)");
+            expect(handler).toContain("applyRemoveConnection(selectedConnectionId)");
+            const nodeSelect = app.match(/const onNodeSelect = [^\n]*\n[\s\S]*?\n\s{4}\};/)?.[0] ?? "";
+            expect(nodeSelect).toContain("setSelectedNodeId(nodeId)");
+            expect(nodeSelect).toContain("setSelectedConnectionId(null)");
+            const edgeSelect = app.match(/const onEdgeSelect = [^\n]*\n[\s\S]*?\n\s{4}\};/)?.[0] ?? "";
+            expect(edgeSelect).toContain("setSelectedNodeId(null)"); // one selection fact at a time
+        });
+
+        it("projection: the selected node carries emphasis, exactly like the selected connection", () => {
+            const input = threeNodeDocument();
+            const base = documentToFlow(input);
+            const withSelection = documentToFlow(input, null, null, "n.b");
+            const selected = withSelection.nodes.find((node) => node.id === "n.b");
+            const neighbor = withSelection.nodes.find((node) => node.id === "n.c");
+            const baseNode = base.nodes.find((node) => node.id === "n.b");
+            expect(baseNode?.data.focused).toBe(false);
+            expect(selected?.data.focused).toBe(true); // emphasis poured in from the session
+            expect(selected?.selected).toBe(true);
+            expect(neighbor?.data.focused).toBe(false); // exactly one card, not all
+            expect(neighbor?.selected).toBe(false);
+        });
+
+        it("Escape closes the node menu and retires the node selection", () => {
+            const app = read("../src/app.tsx");
+            const escapeBlock = app.match(/if \(event\.key === "Escape"\) \{[\s\S]*?\n\s{12}\}/)?.[0] ?? "";
+            expect(escapeBlock).toContain("setNodeMenu(null)");
+            expect(escapeBlock).toContain("setSelectedNodeId(null)");
+            expect(escapeBlock).toContain("setEdgeMenu(null)");
         });
     });
 

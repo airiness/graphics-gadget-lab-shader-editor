@@ -29,16 +29,22 @@ These are decisions, not unfinished defects.
 
 ## Editor structure and canvas chrome
 
-- **Node deletion — one gesture, the whole node** — each card carries a
-  header delete action (the kit's own compact icon control). It is a
-  raw INTENT (the node id): the composition root applies the core-judged
-  `removeNode` as ONE authoring operation and ONE history step — the
-  node, EVERY connection touching it (either end), and its placement
-  entry, with everything around preserved. A refusal (an id not in
-  this document) returns the unchanged instance with a structured
-  reason and is never recorded. A canvas selection or armed reconnect
-  naming a removed wire is stale the instant the removal lands and is
-  cleared exactly; a selection on a survivor stays put. The saved bytes
+- **Node deletion — the whole node goes, reached the quiet way** —
+  each card carries a small header ACTION-MENU affordance (the kit's
+  compact icon toggle). The menu (the canvas' one menu language, same
+  chrome as the edge menu) offers the **Delete Node** item, marked with
+  the shared `Del` key. A genuine card click SELECTS that node (single
+  selection, exclusive with the edge selection — one target for the
+  key and the menu, never two); Escape closes the menu / retires the
+  selection, and the `Delete`/`Backspace` key (behind the text-field
+  guard) removes the selected node or connection. The composition root
+  applies the core-judged `removeNode` as ONE authoring operation and
+  ONE history step — the node, EVERY connection touching it (either
+  end), and its placement entry, with everything around preserved. A
+  refusal (an id not in this document) returns the unchanged instance
+  with a structured reason and is never recorded. Canvas state naming
+  removed wires is stale the instant the removal lands and is cleared
+  exactly; a selection on a survivor stays put. The saved bytes
   round-trip pure: no placement ghost for the removed node.
 - **Collapsible node library** — every library section collapses/expands
   through its header, `Collapse all` / `Expand all` drive the whole

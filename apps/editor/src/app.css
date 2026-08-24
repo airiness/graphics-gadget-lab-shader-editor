@@ -870,9 +870,9 @@ body {
     overflow: hidden;
 }
 
-/* The title row: the name + the card's delete action on one line. The
-   button is the kit's own compact icon control (26×26) — a button must
-   read as a button at rest, never only on hover. */
+/* The title row: the name + the card's action-menu affordance on one
+   line. The toggle is the kit's own compact icon control (26×26) — a
+   button must read as a button at rest, never only on hover. */
 .gglab-node-title-row {
     display: flex;
     align-items: center;
@@ -881,7 +881,7 @@ body {
     min-width: 0;
 }
 
-.gglab-node-remove {
+.gglab-node-menu-toggle {
     flex: none;
 }
 
@@ -1137,6 +1137,32 @@ body {
     justify-content: space-between;
     gap: 24px;
     white-space: nowrap;
+}
+
+/* The node action menu: the SAME chrome recipes as the edge menu (one
+   menu language for the canvas), opened from the card's chevron. */
+.gglab-node-menu {
+    position: fixed;
+    z-index: 41;
+    min-width: 190px;
+    padding: 4px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    box-shadow: var(--shadow-2);
+}
+
+.gglab-node-menu-item {
+    width: 100%;
+    justify-content: space-between;
+    gap: 24px;
+    white-space: nowrap;
+}
+
+.gglab-node-menu-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .gglab-kbd {

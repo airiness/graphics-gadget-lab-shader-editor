@@ -39,6 +39,7 @@ import {
     LayoutIcon,
     PanelCloseIcon,
     PanelOpenIcon,
+    TrashIcon,
     NodePalette,
     type AuthoringDropPayload,
     type AuthoringResult,
@@ -145,6 +146,13 @@ export function App() {
     // the original connection is provably untouched (revert by
     // construction, not by a compensating operation).
     const [reconnectArmed, setReconnectArmed] = useState<string | null>(null);
+    // Single-node selection — SESSION state, the counterpart of the edge
+    // selection, exclusive with it (one selection fact at a time). It is
+    // the TARGET of the Delete key's node removal and the menu opens with
+    // that node selected. Emphasis only; the core is never touched.
+    const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+    // The node action menu (target node + anchor point), null = closed.
+    const [nodeMenu, setNodeMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
     // Viewport fit trigger (registered by the flow adapter via onInit).
     const fitRef = useRef<(() => void) | null>(null);
     // Desktop slice 1: native document I/O channel (absent in the browser
@@ -202,20 +210,23 @@ export function App() {
      * the new document's canonical serialization.
      */
     /**
-     * Canvas interaction state: the selected connection, the pending
-     * reconnection, and the edge menu.
+     * Canvas interaction state: the selected connection, the selected node,
+     * the pending reconnection, and the two context menus.
      *
-     * Connection ids are DOCUMENT-scoped: a stable id is meaningful
+     * Connection and node ids are DOCUMENT-scoped: a stable id is meaningful
      * inside one document and is NOT a cross-document identity. Any
      * transition that changes which document is current (open/import,
      * or a history step back/forward) MUST clear this state — a stale
      * selection pointing at an id that happens to exist in the new
-     * document is an outright delete/reconnect hazard.
+     * document is an outright delete/reconnect hazard (the Delete key
+     * would remove a survivor).
      */
     function clearCanvasInteractionState(): void {
         setSelectedConnectionId(null);
+        setSelectedNodeId(null);
         setReconnectArmed(null);
         setEdgeMenu(null);
+        setNodeMenu(null);
     }
 
     /**
@@ -481,7 +492,7 @@ export function App() {
 
     const descriptor: SurfaceProfileDescriptor | null = descriptorState.kind === "ready" ? descriptorState.descriptor : null;
 
-    const flow = useMemo(() => documentToFlow(document, focus, selectedConnectionId), [document, focus, selectedConnectionId]);
+    const flow = useMemo(() => documentToFlow(document, focus, selectedConnectionId, selectedNodeId), [document, focus, selectedConnectionId, selectedNodeId]);
 
     const graphSets = useMemo<readonly DiagnosticSet[]>(() => {
         const validation = validateShaderGraph(document);
@@ -567,19 +578,48 @@ export function App() {
         // selection on a survivor stays put).
         const goneIds = document.connections.filter((connection) => connection.from.nodeId === nodeId || connection.to.nodeId === nodeId).map((connection) => connection.id);
         applyAuthoring(removeNode(document, nodeId), `removed node ${nodeId}`);
+        if (selectedNodeId === nodeId) {
+            setSelectedNodeId(null); // the target no longer exists — drop it from the selection
+        }
+        setNodeMenu(null); // a menu naming the removed node is stale
         if (goneIds.includes(selectedConnectionId ?? "") || goneIds.includes(reconnectArmed ?? "")) {
             clearCanvasInteractionState();
         }
     };
 
     const onEdgeSelect = (connectionId: string): void => {
+        // Selection is ONE fact at a time: an edge selection retires the
+        // node selection (and the node menu) — never two live targets for
+        // the Delete key.
         setSelectedConnectionId(connectionId);
+        setSelectedNodeId(null);
+        setEdgeMenu(null);
+        setNodeMenu(null);
+    };
+    const onNodeSelect = (nodeId: string): void => {
+        // A genuine card click selects THAT node and retires the edge
+        // selection — the same exclusive, one-selection model.
+        setSelectedNodeId(nodeId);
+        setSelectedConnectionId(null);
         setEdgeMenu(null);
     };
     const onCanvasClick = (): void => {
         setSelectedConnectionId(null);
+        setSelectedNodeId(null);
+        setEdgeMenu(null);
+        setNodeMenu(null);
+        setReconnectArmed(null);
+    };
+    const onNodeMenu = (nodeId: string, anchor: { x: number; y: number }): void => {
+        // The chevron names its own target: the menu opens with that node
+        // SELECTED (the Delete key and the menu agree on the target), the
+        // edge side retired, and the armed reconnect cancelled — a pending
+        // gesture and an open action menu are contradictory states.
+        setSelectedNodeId(nodeId);
+        setSelectedConnectionId(null);
         setEdgeMenu(null);
         setReconnectArmed(null);
+        setNodeMenu({ nodeId, x: anchor.x, y: anchor.y });
     };
     const onEdgeContextMenu = (event: { clientX: number; clientY: number }, connectionId: string): void => {
         // Right-click selects (if needed) and offers the one destructive
@@ -682,6 +722,8 @@ export function App() {
         const onKeyDown = (event: KeyboardEvent): void => {
             if (event.key === "Escape") {
                 setEdgeMenu(null);
+                setNodeMenu(null);
+                setSelectedNodeId(null);
                 setReconnectArmed(null);
                 return;
             }
@@ -709,17 +751,28 @@ export function App() {
                 onRedo();
                 return;
             }
-            if ((event.key === "Delete" || event.key === "Backspace") && selectedConnectionId !== null) {
+            // Delete / Backspace removes the CURRENT selection — node
+            // first (they are exclusive, so at most one branch fires):
+            // the target's removal is the core-judged operation on the
+            // authoring path. The shared text-field guard runs FIRST.
+            if (event.key === "Delete" || event.key === "Backspace") {
                 if (isEditingTextTarget(event.target)) {
                     return;
                 }
-                event.preventDefault();
-                applyRemoveConnection(selectedConnectionId);
+                if (selectedNodeId !== null) {
+                    event.preventDefault();
+                    onRemoveNode(selectedNodeId);
+                    return;
+                }
+                if (selectedConnectionId !== null) {
+                    event.preventDefault();
+                    applyRemoveConnection(selectedConnectionId);
+                }
             }
         };
         window.addEventListener("keydown", onKeyDown);
         return () => window.removeEventListener("keydown", onKeyDown);
-    }, [selectedConnectionId, document, onUndo, onRedo]);
+    }, [selectedConnectionId, selectedNodeId, document, onUndo, onRedo]);
     const onNodePlaced = (nodeId: string, position: { x: number; y: number }): void => {
         // Session state (canvas layout): the shared position-patch helper
         // updates ONLY the position, preserving the node's existing
@@ -905,7 +958,8 @@ export function App() {
                         onEdgeContextMenu={onEdgeContextMenu}
                         onEdgeReconnectArm={onEdgeReconnectArm}
                         onPortActivate={onPortActivate}
-                        onRemoveNode={onRemoveNode}
+                        onNodeSelect={onNodeSelect}
+                        onNodeMenu={onNodeMenu}
                         onFlowReady={(fitView) => {
                             fitRef.current = fitView;
                         }}
@@ -933,6 +987,37 @@ export function App() {
                             </div>
                         </>
                     )}
+                    {/* Node action menu — the card's chevron, one
+                        destructive item; same chrome language as the edge
+                        menu, and the same Del key behind it (the menu
+                        opens with its target selected, so the two agree). */}
+                    {nodeMenu !== null && (
+                        <>
+                            <div className="gglab-menu-overlay" onPointerDown={() => setNodeMenu(null)} />
+                            <div className="gglab-node-menu" style={{ left: nodeMenu.x, top: nodeMenu.y }} role="menu" aria-label={`Node actions for ${nodeMenu.nodeId}`}>
+                                <Button
+                                    variant="ghost"
+                                    className="gglab-node-menu-item"
+                                    role="menuitem"
+                                    onClick={() => {
+                                        const nodeId = nodeMenu.nodeId;
+                                        setNodeMenu(null);
+                                        onRemoveNode(nodeId);
+                                    }}>
+                                    <span className="gglab-node-menu-label">
+                                        <TrashIcon />
+                                        Delete Node
+                                    </span>
+                                    <span className="gglab-kbd" aria-hidden>
+                                        Del
+                                    </span>
+                                </Button>
+                            </div>
+                        </>
+                    )}
+                    {/* Node deletion — one gesture, the whole node (node +
+                        touching connections + placement) through the
+                        core-judged `removeNode`. */}
                 </main>
                 <aside className="gglab-side gglab-side-right">
                     {inspectorOpen ? (

@@ -42,7 +42,17 @@ export function ChevronsUpIcon(props: IconProps = {}) {
     );
 }
 
-/** Trash glyph (node removal — the card's delete action). */
+/** Single chevron pointing down (the card's action-menu affordance). */
+export function ChevronDownIcon(props: IconProps = {}) {
+    const size = props.size ?? 14;
+    return (
+        <svg width={size} height={size} viewBox="0 0 14 14" aria-hidden>
+            <path d="M3.5 5.4L7 8.9l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+    );
+}
+
+/** Trash glyph (the delete item inside the node menu). */
 export function TrashIcon(props: IconProps = {}) {
     const size = props.size ?? 14;
     return (
