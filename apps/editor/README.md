@@ -10,28 +10,34 @@ the `@gglab/shader-graph-core` semantic services.
 Never owns: graph semantics, type rules, validation, HLSL generation,
 shader compilation, or backend target policy.
 
-## Stage state (owner decision, 2026-07-21)
+## Stage state (owner, 2026-08-24)
 
-The core authoring loop is closed for this stage — creation (click or
-drag), connection, disconnection, armed endpoint reconnection,
-selection, diagnostics navigation, auto layout, deterministic HLSL
-with the pinned golden fingerprints, save/load with provenance and
-derived dirty state, and labeled undo/redo — and it is locked by the
-golden fixed scenes (semantics in the core's suite) plus this
-package's projection and behavior suites. Decided owner list: **node
-deletion** has landed, and **constant value editing** landed as the
-core gate with its UX deferred to the node-inspector design (see
-below) — the parameter-value gap itself resolved as a boundary, not a
-feature, because parameter values are runtime-owned by contract (they
-enter through the generated-function signature and deliberately never
-exist in the document). Deferred with the remaining interaction
-refinements (the selection-driven node inspector — including the
-constant-value editing UX — multi-selection, box selection,
-dangling-wire node creation, edge rerouting, the history panel, recent
-files, and a dedicated code pane) are intentionally deferred until the
-toolchain
-loop (native compilation + toolchain diagnostics surfacing) closes.
-These are decisions, not unfinished defects.
+Slice 1 is closed and merged into main (PR #2). The authoring loop —
+creation, connection, disconnection, armed reconnection, selection,
+diagnostics navigation, auto layout, deterministic HLSL with pinned
+golden fingerprints, save/load with provenance and derived dirty state,
+labeled undo/redo, node deletion, and the constant-value core gate —
+is locked by the golden fixed scenes and this package's projection
+and behavior suites.
+
+**Current active stage: Slice 2 — Shader Toolchain Integration.** The
+construction-level design is
+`docs/GGLab_Shader_Toolchain_Integration_Design.md`; the normative
+decisions are recorded in
+`docs/GGLab_Shader_Graph_Editor_Architecture.md` (§19–§22, §25, §31
+stage record, owner 2026-08-24).
+
+The deferred interaction items remain deferred until the toolchain
+loop (Slice 2/3) closes: the selection-driven node inspector
+(including the constant-value editing UX), multi-selection, box
+selection, dangling-wire node creation, edge rerouting, the history
+panel, recent files, and a dedicated code pane. These are decisions,
+not unfinished defects.
+
+Boundary unchanged from the closed stage: parameter values are
+deliberately not in the document — they are runtime-owned through the
+generated-function signature, and mapping runtime material state into
+those inputs is a main-repository obligation.
 
 ## Editor structure and canvas chrome
 
