@@ -18,18 +18,18 @@ One sentence for the whole document:
 **In scope (this document builds):**
 
 - Tool discovery model: precedence rules, candidate facts, failure as structured state.
-- The strict readiness gate: `unavailable / discovered / unproven / incompatible / ready`, with no bypass path.
-- The new headless `shader-toolchain-client` package: machine-protocol consumption, tool-compatibility verdicts, build result/revision, stale/current/last-good pure rules, and the process-runner boundary.
+- The strict readiness gate, as two state spaces in two domains: ToolCompatibility (`unavailable / discovered / unproven / incompatible / compatible`, client verdict) and NativeBuildReadiness (`Ready` / `NotReady{reasons}`, editor composition), with no bypass path.
+- The new headless `shader-toolchain-client` package: machine-protocol consumption, ToolCompatibility verdicts, the host-boundary contract (allowlisted operations + the `NativeCompileRequest` shape — no argv in its vocabulary), build-intent and build-line (stale/current/last-good) pure rules, and reference host-boundary fakes.
 - The narrow Tauri `ShaderToolService` (discover / handshake / compile / cancel).
 - Native compile request composition (target/stage/entry/source) and generated-source staging.
 - Revisioned asynchronous build state and last-good preservation.
 - Toolchain diagnostics transport (carry, display, bind — not yet navigate).
 - The Build Inspector model: exact fields, each with one source of truth.
-- The test model: pure client tests, fake host/process, stale ordering, incompatible/absent tool, and the optional owner-run real smoke.
+- The test model: pure client tests, host-boundary fakes (exposing no argv), intent/attempt ordering, ToolIncompatible/ToolUnproven/ToolUnavailable, the per-attempt staging rule, plus the two kind-distinct manual smokes (exploratory — permitted at any time, outside the editor, state-changing never; stage-acceptance — after the handshake, real product path).
 
 **Out of scope (explicit non-goals):**
 
-- Defining, proposing, or duplicating the toolchain handshake/result wire schema, or assigning values to any toolchain version axis. That authority is the main GGLab repository's.
+- Defining, proposing, or duplicating the toolchain handshake/result wire schema, or assigning values to any toolchain version axis, or pre-declaring the external contract's unknown-field policy. That authority is the GGLab Shader Toolchain contract authority's (normative design in the GGLab docs repository; implementation and self-tests in the main GGLab repository).
 - Native diagnostic → graph navigation via the source map (a later stage's work).
 - The Preview Lab, Material Programs, and Runtime integration.
 - A `build` command or any native-build orchestration in `apps/cli` (owner-deferred; separately reviewed).
@@ -44,8 +44,8 @@ One sentence for the whole document:
 | --- | --- | --- |
 | `shader-graph-core` | node/port/type authority; validation; deterministic emission; source map; generated-source identity (SHA-256 of exact bytes); descriptor reading; profile×descriptor compatibility (capability-based verdict) | a headless sibling; facts passed in, never a dependency target |
 | Surface Profile Descriptor | the frozen cross-boundary profile facts, including the narrow tool requirement (tool identity, minimum version, its comparison rule) and the generated-function facts (name/stage) | a serialized data document parsed by core's strict reader |
-| `gglab-shaderc` (external) | the toolchain process contract: the machine-readable result envelope (published, stable), status vocabulary, exit codes, targets; and the discovery handshake contract (to be established/extended there per that repository's review) | an external process; consumed through the client's strict readers and verdicts |
-| Tauri host (`ShaderToolService`) | bounded process execution; scoped file IO (existing) | a transport; no protocol judgment of any kind |
+| `gglab-shaderc` (external) | the toolchain process contract: the machine-readable result envelope (published, stable), status vocabulary, exit codes, targets; and the discovery handshake contract — owned by the GGLab Shader Toolchain contract authority: normative design in the GGLab docs repository, implementation and contract self-tests in the main GGLab repository | an external process; consumed through the client's strict readers and verdicts |
+| Tauri host (`ShaderToolService`) | bounded process execution; serialization of an approved allowlisted request into the tool invocation (host-internal); scoped file IO (existing) | a host boundary; no protocol interpretation, no readiness, no policy |
 
 ---
 
@@ -56,15 +56,19 @@ apps/editor                      composition root; session stores; Build Inspect
 ├─ @gglab/editor-ui              presentation only (unchanged)
 ├─ @gglab/shader-graph-core      graph semantics / emission / source map / profiles (unchanged)
 └─ @gglab/shader-toolchain-client   NEW — machine protocol, compatibility verdicts,
-                                    build result/revision, stale/current/last-good rules,
-                                    process-runner boundary (headless pure TypeScript)
+                                    build intent / result states
+                                    (current/stale/last-good), the host-boundary
+                                    contract, NativeCompileRequest shape
+                                    (headless pure TypeScript, no argv anywhere)
 
-host boundary (outside the packages):
-├─ Tauri ShaderToolService (Rust)  implements the process-runner port for the GUI
-└─ test fakes                            implement the same port for the test suites
+host boundary (declared by the client package, implemented outside it):
+├─ Tauri ShaderToolService (Rust)   the product implementation: allowlisted-request
+│                                   validation → tool-invocation serialization
+│                                   (host-internal) → bounded execution
+└─ TS fakes                         the test-side implementation of the same boundary
 ```
 
-Both headless packages remain independently usable and independently testable. The client package never imports React, Tauri, the DOM, or any Node/OS runtime API; process execution is a port it declares, not code it ships.
+Both headless packages remain independently usable and independently testable. The client package never imports React, Tauri, the DOM, or any Node/OS runtime API; it ships no process execution and owns no argv — invocation serialization is host-internal (Rust), and the test fakes never expose argv either.
 
 ---
 
@@ -80,11 +84,14 @@ Both headless packages remain independently usable and independently testable. T
   the descriptor's generated-function facts (stage, entry). The editor is the
   only place where a core type and a client type meet.
 - **The client's vocabulary is its own plain value types** (contract facts,
-  envelopes, revision tokens, result states). It never understands
-  `ShaderGraphDocument`, `GraphType`, node semantics, or graph diagnostics.
+  envelopes, the `NativeCompileRequest` shape, build intents, result states).
+  It never understands `ShaderGraphDocument`, `GraphType`, node semantics, or
+  graph diagnostics — and it contains no argv type at all: argument arrays
+  exist only inside the host boundary.
 - **Host implementations never import each other:** the Tauri service and the
-  test fakes are independent implementations of the one declared
-  process-runner port.
+  test fakes are independent implementations of the one declared host-boundary
+  contract (the allowlisted operations and their request/result shapes,
+  declared by the client package).
 
 ---
 
@@ -115,9 +122,15 @@ not execute the tool and does not interpret any of its output.
 
 ---
 
-## 6. Readiness state machine
+## 6. Readiness — two state spaces in two domains
 
-Five explicit states; every rung is visible, none is implied:
+The tool's state is the client's verdict; the build's readiness is the
+editor's composition. They are separate state spaces — never one mixed
+ladder — because mixing them makes names ambiguous ("incompatible" meaning
+either the tool or the descriptor) and forces one domain to decide what it
+cannot know:
+
+**Tool compatibility (judged by the Toolchain Client):**
 
 ```text
 unavailable    no candidate resolved by the discovery rules
@@ -125,40 +138,62 @@ discovered     a candidate resolved — a FACT, never a readiness claim
 unproven       resolved, but not machine-readably proven compatible; the honest
                state of every real tool until the toolchain handshake contract
                exists and the client declares it supported
-incompatible   resolved, and its facts contradict the required ones
-ready          proven tool compatibility
-               AND compatible required Surface Profile Descriptor (core verdict)
-               AND host execution capability (service report)
-               AND the explicit build target configured
+incompatible   resolved, and the TOOL's facts contradict the required ones
+compatible     proven machine-readably compatible
 ```
 
-Transitions and their events:
+Tool-side transitions fire only on tool-side events:
 
 ```text
-(any)        → unavailable   discovery fails on all rules
-ready/discovered/unproven/incompatible → discovered        a new candidate resolves
-discovered   → unproven      handshake attempted; the client does not support a
-                             published contract, or the tool's facts are absent
-discovered   → incompatible  the tool's facts contradict the required ones
-                             (identity mismatch, version below the required
-                             minimum, target absent, contract out of range)
-unproven / discovered / incompatible → ready   all four ready-conditions hold
-ready        → unproven / incompatible         descriptor, config, or tool facts
-                             change and any ready-condition is lost
-ready        → unavailable                     the tool is no longer resolvable
+(any)                     → unavailable   discovery fails on all rules
+discovered/unproven/…     → discovered    a new candidate resolves
+discovered                → unproven      handshake attempted; the client does not
+                                          support a published contract, or the
+                                          tool's facts are absent
+discovered                → incompatible  the tool's facts contradict the required
+                                          ones (identity mismatch, version below
+                                          the required minimum, target absent,
+                                          contract out of range)
+unproven / incompatible   → compatible    a published contract lands and proofs hold
+compatible                 → unproven / incompatible   tool facts change and
+                                          proof is lost
+(any)                     → unavailable   the tool is no longer resolvable
 ```
 
-Hard invariants:
+**Native build readiness (composed ONCE, by the editor orchestration):**
 
-- **The compile path is gated on `ready`, with no bypass.** There is no dev mode,
-  environment flag, or local setting that routes a compile through an
-  unproven or incompatible tool; the path does not exist to configure because
-  none is defined. The client itself refuses a compile call that is not
-  backed by a `ready` composition, and the refusal is a structured result.
-- **`ready` is derived, never remembered.** It is recomposed from
-  current facts; a session restart starts at worst at `discovered`.
-- **Downgrades are as visible as upgrades.** Losing `ready` is a state
-  change, surfaced in the Build Inspector, not a silent capability drop.
+```text
+Ready      tool compatible
+           AND profile/descriptor compatible (core verdict)
+           AND host execution capability (service report)
+           AND the explicit build target configured
+NotReady   otherwise — ALWAYS with a structured reason list:
+           [ToolUnavailable | ToolDiscovered | ToolUnproven | ToolIncompatible
+            | DescriptorIncompatible | HostUnavailable | TargetNotConfigured]
+```
+
+Reasons are visible, complete, and structured: every non-Ready input
+contributes its reason. A `NotReady{…}` is the inspector's explanation, not
+a failure.
+
+Guarantees, per layer — each layer guarantees exactly what it owns:
+
+- **The product compile gate lives in the editor orchestration.** Only a
+  `Ready` composition issues a native compile request. No bypass: no dev
+  mode, environment flag, or local setting routes a request through a
+  `NotReady` composition — the path does not exist to configure because none
+  is defined.
+- **The Toolchain Client guarantees the tool-operation level:** it never forms
+  a legal tool operation (handshake or compile request) out of an
+  unavailable / unproven / incompatible tool. The refusal is a structured
+  result. It composes nothing — it does not know the descriptor profile, the
+  host, or the target, and it is not asked.
+- **The Tauri service guarantees the boundary level:** it executes only
+  allowlisted, in-shape domain requests, bounded. It knows nothing about
+  readiness and enforces nothing about it — readiness is not its domain.
+- **Readiness is derived, never remembered:** recomposed from current facts
+  on every input change; a session restart starts at worst at `discovered`.
+  Downgrades (a reason appearing) are as visible as upgrades.
 
 ---
 
@@ -171,24 +206,37 @@ needs; it does not define the contract and assigns no values to the
 toolchain's axes:
 
 ```text
-required facts for the verdict:
+required facts for the verdict (v1):
   the tool's identity                          (the descriptor requires one — the editor never picks it)
   the tool's version                            (judged against the descriptor's minimum under the descriptor's own comparison rule)
   the tool's process-contract version axis      (checked against the range the client declares it supports)
   the producer/compiler identity
   the published supported targets               (the explicitly configured target must be among them)
-  artifact contract/schema compatibility facts  (as the toolchain publishes them)
 ```
 
-Reader discipline (the descriptor-reader pattern, applied to a sibling axis):
+The artifact contract/schema axis is **not** required in v1: it enters only
+when the editor/preview genuinely consumes a versioned ShaderArtifact
+contract (deferred, §15). Do not invent handshake requirements from facts
+the compile result already carries (`binaryPath`, `binaryHash`,
+`cacheRecordPath` are result evidence, not handshake requirements).
 
-- The client DECLARES the handshake-contract versions it supports and rejects
-  unsupported or newer ones explicitly. Unknown or newer data fails or
-  degrades explicitly; it is never silently reinterpreted.
-- Until the client supports a published contract, its supported set is empty.
-  That is exactly why, today, every real tool is `discovered-but-unproven` —
-  and none may enter the compile path. This is a state of the world, visible
-  and explainable, not a missing feature to be papered over.
+Reader discipline:
+
+- The client DECLARES the handshake-contract versions it supports. Contract
+  versions outside its declared range are explicitly unsupported (the
+  client's own range discipline) — never silently accepted, never silently
+  reinterpreted.
+- For everything inside a supported published contract, the client follows
+  the compatibility and field-tolerance rules THAT CONTRACT defines — the
+  descriptor reader's strictness belongs to the descriptor schema the
+  editor itself reads, and is not automatically projected onto an external
+  wire contract (published optional fields are optional; how they are
+  handled is the contract's business, not ours to pre-declare).
+- Until the client supports a published contract, its supported set is
+  empty. That is exactly why, today, every real tool is
+  `discovered-but-unproven` — and none may enter the compile path. This is a
+  state of the world, visible and explainable, not a missing feature to be
+  papered over.
 - When the toolchain publishes (or extends) the contract through its own
   review, the client gains a strict reader for that published form —
   consumption of an external contract, never a definition of one.
@@ -215,25 +263,53 @@ source   ← the staged generated HLSL: bytes = core's emission; identity = SHA-
 roots    ← service-owned locations (its private staging/cache/artifact areas)
 ```
 
-The composition chain, in order — each stage has one job and never does the
-next stage's job:
+The flow, in order — each stage has one job and never does the next stage's
+job, and **no argv exists anywhere on the TypeScript side**:
 
 ```text
-editor composition          facts in → request value out (no argv here)
+NativeCompileRequest          domain-shaped, composed at the editor's
+                              composition point:
+                                { source bytes, sourceIdentity,
+                                  target, stage, entry,
+                                  defines/includes (empty in v2) }
    ↓
-shader-toolchain-client     request + protocol contract → structural argv (the ONLY place argv is built)
+Tauri ShaderToolService       the product host boundary: validates the
+                              allowlisted request shape, then serializes the
+                              approved request into the tool's invocation
+                              (structural arguments — host-internal, no shell
+                              string, no policy), and executes bounded
+                              (timeout/cancel; raw output bytes + exit code
+                              are the entire output)
    ↓
-Tauri ShaderToolService     bounded execution: validated arg array, kill/timeout, exit + raw output bytes
+gglab-shaderc                 production compilation (its own policy, its own evidence)
    ↓
-gglab-shaderc               production compilation (its own policy, its own evidence)
-   ↓
-raw output + exit code →    client parses the published envelope → verdict + result facts
+raw output + exit code →      the Toolchain Client parses the published
+                              envelope → verdicts + result facts
 ```
 
-Every request is bound to a **revision token** derived from: the source
-identity, the target, the proven tool facts, and the client's protocol
-version. A result's match against the current revision is what makes it
-`current` (see §11).
+**Build intent and attempt identity — three concepts, not one.**
+
+```text
+GeneratedSourceIdentity   SHA-256 of the exact emitted bytes — the core's
+                          durable CONTENT identity (unchanged)
+BuildIntent               the semantic identity of the compile request:
+                          sourceIdentity + target + stage/entry +
+                          descriptor-contract inputs (defines/includes) +
+                          the relevant proven tool/process facts
+                          (identity, version, process-contract axis) —
+                          everything that actually affects what the tool compiles
+BuildId                   the identity of ONE concrete asynchronous attempt
+                          (session-local, ordered) — who came later, when two
+                          attempts share an intent
+```
+
+Identity and ordering are separate axes: same source bytes under a different
+target is a DIFFERENT intent; two attempts within one intent are ordered by
+BuildId. A result can be `current` only if it belongs to the current
+BuildIntent and is the newest successful attempt within that intent (§11).
+This creates no new persisted identity — both are session-local structured
+data, and the durable content identity stays the core's SHA-256 and nothing
+else.
 
 The first real target is **`gglab-dx12`**, as explicit configuration — a
 deployment choice for the development environment, not a semantic fact and
@@ -247,26 +323,40 @@ The service is the GUI's process boundary and nothing else.
 
 ```text
 capabilities (exactly these, plus the existing scoped document/descriptor file I/O):
-  discover(config)      → toolCandidate facts + per-rule failure reasons
-  handshake(candidate)  → raw output bytes + exit code + timeout state
-  compile(requestValue) → buildId ; later: raw output bytes + exit code + timeout state
-  cancel(buildId)       → explicit canceled state for that build
+  discover(config)            → toolCandidate facts + per-rule failure reasons
+  handshake(candidate)        → raw output bytes + exit code + timeout state
+  compile(NativeCompileRequest) → buildId ; later: raw output bytes + exit code +
+                                timeout state
+  cancel(buildId)             → explicit canceled state for that build
 
-transport-level bounds (Rust's actual job):
-  argv arrives as a structured array; count and per-argument length bounded;
-  NO shell string, ever; output bytes captured whole (bounded) or timed out;
-  the spawned process is the discovered tool at the candidate path, nothing else
-  timeout and cancel are enforced per build
+the boundary's actual job (all host-internal, in Rust):
+  allowance      the request is one of the declared operations, in declared shape
+                 (source bytes + identity present; target/stage/entry present)
+  serialization  an APPROVED request is mapped to the tool's invocation —
+                 structural arguments, no shell string, ever; this mapping is
+                 a host-internal detail and owns no DXC/backend policy
+  execution      the discovered tool at the candidate path is spawned, nothing
+                 else; output bytes captured whole (bounded) or timed out;
+                 timeout and cancel enforced per build; the raw output bytes +
+                 exit code are the ENTIRE output of the boundary
+  staging        the private per-attempt area (§10)
 ```
 
 Prohibited, by construction:
 
 ```text
 no generic spawn(argv) — the service exposes only the four capabilities above
-no protocol parsing, status interpretation, version comparison, or
-    diagnostic classification in Rust (the raw bytes + exit code ARE the output)
-no staging-path exposure: the WebView receives names/identities, never paths it can use
-no bypass route: nothing in the service can compile through a non-ready composition
+    and serializes only approved requests
+no protocol interpretation in Rust — no envelope parsing, status
+    interpretation, version comparison, or diagnostic classification
+    (the raw bytes + exit code ARE the output)
+no readiness logic in the service — it does not know the descriptor, the
+    profile, the host state, or the target policy; whether a request is
+    allowed is decided above it, and the service cannot be asked
+no staging-path exposure: the WebView receives names/identities, never
+    paths it can use
+no argv in the TypeScript world — no host interface, test fake, or client
+    API exposes an argument array
 ```
 
 The service owns no graph knowledge, no profile knowledge, and no
@@ -283,17 +373,25 @@ exclusively by the service:
 ```text
 ownership   the service's private area (its host data location); the WebView
             has no path into it, no read, no write, no list
-lifetime    created for a build; the bytes are written by the service from the
-            delivered emission; kept until the build settles (result, failure,
-            or cancellation); cleaned by the service; re-created on service
-            restart — never a durable session claim
-collision   staging names derive from the source identity (the SHA-256 hex);
-            the same bytes can never occupy two different stagings, and two
-            different byte strings can never share one
+isolation   every attempt owns its own staging area:
+              staging/<buildId>/<sourceIdentity>.hlsl
+            Two builds — even the same bytes under a different target, or a
+            double build click — NEVER share an area, so attempt A's
+            cleanup can never remove attempt B's source
+lifetime    created per attempt; the bytes are written by the service from
+            the delivered emission; kept until that attempt settles (result,
+            failure, or cancellation); cleaned by the service per attempt;
+            re-created on service restart — never a durable session claim
 evidence    the result carries, always, the core's durable source identity
             (SHA-256 of the exact bytes that were compiled), plus a
             service-local staging NAME (for the inspector, not a usable path)
 ```
+
+A shared-by-name layout (`staging/<sourceIdentity>.hlsl`) is explicitly
+excluded: concurrent attempts with identical source bytes would alias one
+file, and a settling attempt could delete a live attempt's input. Per-attempt
+areas make the lifetime rules local and trivial; refcounting/CAS is
+deliberately not introduced in this stage.
 
 The WebView's compile flow delivers bytes + identity to the service and
 receives results back; it never names, opens, or manages a staging file.
@@ -303,17 +401,25 @@ receives results back; it never names, opens, or manages a staging file.
 ## 11. Revisioned asynchronous build model
 
 ```text
-revision := generated-source identity (SHA-256 of the exact emitted bytes);
-            the anchor is the core's durable identity — never a session counter
-            alone, never a timestamp
+BuildIntent := the compile-request identity (defined in §8):
+               sourceIdentity + target + stage/entry
+               + descriptor-contract inputs (defines/includes)
+               + the relevant proven tool/process facts
+BuildId     := the session-local, ordered identity of ONE asynchronous attempt
 ```
+
+There is deliberately NO new persisted "BuildRevision": the durable content
+identity stays the core's SHA-256 of the exact bytes, and intent + attempt
+identity are session-local structured data over it.
 
 Every build result occupies exactly one explicit state. A failure is a state,
 not an exception, and a slow late result is data, not a correction:
 
 ```text
-current      the newest SUCCESSFUL result whose revision matches the CURRENT emission
-stale        a once-current result displaced by a newer revision; retained as evidence
+current      the newest SUCCESSFUL result belonging to the CURRENT BuildIntent,
+             and the newest successful attempt within that intent
+stale        a once-current result displaced by a newer BuildIntent; retained
+             as evidence
 last-good    the most recent successful result — preserved across newer failures
 failed       explicit structured diagnostics from the machine contract; never prose
 canceled     an in-flight build canceled by the user; explicit, never lost
@@ -321,15 +427,19 @@ canceled     an in-flight build canceled by the user; explicit, never lost
 
 Rules (pure, client-owned, host-independent):
 
-- A result becomes `current` only if its revision matches the current
-  emission's revision and it is the newest such result.
-- Advancing the emission demotes the previous `current` to `stale`. Stale
-  results are retained, never silently dropped.
+- A result becomes `current` only if it BELONGS TO the current BuildIntent —
+  intent match, not merely the source bytes (same bytes under a different
+  target or stage, or different proven tool facts, is a DIFFERENT intent) —
+  and it is the newest successful attempt within that intent (BuildId
+  ordering).
+- Advancing the build intent (a new emission, or the same emission under a
+  changed target/stage/tool facts) demotes the previous `current` to `stale`.
+  Stale results are retained, never silently dropped.
 - `last-good` survives any number of newer failures. A failed newer build
   never blanks, erases, or downgrades a safe `last-good`.
-- A slow, old completion that lands after a newer revision MUST NOT become
+- A slow, old completion that lands after a newer intent MUST NOT become
   current and MUST NOT replace a newer state — it arrives as `stale` evidence
-  or a `failed` state, with its revision visible.
+  or a `failed` state, with its BuildIntent and BuildId visible.
 - Cancellation is an explicit terminal state for that build; the prior
   `current`/`last-good` is untouched.
 - In-flight builds are "in flight", not "current"; readiness and state
@@ -355,12 +465,12 @@ persisted contract — the same rule as the authoring-operation session stores.
   - toolchain diagnostics stay a distinct layer from graph-native diagnostics
     (the two-layer diagnostic model); they are never merged into one
     unstructured list;
-  - each diagnostic is bound to the revision/result it belongs to, so a stale
-    result cannot lend its diagnostics to a current one.
-- Boundary: Slice-level navigation of a native diagnostic back to a graph
-  node/port (through the source map) is deliberately NOT done here. This
-  stage carries, displays, and binds; navigation is the diagnostics stage's
-  work, built on this stage's revision binding.
+  - each diagnostic is bound to the build it belongs to (its BuildIntent and
+    BuildId), so a stale result cannot lend its diagnostics to a current one.
+- Boundary: navigation of a native diagnostic back to a graph node/port
+  (through the source map) is deliberately NOT done here. This stage
+  carries, displays, and binds; navigation is the diagnostics stage's work,
+  built on this stage's intent/attempt binding.
 
 ---
 
@@ -371,7 +481,7 @@ truth for one field is a review failure.
 
 | Field | Source of truth | Notes |
 | --- | --- | --- |
-| readiness state | composed (editor), from the three siblings | the ladder itself, not a boolean |
+| readiness state | composed (editor orchestration): NativeBuildReadiness = ToolCompatibility (client) + profile×descriptor (core) + host capability (service) + target config | `Ready`, or `NotReady{reasons}` — every reason structured and visible, not a boolean |
 | discovered tool path + provenance | service (discovery) | which rule resolved it |
 | tool identity | client verdict over the tool's facts | checked against the descriptor's requirement |
 | tool version | tool's proven fact (via the client's reader) | judged under the descriptor's own rule |
@@ -381,12 +491,13 @@ truth for one field is a review failure.
 | profile×descriptor compatibility | core's capability verdict | the core owns this judgment |
 | build target | explicit configuration | never the descriptor, never the tool |
 | stage / entry | descriptor generatedFunction facts | the descriptor's legit facts in the request |
-| generated-source identity | core's emission (SHA-256) | the revision anchor |
+| build intent (target / stage / entry / source identity / relevant proven tool facts) | the composed NativeCompileRequest (editor, from the client's vocabulary) | the `current`-ness anchor: the semantic identity of the compile request |
+| generated-source identity | core's emission (SHA-256) | the core's durable CONTENT identity; a component of the build intent |
 | staging evidence | service (local name) + core identity | name for evidence, not a usable path |
 | build-line states (current/stale/last-good/failed/canceled) | session store over the client's rules | the ordered line, newest visible |
 | recipe/build key, binary hash, binary format | tool result (via the client's reader) | the toolchain's own evidence |
 | cache hit/miss | tool result | as the toolchain reports it |
-| diagnostics (this stage: carried, not yet navigated) | tool result via the client | structured layer, bound to its revision |
+| diagnostics (this stage: carried, not yet navigated) | tool result via the client | structured layer, bound to its build (BuildIntent + BuildId) |
 
 The inspector is the stage's "replayable evidence, not opaque *Compile
 failed*" surface: a reviewer must be able to determine, from it alone, which
@@ -397,59 +508,93 @@ evidence, and why the state is what it is.
 
 ## 14. Testing
 
-**Test placement:** the Toolchain Client's own suite (the package where the
-semantics live) — the real tool is never a test fixture and never a test
-dependency. Fake host/process tests exercise the product path end-to-end
-against fakes, in the same suites.
+**Test placement:** the Toolchain Client's own suite (pure verdicts,
+envelope parsing, the ToolCompatibility state machine, build-line rules —
+no host at all); the editor application suite exercises the product path
+end-to-end (orchestration gate → request → fake service → result states)
+against the host-boundary fake, the test-side implementation declared in
+§3. The real tool is never a test fixture and never a test dependency,
+anywhere.
 
 **Pure client tests (no host, no process):**
 
-- strict parsing of the published result envelope: well-formed, every
-  failure status in the vocabulary, unknown fields, out-of-range versions,
-  missing required facts — all explicit, never partially accepted;
+- strict parsing of the published result envelope: well-formed forms, every
+  failure status in the vocabulary, the contract's own handling of its
+  published optional fields (per the contract's rules), contract versions
+  outside the client's supported range, missing required facts — all
+  explicit, never partially accepted, never silently reinterpreted;
 - version/compatibility verdicts: version at/above/below the required
   minimum; identity mismatch; target absent from the supported facts;
   contract axis in/out of the client's declared supported range;
-- the readiness state machine: every transition, including downgrade events;
-  the no-bypass invariant (a compile request without a `ready` composition is
-  a structured refusal);
-- build-line rules: stale ordering, late slow results, last-good preservation
-  across failure runs, cancellation;
-- compile-request composition: determinism of the structural argv for fixed
-  inputs (same facts → same argv → same protocol shape);
-- the client's vocabulary independence: no import of core types, asserted
-  at the build boundary (test that fails if a core type leaks in).
+- the ToolCompatibility state machine: every transition, including
+  downgrade events;
+- the client's tool-operation guarantee: no legal tool operation (handshake
+  or compile request) is ever formed out of an unavailable / unproven /
+  incompatible tool — the refusal is a structured result;
+- build-line rules: stale ordering, late slow results, last-good
+  preservation across failure runs, cancellation, attempt ordering within
+  one intent;
+- request-value composition: determinism of the `NativeCompileRequest` for
+  fixed inputs (same semantic compile request → same request VALUE — a
+  value, never an argument array);
+- the client's vocabulary independence: no import of core types, and no
+  argv type in the client's vocabulary at all (tests that fail if either
+  leaks in).
 
-**Fake host / process tests (the product path):**
+**Host-boundary tests (the product path, in the editor suite):**
 
-- a fake process-runner implementing the port: deterministic envelopes, exit
-  codes, timeout behavior, cancel behavior;
-- the full chain: composition → client → (fake) service → fake tool → result
-  facts → inspector state, driven entirely by fakes;
+- the host-boundary fake implementing the declared contract (§3):
+  deterministic envelopes, exit codes, timeout behavior, cancel behavior;
+  the fake exposes no argv;
+- the full chain: Ready composition (gate) → `NativeCompileRequest` →
+  (fake) service → fake tool → envelope → client verdict → result states →
+  inspector state, driven entirely by fakes;
+- the gate (editor orchestration): a `Ready` composition issues requests;
+  for EACH `NotReady` reason type (`ToolUnavailable`, `ToolDiscovered`,
+  `ToolUnproven`, `ToolIncompatible`, `DescriptorIncompatible`,
+  `HostUnavailable`, `TargetNotConfigured`) nothing is issued and the
+  reason is visible;
 - required scenarios (each a named test):
-  1. compatible proven tool + compatible descriptor → `ready` → compile →
-     artifact/build facts visible;
-  2. incompatible tool (each contradiction kind) → `incompatible` + explicit
-     structured reason;
-  3. absent tool (every discovery rule fails) → `unavailable` + per-rule
+  1. compatible proven tool + compatible descriptor + capable host +
+     configured target → `Ready` → compile → artifact/build facts visible;
+  2. incompatible tool (each contradiction kind) → `ToolIncompatible` +
+     explicit structured reason;
+  3. absent tool (every discovery rule fails) → `ToolUnavailable` + per-rule
      reasons;
-  4. unproven tool (handshake contract unsupported) → `unproven`, compile
-     refused, nothing executes;
-  5. stale ordering: slow old result lands after a newer revision — cannot
-     become current;
+  4. unproven tool (handshake contract unsupported) → `ToolUnproven`; the
+     client refuses the operation; nothing executes;
+  5. same source bytes, target changed (different intent): the slow old
+     result of the old intent lands late — cannot become current;
   6. failure after success: `last-good` preserved and explicitly displayed;
   7. cancel in flight: explicit `canceled` state; prior states untouched;
-  8. timeout: an explicit failed state with the timeout fact, not a hang.
+  8. timeout: an explicit failed state with the timeout fact, not a hang;
+  9. two quick attempts sharing identical source bytes: separate per-attempt
+     staging areas, separate BuildIds; settling one never affects the other.
 
-**Non-normative test invariant:** no test asserts against a human-facing
-tool surface (`--version` text, `targets` listing, help output). A test that
-does is a test of the wrong layer and is deleted, not fixed.
+**Non-normative test invariants:** no test asserts against a human-facing
+tool surface (`--version` text, `targets` listing, help output) — such a
+test is testing the wrong layer and is deleted, not fixed. And no test
+captures or asserts argv strings or staging file paths: those are
+host-internal details, not a contract surface.
 
-**Optional owner-run real smoke (manual, recorded):**
+**Manual smoke — two kinds, two roles:**
+
+*Exploratory smoke (permitted at any time, including before a handshake
+contract exists):*
+
+- the owner may run `gglab-shaderc` from outside the editor (terminal) to
+  investigate the tool's behavior against a known emission;
+- it is investigative evidence ONLY: it must not change the tool's state
+  (`unproven` stays `unproven`), must not flow into the editor's product
+  path, and must not surface in the editor as any readiness claim;
+- it is not a readiness proof and not a stage-exit input.
+
+*Stage-acceptance smoke (after the handshake exists; part of closure):*
 
 - permitted only after the toolchain handshake contract exists and the
-  client declares it supported — never before;
-- first target: explicit `gglab-dx12`;
+  client declares it supported;
+- first target: explicit `gglab-dx12`; through the REAL editor product path
+  (Ready composition, real service, real tool) — not via the terminal;
 - run by the owner, outside CI (never a CI default), and recorded with the
   toolchain checkout identity (commit) + binary identity + the observed
   verdict and result facts — evidence in the working record, not in
@@ -463,21 +608,28 @@ does is a test of the wrong layer and is deleted, not fixed.
 
 - **`apps/cli` build / native-build orchestration** — owner-deferred;
   separately reviewed when (not if, assumed) it is wanted. The protocol
-  reuses this design as-is: the CLI would add a Node process-runner
-  implementation and its own command grammar/envelope over the same
-  client — zero protocol rework.
+  reuses this design as-is: the CLI would add its own host-boundary
+  implementation (allowlisted request → invocation serialization → bounded
+  execution) and its command grammar over the same client vocabulary — zero
+  protocol rework.
 - **Native diagnostic → graph navigation** (source-map lookup, markers,
-  node/port highlighting) — the diagnostics stage, built on §11's revision
-  binding and §12's transport.
+  node/port highlighting) — the diagnostics stage, built on §11's
+  intent/attempt binding and §12's transport.
 - **Preview Lab / Material Programs / Runtime integration** — later stages;
   `launchPreview` stays a reserved slot, unbuilt.
 - **Node inspector and the remaining canvas interaction refinements** — the
   owner's deferred list; they land after the toolchain loop closes.
 - **Packaging / deployment closure** (the packaged toolchain + DXC runtime
   as a dependency closure) — a packaging decision, not this design's.
-- **The handshake contract itself** — external authority (main GGLab
-  repository). This repository's obligation is the consumption discipline in
-  §7; the definition and its version values are not ours to make.
+- **The artifact contract/schema axis in the handshake** — not a v1
+  requirement (§7); it enters only when the editor/preview genuinely
+  consumes a versioned ShaderArtifact contract.
+- **The handshake contract itself** — owned by the GGLab Shader Toolchain
+  contract authority: the normative design lives in the GGLab docs
+  repository; the implementation and its contract self-tests live in the
+  main GGLab repository. This repository's obligation is the consumption
+  discipline in §7; the definition and its version values are not ours to
+  make.
 
 ---
 
@@ -491,32 +643,44 @@ decisions; this document landed; the stage-state entries updated.
 *Exit:* owner review of the records; no code.
 
 **Step 2 — `shader-toolchain-client`.** The package: its plain value
-vocabulary; the strict reader for the published result envelope; the
-handshake facts interface + the (today empty) supported-range declaration and
-its explicit "contract not supported" result; the version/identity/target
-verdicts; the readiness composition input side (tool side); the build-line
-rules; the process-runner port + reference fakes; the full §14 pure + fake
-suite.
-*Exit:* package tests green; `shader-graph-core` unmodified and dependency-free in both directions; no host API imported anywhere in the package.
+vocabulary (contract facts, envelopes, the `NativeCompileRequest` shape,
+build intents, result states); the host-boundary contract (allowlisted
+operations + request/result shapes) and reference host-boundary fakes; the
+strict reader for the published result envelope; the handshake facts
+interface + the (today empty) supported-range declaration and its explicit
+"contract not supported" result; the version/identity/target verdicts; the
+ToolCompatibility state machine; the build-intent and build-line rules
+(stale/current/last-good, ordered by buildId); the full §14 pure suite.
+*Exit:* package tests green; `shader-graph-core` unmodified and
+dependency-free in both directions; no host API imported anywhere in the
+package; no argv type exists anywhere in its vocabulary.
 
-**Step 3 — the Tauri `ShaderToolService`.** The four capabilities; bounded
-execution (argv bounds, timeout, cancel, whole-output capture); private
-staging owned per §10; the capability set extended only for these commands.
+**Step 3 — the Tauri `ShaderToolService`.** The four capabilities;
+allowlisted-request validation + approved-request → invocation serialization
+(host-internal); bounded execution (no shell string, timeout, cancel,
+whole-output capture); private per-attempt staging per §10; the capability
+set extended only for these commands.
 *Exit:* host tests with a trivial dummy executable emitting fixed bytes prove
-execution/caption/timeout/cancel; no protocol content in any host test.
+execution/capture/timeout/cancel; no protocol content and no readiness
+logic in any host test.
 
-**Step 4 — editor composition and surface.** The readiness composer (core
-verdict + client verdict + host facts + target config); the build-line session
-store over the client rules; the Build Inspector per §13; the explicit target
-configuration (development default: `gglab-dx12`, always user-visible and
-changeable); the compile/cancel actions routed through client → service only.
-*Exit:* the readiness ladder is visibly explicit at every rung; a compile
-request without `ready` is a structured refusal the user can read; the
+**Step 4 — editor composition and surface.** The `NativeBuildReadiness`
+composer (ToolCompatibility + core's descriptor verdict + host capability +
+target config) with structured `NotReady{reasons}`; the product gate (only
+`Ready` issues); the build-line session store over the client's rules; the
+Build Inspector per §13; the explicit target configuration (development
+default: `gglab-dx12`, always user-visible and changeable); the
+compile/cancel actions routed through gate → request value → service only.
+*Exit:* both state spaces are visibly explicit at every rung; no request is
+issued for a `NotReady` composition, with complete visible reasons; the
 inspector fields each show their single source of truth.
 
 **Step 5 — the gate opens (externally blocked).** After the toolchain
-handshake contract exists and the client declares it supported: a real tool
-proves, and the optional owner-run smoke runs (first target `gglab-dx12`).
+handshake contract exists (contract authority: normative design in the GGLab
+docs repository; implementation and self-tests in the main GGLab
+repository) and the client declares it supported: the real tool proves, and
+the stage-acceptance smoke runs through the real editor product path (first
+target `gglab-dx12`).
 *Exit:* the baseline's acceptance — compatible toolchain + compatible
 selected profile → `Ready` → generated HLSL → `gglab-shaderc` → artifact /
 build identity visible — holds in the desktop application, with the smoke
@@ -529,8 +693,11 @@ recorded.
   Build Inspector alone;
 - no test depends on a real binary, a machine-specific path, or a
   human-facing tool output;
-- no code path assembles a shell string, and no WebView code path produces
-  raw argv;
+- no code path assembles a shell string anywhere, and argv does not exist
+  in the TypeScript world at all (client, editor, test fakes);
+- ToolCompatibility and NativeBuildReadiness are distinct state spaces in
+  the code, and the single composition point is the editor orchestration —
+  the service holds no readiness logic;
 - `shader-graph-core` is byte-identical in its public surface (no new
   imports in either direction with the client);
 - a failed or canceled build never erases a safe `last-good`, and a slow old
