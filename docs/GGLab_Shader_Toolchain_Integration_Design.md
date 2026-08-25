@@ -25,7 +25,7 @@ One sentence for the whole document:
 - Revisioned asynchronous build state and last-good preservation.
 - Toolchain diagnostics transport (carry, display, bind — not yet navigate).
 - The Build Inspector model: exact fields, each with one source of truth.
-- The test model: pure client tests, host-boundary fakes (exposing no argv), intent/attempt ordering, ToolIncompatible/ToolUnproven/ToolUnavailable, the per-attempt staging rule, plus the two kind-distinct manual smokes (exploratory — permitted at any time, outside the editor, state-changing never; stage-acceptance — after the handshake, real product path).
+- The test model: pure client tests, host-boundary fakes (exposing no argv), intent/attempt ordering (including the producer-identity intent case), ToolIncompatible/ToolUnproven/ToolUnavailable, TargetUnsupported as a readiness reason (never a tool-state change), the per-attempt staging rule, plus the two kind-distinct manual smokes (exploratory — permitted at any time, outside the editor, state-changing never; stage-acceptance — after the handshake, real product path).
 
 **Out of scope (explicit non-goals):**
 
@@ -142,7 +142,16 @@ incompatible   resolved, and the TOOL's facts contradict the required ones
 compatible     proven machine-readably compatible
 ```
 
-Tool-side transitions fire only on tool-side events:
+Tool-side transitions fire only on tool-side events. The handshake is the
+operation that establishes or refreshes proof, and it remains LEGAL for any
+resolved candidate — `discovered`, `unproven`, and `incompatible` alike
+(`unavailable` naturally has no candidate to handshake); re-handshaking is
+exactly how `unproven` and `incompatible` tools enter — and re-enter after
+an update at the same path — `compatible`. Target COVERAGE by the tool is
+not a tool-state question (it is a build readiness input below), so the
+same executable must not oscillate between `incompatible` and `compatible`
+when the user changes the target. Tool compatibility is the TOOL's
+compatibility; target readiness is ONE BUILD's compatibility.
 
 ```text
 (any)                     → unavailable   discovery fails on all rules
@@ -152,9 +161,13 @@ discovered                → unproven      handshake attempted; the client does
                                           tool's facts are absent
 discovered                → incompatible  the tool's facts contradict the required
                                           ones (identity mismatch, version below
-                                          the required minimum, target absent,
-                                          contract out of range)
-unproven / incompatible   → compatible    a published contract lands and proofs hold
+                                          the required minimum, contract axis
+                                          out of range) — facts the tool itself reports; target COVERAGE is a build
+                                           fact, not part of this verdict
+unproven / incompatible   → compatible    a (re-)handshake proves the tool's
+                                           facts under a contract the client
+                                           supports (how an updated same-path
+                                           binary re-enters)
 compatible                 → unproven / incompatible   tool facts change and
                                           proof is lost
 (any)                     → unavailable   the tool is no longer resolvable
@@ -167,9 +180,11 @@ Ready      tool compatible
            AND profile/descriptor compatible (core verdict)
            AND host execution capability (service report)
            AND the explicit build target configured
+           AND the configured target ∈ the tool's published supported targets
 NotReady   otherwise — ALWAYS with a structured reason list:
            [ToolUnavailable | ToolDiscovered | ToolUnproven | ToolIncompatible
-            | DescriptorIncompatible | HostUnavailable | TargetNotConfigured]
+            | DescriptorIncompatible | HostUnavailable | TargetNotConfigured
+            | TargetUnsupported]
 ```
 
 Reasons are visible, complete, and structured: every non-Ready input
@@ -183,11 +198,21 @@ Guarantees, per layer — each layer guarantees exactly what it owns:
   mode, environment flag, or local setting routes a request through a
   `NotReady` composition — the path does not exist to configure because none
   is defined.
-- **The Toolchain Client guarantees the tool-operation level:** it never forms
-  a legal tool operation (handshake or compile request) out of an
-  unavailable / unproven / incompatible tool. The refusal is a structured
-  result. It composes nothing — it does not know the descriptor profile, the
-  host, or the target, and it is not asked.
+- **The Toolchain Client guarantees the tool-operation level, split by
+  gate** — this is the distinction that keeps the state machine from
+  deadlocking:
+  - Handshake gate: the handshake is the operation that establishes or
+    refreshes proof, and it is LEGAL for ANY resolved candidate —
+    `discovered`, `unproven`, and `incompatible` alike (`unavailable`
+    naturally has no candidate to handshake). Re-handshaking `unproven` or
+    `incompatible` is exactly how they enter `compatible`; for that reason
+    the old formulation "the client refuses handshakes on unproven tools"
+    is WITHDRAWN — it would make `compatible` unreachable.
+  - Compile gate (client-side half): it never forms a legal COMPILE operation
+    (a `NativeCompileRequest`) out of an unavailable / unproven /
+    incompatible tool; the refusal is a structured result.
+  It composes nothing — it does not know the descriptor profile, the host,
+  or the target, and it is not asked.
 - **The Tauri service guarantees the boundary level:** it executes only
   allowlisted, in-shape domain requests, bounded. It knows nothing about
   readiness and enforces nothing about it — readiness is not its domain.
@@ -211,7 +236,11 @@ required facts for the verdict (v1):
   the tool's version                            (judged against the descriptor's minimum under the descriptor's own comparison rule)
   the tool's process-contract version axis      (checked against the range the client declares it supports)
   the producer/compiler identity
-  the published supported targets               (the explicitly configured target must be among them)
+  the tool's published supported targets        (extracted as a tool FACT;
+                                                 whether the CONFIGURED target is
+                                                 among them is judged by the
+                                                 editor composition — the client
+                                                 holds no configuration)
 ```
 
 The artifact contract/schema axis is **not** required in v1: it enters only
@@ -404,7 +433,9 @@ receives results back; it never names, opens, or manages a staging file.
 BuildIntent := the compile-request identity (defined in §8):
                sourceIdentity + target + stage/entry
                + descriptor-contract inputs (defines/includes)
-               + the relevant proven tool/process facts
+               + the relevant proven tool/process facts (tool identity,
+                 tool version, process-contract axis, producer/compiler
+                 identity)
 BuildId     := the session-local, ordered identity of ONE asynchronous attempt
 ```
 
@@ -481,7 +512,7 @@ truth for one field is a review failure.
 
 | Field | Source of truth | Notes |
 | --- | --- | --- |
-| readiness state | composed (editor orchestration): NativeBuildReadiness = ToolCompatibility (client) + profile×descriptor (core) + host capability (service) + target config | `Ready`, or `NotReady{reasons}` — every reason structured and visible, not a boolean |
+| readiness state | composed (editor orchestration): NativeBuildReadiness = ToolCompatibility (client) + profile×descriptor (core) + host capability (service) + target configured + target supported by the tool (facts vs config) | `Ready`, or `NotReady{reasons}` — every reason structured and visible, not a boolean |
 | discovered tool path + provenance | service (discovery) | which rule resolved it |
 | tool identity | client verdict over the tool's facts | checked against the descriptor's requirement |
 | tool version | tool's proven fact (via the client's reader) | judged under the descriptor's own rule |
@@ -490,8 +521,9 @@ truth for one field is a review failure.
 | descriptor instance (id/profile/descriptorVersion) | core's reader over the loaded document | the descriptor is a fact, not a guess |
 | profile×descriptor compatibility | core's capability verdict | the core owns this judgment |
 | build target | explicit configuration | never the descriptor, never the tool |
+| configured target supported by the tool? | the editor composition, from the client-extracted `supportedTargets` fact and the configuration | target READINESS — one build's compatibility, judged where the configuration lives; the tool's compatibility verdict never changes when the target changes |
 | stage / entry | descriptor generatedFunction facts | the descriptor's legit facts in the request |
-| build intent (target / stage / entry / source identity / relevant proven tool facts) | the composed NativeCompileRequest (editor, from the client's vocabulary) | the `current`-ness anchor: the semantic identity of the compile request |
+| build intent (target / stage / entry / source identity / tool identity / tool version / process-contract axis / producer identity) | the composed NativeCompileRequest (editor, from the client's vocabulary) | the `current`-ness anchor: the semantic identity of the compile request |
 | generated-source identity | core's emission (SHA-256) | the core's durable CONTENT identity; a component of the build intent |
 | staging evidence | service (local name) + core identity | name for evidence, not a usable path |
 | build-line states (current/stale/last-good/failed/canceled) | session store over the client's rules | the ordered line, newest visible |
@@ -524,13 +556,19 @@ anywhere.
   outside the client's supported range, missing required facts — all
   explicit, never partially accepted, never silently reinterpreted;
 - version/compatibility verdicts: version at/above/below the required
-  minimum; identity mismatch; target absent from the supported facts;
-  contract axis in/out of the client's declared supported range;
-- the ToolCompatibility state machine: every transition, including
-  downgrade events;
-- the client's tool-operation guarantee: no legal tool operation (handshake
-  or compile request) is ever formed out of an unavailable / unproven /
-  incompatible tool — the refusal is a structured result;
+  minimum; identity mismatch; contract axis in/out of the client's declared
+  supported range. Target coverage is NOT one of these: the client extracts
+  `supportedTargets` as a tool FACT, and whether the configured target is
+  among them is the editor composition's call (§6);
+- the ToolCompatibility state machine: every transition, including downgrade
+  events — and the re-handshake transitions `unproven → compatible` and
+  `incompatible → compatible` (a tool updated at the same path), which
+  require handshakes to remain legal on those states;
+- the client's tool-operation guarantee, split by gate: a COMPILE request is
+  never formed out of an unavailable / unproven / incompatible tool (the
+  refusal is a structured result); a HANDSHAKE IS formed for any resolved
+  candidate — it is the operation that establishes or refreshes proof, and
+  refusing it on `unproven` would make `compatible` unreachable;
 - build-line rules: stale ordering, late slow results, last-good
   preservation across failure runs, cancellation, attempt ordering within
   one intent;
@@ -552,24 +590,37 @@ anywhere.
 - the gate (editor orchestration): a `Ready` composition issues requests;
   for EACH `NotReady` reason type (`ToolUnavailable`, `ToolDiscovered`,
   `ToolUnproven`, `ToolIncompatible`, `DescriptorIncompatible`,
-  `HostUnavailable`, `TargetNotConfigured`) nothing is issued and the
-  reason is visible;
+  `HostUnavailable`, `TargetNotConfigured`, `TargetUnsupported`) nothing is
+  issued and the reason is visible;
 - required scenarios (each a named test):
   1. compatible proven tool + compatible descriptor + capable host +
      configured target → `Ready` → compile → artifact/build facts visible;
-  2. incompatible tool (each contradiction kind) → `ToolIncompatible` +
-     explicit structured reason;
+  2. incompatible tool — facts that the tool itself reports contradict the
+     required ones (identity, version, contract axis; target mismatch is
+     NOT one of these kinds) → `ToolIncompatible` + explicit structured
+     reason;
   3. absent tool (every discovery rule fails) → `ToolUnavailable` + per-rule
      reasons;
   4. unproven tool (handshake contract unsupported) → `ToolUnproven`; the
-     client refuses the operation; nothing executes;
+     client refuses a COMPILE request (structured refusal); a (re-)handshake
+     stays legal as the way to refresh proof; no compilation executes;
   5. same source bytes, target changed (different intent): the slow old
      result of the old intent lands late — cannot become current;
   6. failure after success: `last-good` preserved and explicitly displayed;
   7. cancel in flight: explicit `canceled` state; prior states untouched;
   8. timeout: an explicit failed state with the timeout fact, not a hang;
   9. two quick attempts sharing identical source bytes: separate per-attempt
-     staging areas, separate BuildIds; settling one never affects the other.
+     staging areas, separate BuildIds; settling one never affects the other;
+  10. compatible tool whose supported targets do not include the configured
+      target (e.g. a DX12-only tool with Vulkan configured): the tool state
+      STAYS `compatible`; the composition is `NotReady[TargetUnsupported]`;
+      switching the target to a supported one flips the composition to
+      `Ready` with the tool state untouched — no incompatible↔compatible
+      oscillation for the same executable;
+  11. the tool's proven producer identity changes (a different DXC under the
+      same gglab-shaderc version): a DIFFERENT BuildIntent — a slow result
+      of the old producer lands late and cannot become current; the late
+      result is `stale` evidence with its intent visible.
 
 **Non-normative test invariants:** no test asserts against a human-facing
 tool surface (`--version` text, `targets` listing, help output) — such a

@@ -1183,19 +1183,31 @@ Tool compatibility (judged by the Toolchain Client):
   unproven       resolved, but not machine-readably proven compatible; the
                  honest state of every real tool until the toolchain handshake
                  contract exists and the client supports it
-  incompatible   resolved, and the TOOL's facts contradict the required ones
+  incompatible   resolved, and the TOOL's OWN reported facts contradict the
+                 required ones — facts the tool itself publishes; target
+                 coverage is a build fact, NOT part of this verdict
   compatible     proven machine-readably compatible
 
 Native build readiness (composed ONCE, by the editor orchestration):
   Ready          tool compatible AND profile/descriptor compatible (core
                  verdict) AND host execution capability (service report) AND
-                 the explicit build target configured
+                 the explicit build target configured AND that target is
+                 among the tool's published supported targets
   NotReady{…}   otherwise — ALWAYS with a structured reason list
-                 (ToolUnavailable, ToolUnproven, ToolIncompatible,
-                 DescriptorIncompatible, HostUnavailable,
-                 TargetNotConfigured); reasons are visible, complete,
-                 structured
+                 (ToolUnavailable, ToolDiscovered, ToolUnproven,
+                 ToolIncompatible, DescriptorIncompatible, HostUnavailable,
+                 TargetNotConfigured, TargetUnsupported); reasons are
+                 visible, complete, structured
 ```
+
+The handshake is the operation that establishes or refreshes proof, and it
+remains legal for ANY resolved candidate — `discovered`, `unproven`, and
+`incompatible` alike (`unavailable` has no candidate to handshake); it is
+exactly how an unproven tool — and an in-place updated tool — becomes `compatible`.
+The client's tool-side guarantee therefore covers the COMPILE direction
+only: it never forms a compile request out of an unproven / incompatible
+tool. Refusing the handshake on those states would deadlock the state
+machine and is explicitly NOT the rule.
 
 Guarantees, each layer owns exactly its own:
 
@@ -1203,11 +1215,14 @@ Guarantees, each layer owns exactly its own:
   gated on `Ready` **with no bypass**: no dev mode, environment flag, or
   local setting routes a request through a `NotReady` composition — the
   path does not exist to configure because none is defined.
-- The **Toolchain Client guarantees the tool-operation level**: it never
-  forms a legal tool operation (handshake or compile request) out of an
-  unavailable / unproven / incompatible tool, and the refusal is structured.
-  It composes nothing — it does not know the descriptor profile, the host,
-  or the target, and is not asked.
+- The **Toolchain Client guarantees the tool-operation level, split by
+  operation**: it never forms a compile request out of an unavailable /
+  unproven / incompatible tool (the refusal is structured); a handshake
+  stays legal for any resolved candidate — it is the means by which those
+  states enter, and re-enter after an update, `compatible`. It composes
+  nothing — it does not know the descriptor profile, the host, or the
+  target, and is not asked (target coverage is the editor's composition,
+  because only the editor holds the configuration).
 - The **Tauri service guarantees the boundary level**: it executes only
   allowlisted, in-shape domain requests, bounded. It knows nothing about
   readiness, and it cannot be asked.
@@ -1245,7 +1260,11 @@ the tool's identity                      (the descriptor requires one)
 the tool's version                        (judged against the descriptor's minimum under the descriptor's own comparison rule)
 the tool's process-contract version axis  (checked against the range the client declares it supports)
 the producer/compiler identity
-the supported targets                     (the explicitly configured target must be among them)
+the tool's published supported targets    (extracted as a tool FACT;
+                                            whether it covers the configured target is the
+                                            editor composition's judgment — the client holds
+                                            no configuration, and this check is `TargetUnsupported`,
+                                            a build fact, never a tool verdict)
 ```
 
 The artifact contract/schema axis is **not** a v1 requirement: it enters
@@ -1315,18 +1334,21 @@ Build request BN
 When a result returns, it only becomes **current** if it belongs to the
 CURRENT BUILD INTENT (the semantic identity of the compile request: generated
 source identity + target + stage/entry + the relevant proven tool/process
-facts — the generated-source SHA-256 is its durable content component, never
-its whole anchor; same bytes under a different target is a different intent)
-and it is the newest successful attempt within that intent. Identity and
-attempt ordering are separate axes: a result is matched by intent AND
-ordered by its attempt; no new persisted identity is created.
+facts — identity, version, process-contract axis, and the producer/compiler
+identity; the tool version does not imply the producer. The
+generated-source SHA-256 is its durable content component, never its whole
+anchor; same bytes under a different target, or under a different proven
+producer, is a different intent) and it is the newest successful attempt
+within that intent. Identity and attempt ordering are separate axes: a
+result is matched by intent AND ordered by its attempt; no new persisted
+identity is created.
 
 Every result occupies an explicit, named state — there is no silent middle
 ground — and a failed build is a state, not an exception:
 
 ```text
-current      the newest successful result whose source identity matches the current emission
-stale        a once-current result displaced by a newer revision; retained as evidence only
+current      the newest successful result belonging to the current build intent
+stale        a once-current result displaced by a newer build intent; retained as evidence only
 last-good    the most recent successful result, preserved across newer failures
 failed       explicit diagnostics carried by the machine contract — never prose
 canceled     an in-flight build that was canceled by the user
@@ -1824,7 +1846,9 @@ level is in `GGLab_Shader_Toolchain_Integration_Design.md`:
    anywhere in its vocabulary. The editor orchestration is the single
    composition and gate point: ToolCompatibility (client) +
    profile/descriptor compatibility (core) + host capability (service) +
-   target configuration.
+   target configuration (configured, AND covered by the tool's published
+    targets — the coverage check is made here, where the configuration
+    lives, and never inside the client's tool verdict).
 4. The desktop host exposes a **narrow `ShaderToolService`** (discover /
    handshake / compile / cancel), never a general-purpose shell. The WebView
    never constructs raw argv — it composes domain-shaped request values; the
