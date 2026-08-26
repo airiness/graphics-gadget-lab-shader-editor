@@ -13,7 +13,7 @@ import {
 import { buildIntentOf, type BuildIntent, type NativeCompileRequest } from "../src/native-compile-request.js";
 import { readCompileDocument } from "../src/result-envelope.js";
 import { COMPILE_FAILURE_EXAMPLE, COMPILE_SUCCESS } from "./fixtures/envelope-goldens.js";
-import { utf8Encode } from "../src/testing/fake-host-boundary.js";
+import { utf8Encode } from "../src/utf8.js";
 
 function facts(producerIdentity: string = "Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)"): ToolFacts {
     return {

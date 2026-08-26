@@ -157,13 +157,26 @@ describe("the strict UTF-8 codec", () => {
     it("refuses invalid, overlong, and out-of-range sequences structurally", () => {
         const invalidLead = utf8Decode(new Uint8Array([0xff, 0x61]));
         expect(invalidLead.ok).toBe(false);
-        const overlong = utf8Decode(new Uint8Array([0xc0, 0xaf]));
-        expect(overlong.ok).toBe(false);
+        const overlong2 = utf8Decode(new Uint8Array([0xc0, 0xaf]));
+        expect(overlong2.ok).toBe(false);
+        // The four-byte overlong of U+0000: standard-forbidden even though
+        // it decodes to a small code point.
+        const overlong4 = utf8Decode(new Uint8Array([0xf0, 0x80, 0x80, 0x80]));
+        expect(overlong4.ok).toBe(false);
         const surrogate = utf8Decode(new Uint8Array([0xed, 0xa0, 0x80]));
         expect(surrogate.ok).toBe(false);
         const truncated = utf8Decode(new Uint8Array([0xe2, 0x82]));
         expect(truncated.ok).toBe(false);
         const strayContinuation = utf8Decode(new Uint8Array([0x61, 0x80]));
         expect(strayContinuation.ok).toBe(false);
+    });
+
+    it("accepts valid four-byte sequences", () => {
+        const decoded = utf8Decode(new Uint8Array([0xf0, 0x9f, 0x98, 0x80]));
+        expect(decoded.ok).toBe(true);
+        if (decoded.ok !== true) {
+            throw new Error("test setup: the valid four-byte sequence must decode");
+        }
+        expect(decoded.text.codePointAt(0)).toBe(0x1f600);
     });
 });

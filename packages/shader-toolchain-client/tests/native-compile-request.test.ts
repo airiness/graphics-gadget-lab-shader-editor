@@ -9,7 +9,7 @@ import {
     requestsEqual,
     type NativeCompileRequest,
 } from "../src/native-compile-request.js";
-import { utf8Encode } from "../src/testing/fake-host-boundary.js";
+import { utf8Encode } from "../src/utf8.js";
 
 const SOURCE_BYTES = utf8Encode("/* generated */\nvoid GenerateSurface() { }");
 const SOURCE_IDENTITY = "ab".repeat(32);

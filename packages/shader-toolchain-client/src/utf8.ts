@@ -62,6 +62,9 @@ export function utf8Decode(bytes: Uint8Array): Utf8DecodeOutcome {
         if (tail === 2 && codePoint < 0x800) {
             return { ok: false, detail: `overlong UTF-8 encoding at byte ${index}` };
         }
+        if (tail === 3 && codePoint < 0x10000) {
+            return { ok: false, detail: `overlong UTF-8 encoding at byte ${index}` };
+        }
         if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
             return { ok: false, detail: `UTF-8 code point out of range at byte ${index}` };
         }

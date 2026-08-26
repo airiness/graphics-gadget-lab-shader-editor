@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ToolRequirement } from "../src/contract-facts.js";
 import { readHandshakeDocument } from "../src/handshake-document.js";
-import type { ToolCandidate } from "../src/host-boundary.js";
+import type { BoundaryOutput, ToolCandidate } from "../src/host-boundary.js";
+import { readHandshakeOutput } from "../src/process-output.js";
 import {
     applyCompatibilityEvent,
     initialToolState,
@@ -9,6 +10,7 @@ import {
     type CompatibilityJudgment,
     type ToolCompatibilityState,
 } from "../src/tool-compatibility.js";
+import { utf8Encode } from "../src/utf8.js";
 import { DESCRIBE_COMPILER_UNAVAILABLE, DESCRIBE_SUCCESS } from "./fixtures/envelope-goldens.js";
 
 const REQUIRED: ToolRequirement = {
@@ -35,12 +37,38 @@ function mutatedDescribeSuccess(change: (base: Record<string, unknown>) => Recor
     return JSON.stringify(change(base));
 }
 
+/** A clean spawned settlement of the scripted document text — its
+ *  process exit code mirrors the document's own, as the contract
+ *  requires. */
+function outputOf(text: string): BoundaryOutput {
+    // The process exit code mirrors the document's own when the document
+    // is readable; unreadable scripts carry the plain 0 fact.
+    let exitCode = 0;
+    try {
+        const doc = JSON.parse(text) as Record<string, unknown>;
+        if (typeof doc.exitCode === "number") {
+            exitCode = doc.exitCode;
+        }
+    } catch {
+        // the script is not a JSON document — that is the point of some
+        // of the tests that use it
+    }
+    return {
+        stdout: utf8Encode(text),
+        stderr: new Uint8Array(0),
+        exitCode,
+        timedOut: false,
+        canceled: false,
+    };
+}
+
 function handshake(
     candidate: ToolCandidate,
     text: string,
     range?: Parameters<typeof readHandshakeDocument>[1],
 ): CompatibilityEvent {
-    return { kind: "handshake", candidate, read: range === undefined ? readHandshakeDocument(text) : readHandshakeDocument(text, range) };
+    const process = range === undefined ? readHandshakeOutput(outputOf(text)) : readHandshakeOutput(outputOf(text), range);
+    return { kind: "handshake", candidate, result: { kind: "spawned", process } };
 }
 
 describe("the ToolCompatibility state machine", () => {
@@ -159,10 +187,96 @@ describe("the ToolCompatibility state machine", () => {
         expect(state.status).toBe("unproven");
         if (state.status === "unproven") {
             const reason = state.reasons[0];
-            if (reason === undefined || reason.reason !== "handshake-facts-absent") {
-                throw new Error("test setup: the facts-absent reason is expected");
+            if (reason === undefined || reason.reason !== "handshake-unreadable") {
+                throw new Error("test setup: the unreadable reason is expected");
             }
-            expect(reason.detail).toContain("not-json");
+            expect(reason.rejection.reason).toBe("not-json");
+        }
+    });
+
+    it("maps the process-level settlements to explicit structured states", () => {
+        const discovered: ToolCompatibilityState = { status: "discovered", candidate: CANDIDATE };
+
+        // A broken channel rule is unproven, with the violation carried
+        // verbatim — not folded into a prose reason.
+        const channel: CompatibilityEvent = {
+            kind: "handshake",
+            candidate: CANDIDATE,
+            result: {
+                kind: "spawned",
+                process: {
+                    kind: "channel-violated",
+                    violation: { reason: "stderr-non-empty", byteLength: 3 },
+                },
+            },
+        };
+        expect(applyCompatibilityEvent(discovered, channel, REQUIREMENT)).toEqual({
+            status: "unproven",
+            reasons: [{ reason: "channel-violated", violation: { reason: "stderr-non-empty", byteLength: 3 } }],
+        });
+
+        // Bounded execution ending the attempt is unproven of its own.
+        const timedOut: CompatibilityEvent = {
+            kind: "handshake",
+            candidate: CANDIDATE,
+            result: { kind: "spawned", process: { kind: "timed-out" } },
+        };
+        expect(applyCompatibilityEvent(discovered, timedOut, REQUIREMENT)).toEqual({
+            status: "unproven",
+            reasons: [{ reason: "handshake-timed-out" }],
+        });
+
+        // Bounded execution failing to launch is unproven, even for a
+        // previously compatible, proven tool — a fact, not an accident.
+        const compatible = applyCompatibilityEvent(discovered, handshake(CANDIDATE, DESCRIBE_SUCCESS), REQUIREMENT);
+        const launch: CompatibilityEvent = {
+            kind: "handshake",
+            candidate: CANDIDATE,
+            result: { kind: "launch-failed" },
+        };
+        expect(applyCompatibilityEvent(compatible, launch, REQUIREMENT)).toEqual({
+            status: "unproven",
+            reasons: [{ reason: "launch-failed" }],
+        });
+    });
+
+    it("treats a canceled handshake as NO tool evidence — the state stays exactly as it was", () => {
+        const canceled: CompatibilityEvent = {
+            kind: "handshake",
+            candidate: CANDIDATE,
+            result: { kind: "spawned", process: { kind: "canceled" } },
+        };
+        const states: readonly ToolCompatibilityState[] = [
+            { status: "discovered", candidate: CANDIDATE },
+            { status: "unproven", reasons: [{ reason: "handshake-timed-out" }] },
+            applyCompatibilityEvent({ status: "discovered", candidate: CANDIDATE }, handshake(CANDIDATE, DESCRIBE_SUCCESS), REQUIREMENT),
+        ];
+        for (const state of states) {
+            expect(applyCompatibilityEvent(state, canceled, REQUIREMENT)).toEqual(state);
+        }
+    });
+
+    it("loses the proof when the host refuses a spawn over an invalidated candidate — back to the FACT", () => {
+        const compatible = applyCompatibilityEvent(
+            { status: "discovered", candidate: CANDIDATE },
+            handshake(CANDIDATE, DESCRIBE_SUCCESS),
+            REQUIREMENT,
+        );
+        if (compatible.status !== "compatible") {
+            throw new Error("test setup: the tool must be compatible");
+        }
+        expect(compatible.proof.candidate).toEqual(CANDIDATE);
+
+        for (const result of [
+            { kind: "candidate-invalidated" as const, observation: "changed" as const, observedIdentity: "file-identity:replaced" },
+            { kind: "candidate-invalidated" as const, observation: "missing" as const, observedIdentity: null },
+            { kind: "candidate-invalidated" as const, observation: "unreadable" as const, observedIdentity: null },
+        ]) {
+            const event: CompatibilityEvent = { kind: "handshake", candidate: CANDIDATE, result };
+            expect(applyCompatibilityEvent(compatible, event, REQUIREMENT)).toEqual({
+                status: "discovered",
+                candidate: CANDIDATE,
+            });
         }
     });
 

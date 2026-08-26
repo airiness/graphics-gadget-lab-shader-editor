@@ -16,16 +16,23 @@
  * Proof is bound to a candidate OBSERVATION: the handshake event carries
  * the candidate the editor actually handshook, and the proof records it.
  * A candidate whose provenance has changed (the same path now holding
- * another binary) is a different observation: the old proof stops
- * applying, the state returns to discovered-for-that-candidate through
- * the normal events, and the handshake again — never a service keeping a
- * hidden "current tool".
+ * another binary, or no file at all) is a different observation: the
+ * host's settlement says so structurally (candidate-invalidated), the
+ * proof bound to the old observation no longer applies, and the state
+ * returns to discovered-for-that-candidate — never a service keeping a
+ * hidden "current tool". Bounded execution failing to launch at all is
+ * equally structured (launch-failed), and equally unproven: a fact, not
+ * a crash.
+ *
+ * A handshake CANCELED by the operator is NOT tool evidence: no fact was
+ * reported, so the state stays as it was.
  */
-import type { HandshakeReadOutcome } from "./handshake-document.js";
+import type { HandshakeRejection } from "./handshake-document.js";
 import type { ContractSupportVerdict } from "./contract-range.js";
 import type { ToolDiagnostic, ToolFacts, ToolRequirement } from "./contract-facts.js";
-import type { ToolCandidate } from "./host-boundary.js";
+import type { CandidateObservation, ToolCandidate } from "./host-boundary.js";
 import { candidatesEqual } from "./host-boundary.js";
+import type { ChannelViolation, HandshakeProcessOutcome } from "./process-output.js";
 import {
     judgeToolIdentity,
     judgeToolVersion,
@@ -45,6 +52,16 @@ export type UnprovenReason =
         readonly detail: string;
         readonly diagnostics: readonly ToolDiagnostic[];
       }
+    | {
+        readonly reason: "handshake-unreadable";
+        readonly rejection: HandshakeRejection;
+      }
+    | {
+        readonly reason: "channel-violated";
+        readonly violation: ChannelViolation;
+      }
+    | { readonly reason: "handshake-timed-out" }
+    | { readonly reason: "launch-failed" }
     | {
         readonly reason: "proof-not-for-this-candidate";
         readonly detail: string;
@@ -95,11 +112,28 @@ export type ToolCompatibilityState =
 /** The state before any discovery event: the tool is not resolvable. */
 export const initialToolState: ToolCompatibilityState = { status: "unavailable" };
 
-/** A tool-side event. `handshake` carries the candidate observation that
- *  was actually handshook and the CLIENT-SIDE reading of the published
- *  document (a well-read document, an unsupported-axis observation, or an
- *  explicit structured refusal) — the reader does the parsing and the
- *  axis gate, the machine does the judgment. */
+/**
+ * What the state machine receives for a handshake: the boundary's
+ * settlement, fully read. `spawned` carries the PROCESS-LEVEL outcome of
+ * the read — the terminal states (canceled, timed-out), the channel
+ * discipline (channel-violated), the unsupported-axis observation, the
+ * structured rejection, or the intact document (read); the other two
+ * kinds are the host's pre-spawn refusal and the bounded-execution
+ * launch failure. The readers do the parsing, the axis gate, and the
+ * channel judgment; the machine does the state judgment.
+ */
+export type HandshakeSettlement =
+    | { readonly kind: "spawned"; readonly process: HandshakeProcessOutcome }
+    | {
+        readonly kind: "candidate-invalidated";
+        readonly observation: CandidateObservation;
+        readonly observedIdentity: string | null;
+      }
+    | { readonly kind: "launch-failed" };
+
+/** A tool-side event. `handshake` carries the candidate observation
+ *  actually handshook and its settlement (see `HandshakeSettlement`) —
+ *  the machine is total over every settlement kind. */
 export type CompatibilityEvent =
     | { readonly kind: "discovery-failed" }
     | { readonly kind: "candidate-resolved"; readonly candidate: ToolCandidate }
@@ -107,7 +141,7 @@ export type CompatibilityEvent =
     | {
         readonly kind: "handshake";
         readonly candidate: ToolCandidate;
-        readonly read: HandshakeReadOutcome;
+        readonly result: HandshakeSettlement;
       };
 
 /** The stable judgment input the machine holds for the session: the
@@ -166,21 +200,48 @@ export function applyCompatibilityEvent(
         return state;
     }
 
-    if (event.read.status === "rejected") {
-        return {
-            status: "unproven",
-            reasons: [
-                {
-                    reason: "handshake-facts-absent",
-                    detail: `${event.read.rejection.reason}: ${event.read.rejection.detail}`,
-                    diagnostics: [],
-                },
-            ],
-        };
+    // A settled handshake closes every path: the pre-spawn refusals and
+    // the launch failure are HOST facts; the spawned settlement is read
+    // at the process level (terminal states, channel discipline, the
+    // axis, the document) before the state judgment.
+    const result = event.result;
+    if (result.kind === "candidate-invalidated") {
+        // Provenance continuity broke at spawn time (changed / missing /
+        // unreadable): any proof was taken under the old observation and
+        // no longer applies; the candidate is again a FACT that must be
+        // re-handshoked — and re-discovered first, for a fresh
+        // observation.
+        return { status: "discovered", candidate: event.candidate };
+    }
+    if (result.kind === "launch-failed") {
+        // Bounded execution itself could not launch the candidate: a
+        // structured fact, not a crash.
+        return { status: "unproven", reasons: [{ reason: "launch-failed" }] };
     }
 
-    if (event.read.status === "unsupported-contract") {
-        const contract = event.read.contract;
+    const process = result.process;
+    if (process.kind === "canceled") {
+        // A cancel is an operator action, not tool evidence: no fact was
+        // reported, so the state stays exactly as it was.
+        return state;
+    }
+    if (process.kind === "timed-out") {
+        return { status: "unproven", reasons: [{ reason: "handshake-timed-out" }] };
+    }
+    if (process.kind === "channel-violated") {
+        return {
+            status: "unproven",
+            reasons: [{ reason: "channel-violated", violation: process.violation }],
+        };
+    }
+    if (process.kind === "rejected") {
+        return {
+            status: "unproven",
+            reasons: [{ reason: "handshake-unreadable", rejection: process.rejection }],
+        };
+    }
+    if (process.kind === "unsupported-contract") {
+        const contract = process.contract;
         if (contract.supported !== false) {
             // unreachable: this outcome exists exactly for the refusal
             throw new Error("an unsupported-contract reading carrying a supported verdict is impossible");
@@ -203,7 +264,7 @@ export function applyCompatibilityEvent(
         };
     }
 
-    const document = event.read.document;
+    const document = process.document;
     if (document.success !== true) {
         return {
             status: "unproven",

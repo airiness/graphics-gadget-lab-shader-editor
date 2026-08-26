@@ -28,8 +28,17 @@
  * And one guarantee the boundary owes the client: a spawn happens ONLY
  * after the host's provenance check confirms the candidate's path still
  * observes the candidate's identity — otherwise the call settles as the
- * structured `candidate-changed` refusal, not a spawn of an unverified
- * executable (see `BoundaryResult`).
+ * structured `candidate-invalidated` refusal, not a spawn of an unverified
+ * executable; and bounded execution failing to launch at all settles as
+ * the structured `launch-failed` fact. Neither is a crash, an exception,
+ * a forged output, or an OS error code promoted to protocol (see
+ * `BoundaryResult`).
+ *
+ * TOCTOU is part of the contract: the check-to-launch window must be
+ * closed by a real provenance guard (for example a file handle held with
+ * a share mode that blocks write/delete/replace until process creation
+ * settles) — "look at the metadata, then CreateProcess(a path)" is NOT
+ * continuity and does not satisfy this boundary.
  */
 import type { BuildId, NativeCompileRequest } from "./native-compile-request.js";
 
@@ -109,7 +118,8 @@ export interface BoundaryOutput {
 
 /** compile is issued, then settled: the handle carries the attempt's
  *  BuildId and its eventual settlement (execution output, or the
- *  structured candidate-changed refusal). */
+ *  structured pre-spawn refusal — candidate-invalidated / launch-failed).
+ * */
 export interface CompileAttemptHandle {
     readonly buildId: BuildId;
     readonly result: Promise<BoundaryResult>;
@@ -131,25 +141,36 @@ export interface CancelOutcome {
  *
  * - `spawned` — execution happened (bounded, whole-output captured); the
  *   raw output surface is the boundary's entire result;
- * - `candidate-changed` — the host's pre-spawn provenance check found
- *   the path now observes a DIFFERENT identity than the candidate
- *   carried: the host did NOT spawn and reports the path's current
- *   observed identity so the caller can re-discover and re-handshake.
+ * - `candidate-invalidated` — the host's pre-spawn provenance check
+ *   failed: the path is now `changed` (a different identity than the
+ *   candidate carried — its current identity is reported, for
+ *   re-discovery), `missing` (no file anymore), or `unreadable` (a file
+ *   that cannot be observed). The host did NOT spawn.
+ * - `launch-failed` — bounded execution itself could not launch the
+ *   candidate (a host-side launch failure, structured; not an OS error
+ *   code promoted to protocol, and not the host interpreting anything
+ *   above it).
  *
  * This is the boundary's guarantee: `handshake(candidate)` and
  * `compile(candidate, request)` only spawn an executable whose current
  * observation matches the candidate they were given. What the candidate
  * identity MEANS (file identity, size/mtime, a hash, an opaque host
  * token) is the host implementation's business; the check-before-spawn
- * semantics and the structured refusal are the contract's.
+ * semantics and these structured failures are the contract's.
  */
+export type CandidateObservation = "changed" | "missing" | "unreadable";
+
 export type BoundaryResult =
     | { readonly kind: "spawned"; readonly output: BoundaryOutput }
     | {
-        readonly kind: "candidate-changed";
+        readonly kind: "candidate-invalidated";
         readonly candidate: ToolCandidate;
-        readonly observedIdentity: string;
-      };
+        readonly observation: CandidateObservation;
+        /** The identity the path observes now — only present (and
+         *  meaningful) when `observation` is `"changed"`. */
+        readonly observedIdentity: string | null;
+      }
+    | { readonly kind: "launch-failed"; readonly candidate: ToolCandidate };
 
 /**
  * The four capabilities and their shapes. The service implements this
@@ -161,8 +182,8 @@ export interface HostToolBoundary {
     /**
      * Handshakes the tool AT the candidate path, after the pre-spawn
      * provenance check: spawned-and-executed output, or the structured
-     * candidate-changed refusal — never a spawn of an unverified
-     * executable.
+     * candidate-invalidated / launch-failed refusal — never a spawn of an
+     * unverified executable, never an OS-error exception.
      */
     handshake(candidate: ToolCandidate): Promise<BoundaryResult>;
     /** Compiles by spawning the tool at the candidate path — the EXACT

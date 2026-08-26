@@ -132,9 +132,18 @@ re-handshake the new candidate). The boundary enforces the other half of
 the guarantee — provenance continuity AT SPAWN TIME: `handshake(candidate)`
 and `compile(candidate, request)` spawn only after the host's pre-spawn
 check confirms the path's current observation still matches the
-candidate's identity; a mismatch settles as the structured
-`candidate-changed` refusal (the path's current observed identity, for
-re-discovery) and is NOT a spawn of an unverified executable.
+candidate's identity — otherwise the settlement is structured: the
+observation is `changed` (the path's current observed identity, for
+re-discovery), `missing`, or `unreadable`, and the host did NOT spawn;
+bounded execution failing to launch at all settles as the
+`launch-failed` fact. None of these is a spawn of an unverified
+executable, a crash, or an OS error code promoted to protocol.
+
+TOCTOU is part of the guarantee: the check must hold the candidate
+across the launch (for example a file handle whose share mode blocks
+write/delete/replace until process creation settles) — an executable
+that merely looks and then launches through the path is NOT
+provenance continuity.
 
 If no rule resolves a candidate, discovery fails as the state `unavailable`,
 carrying one structured reason per failed rule (which rule, why it failed).
@@ -159,7 +168,9 @@ discovered     a candidate resolved — a FACT, never a readiness claim
 unproven       resolved, but not machine-readably proven compatible: the
                observed process-contract axis falls outside the client's
                declared supported range, the tool's machine facts are
-               absent, or its handshake does not read
+               absent, or its handshake does not read, or the
+               channel is violated, or the attempt times out, or the
+               launch fails
 incompatible   resolved, and the TOOL's facts contradict the required ones
 compatible     proven machine-readably compatible
 ```
@@ -200,8 +211,14 @@ compatible                 → unproven / incompatible   tool facts change and
                                           (the binary replaced at the path) and
                                           the proof bound to the old observation
                                           no longer applies
+(any resolved)            → discovered    the host reports the candidate's
+                                           observation invalidated (changed / missing / unreadable) — the proof
+                                           bound to the old observation no longer applies;
+                                           re-discover and re-handshake
 (any)                     → unavailable   the tool is no longer resolvable
 ```
+
+A handshake CANCELED by the operator is not tool evidence: no fact was reported, so the state stays exactly as it was — an explicit action, not an observation.
 
 **Native build readiness (composed ONCE, by the editor orchestration):**
 
@@ -355,9 +372,9 @@ Tauri ShaderToolService       the product host boundary: validates the
                               string, no policy), and executes bounded
                               (timeout/cancel; the pre-spawn provenance
                               check precedes the spawn; stdout + stderr
-                              bytes + exit code + timeout/cancel state —
-                              or the structured candidate-changed refusal —
-                              are the entire output)
+                              bytes + exit code + timeout/cancel state — or
+                              the pre-spawn refusal (candidate-invalidated: changed / missing /
+                              unreadable, or launch-failed) — is the entire output)
    ↓
 gglab-shaderc                 production compilation (its own policy, its own evidence)
    ↓
@@ -409,8 +426,8 @@ capabilities (exactly these, plus the existing scoped document/descriptor file I
   discover(config)            → toolCandidate facts + per-rule failure reasons
   handshake(candidate)        → execution output (stdout bytes + stderr bytes
                                 + exit code + timeout/cancel state) — or the
-                                structured candidate-changed refusal BEFORE
-                                the spawn
+                                pre-spawn refusal (candidate-invalidated: changed / missing / unreadable,
+                                or launch-failed) BEFORE the spawn
   compile(candidate, request) → buildId ; the same settlement when it settles
   cancel(buildId)             → explicit canceled state for that build
 
@@ -423,12 +440,13 @@ the boundary's actual job (all host-internal, in Rust):
   execution      the pre-spawn provenance check runs FIRST: the
                  candidate's path is observed and compared to its carried
                  identity; a mismatch settles as the structured
-                 candidate-changed refusal and does NOT spawn. Otherwise the
+                 candidate-invalidated refusal (changed / missing / unreadable) and does NOT spawn; a launch the host could not attempt settles as launch-failed. Otherwise the
                  tool at the candidate path is spawned, nothing else; BOTH
                  streams captured whole (bounded) or timed out; timeout and
                  cancel enforced per build; the output surface (stdout + stderr
                  bytes, exit code, timeout/cancel state) — or the
-                 candidate-changed refusal — is the ENTIRE output of the boundary
+                 candidate-invalidated / launch-failed refusal — is the ENTIRE output of the boundary
+                 TOCTOU: the check must hold the candidate across the launch (a share mode that blocks write/delete/replace) — look-then-launch is NOT continuity
   staging        the private per-attempt area (§10)
 ```
 
@@ -440,8 +458,7 @@ no generic spawn(argv) — the service exposes only the four capabilities above
 no protocol interpretation in Rust — no envelope parsing, status
     interpretation, version comparison, or diagnostic classification
     (the raw output surface — stdout + stderr bytes, exit
-    code, timeout/cancel state — or the candidate-changed
-    refusal — is the entire output)
+    code, timeout/cancel state — or the pre-spawn refusal (candidate-invalidated / launch-failed) — is the entire output)
 no readiness logic in the service — it does not know the descriptor, the
     profile, the host state, or the target policy; whether a request is
     allowed is decided above it, and the service cannot be asked

@@ -2,10 +2,10 @@
  * The reference fake: the test-side implementation of the declared
  * host boundary (host-boundary). Independent from the product service,
  * deterministic, without a process, a shell, a timer, or an argv — it
- * scripts the boundary's exact output surface (raw stdout bytes, raw
- * stderr bytes, exit code, timeout/cancel state) and its pre-spawn
- * provenance check, so the client's logic and the editor's product path
- * can be exercised end-to-end from pure values.
+ * scripts the boundary's exact settlement surface: the raw output
+ * (stdout bytes, stderr bytes, exit code, timeout/cancel state), and —
+ * for its pre-spawn guard — the structured candidate-invalidated
+ * refusal (changed / missing / unreadable) and the launch-failed fact.
  *
  * In-flight attempts are fully controllable: with `keepCompilePending`,
  * a compile attempt stays pending until `releasePending()` settles it
@@ -14,14 +14,14 @@
  *
  * The whole output surface is scriptable, stderr INCLUDED (the default
  * is the contract's own channel shape: stdout document, stderr empty),
- * and the candidate-check behavior is scriptable too:
- * `candidateCheck: { kind: "changed", observedIdentity }` makes the
- * fake's pre-spawn check REFUSE the spawn — exactly the boundary's
- * guarantee in its scripted form.
+ * and the pre-spawn settlement is scriptable too: `preSpawn` makes the
+ * fake's provenance guard REFUSE the spawn — the boundary's guarantee
+ * in its scripted form.
  */
 import type {
     BoundaryOutput,
     BoundaryResult,
+    CandidateObservation,
     CancelOutcome,
     CompileAttemptHandle,
     DiscoverOutcome,
@@ -32,8 +32,6 @@ import type {
 } from "../host-boundary.js";
 import type { BuildId, NativeCompileRequest } from "../native-compile-request.js";
 import { utf8Encode } from "../utf8.js";
-
-export { utf8Encode } from "../utf8.js";
 
 /** One scripted execution: the whole output surface. */
 export interface FakeBoundaryCall {
@@ -56,11 +54,18 @@ export interface FakeToolchainSpec {
     /** The scripted compile settlements, consumed in issue order; the
      *  last entry repeats for further attempts. */
     readonly compile: readonly FakeBoundaryCall[];
-    /** When set, the fake's pre-spawn provenance check finds the path's
-     *  observation CHANGED and refuses to spawn — the structured
-     *  candidate-changed settlement, exactly as the boundary contract
-     *  requires the host to report it. */
-    readonly candidateCheck?: { readonly kind: "changed"; readonly observedIdentity: string } | undefined;
+    /** When set, the fake's pre-spawn settlement REFUSES the spawn —
+     *  the candidate-invalidated refusal (with its observation) or the
+     *  launch-failed fact, exactly as the boundary contract requires
+     *  the host to report it. */
+    readonly preSpawn?:
+        | {
+            readonly refusal: "candidate-invalidated";
+            readonly observation: CandidateObservation;
+            readonly observedIdentity?: string | undefined;
+          }
+        | { readonly refusal: "launch-failed" }
+        | undefined;
     /** When true, spawn attempts stay in flight until settled by
      *  `releasePending()` or `cancel(buildId)`. */
     readonly keepCompilePending?: boolean | undefined;
@@ -102,9 +107,9 @@ export class FakeHostBoundary implements HostToolBoundary {
 
     async handshake(candidate: ToolCandidate): Promise<BoundaryResult> {
         this.handshakeCallCount += 1;
-        const check = this.spec.candidateCheck;
-        if (check !== undefined) {
-            return { kind: "candidate-changed", candidate, observedIdentity: check.observedIdentity };
+        const refusal = this.preSpawnRefusal(candidate);
+        if (refusal !== undefined) {
+            return refusal;
         }
         return {
             kind: "spawned",
@@ -120,13 +125,13 @@ export class FakeHostBoundary implements HostToolBoundary {
         void request;
         this.compileCallCount += 1;
         const buildId: BuildId = { sequence: this.compileCallCount };
-        const check = this.spec.candidateCheck;
-        if (check !== undefined) {
+        const refusal = this.preSpawnRefusal(candidate);
+        if (refusal !== undefined) {
             // The provenance check runs BEFORE the spawn and refuses it:
             // the settlement is the structured refusal, never a spawn.
             return {
                 buildId,
-                result: Promise.resolve({ kind: "candidate-changed", candidate, observedIdentity: check.observedIdentity }),
+                result: Promise.resolve(refusal),
             };
         }
         const script = this.compileScriptFor(this.compileCallCount);
@@ -179,6 +184,24 @@ export class FakeHostBoundary implements HostToolBoundary {
         this.pending.delete(sequence);
         pending.resolve({ kind: "spawned", output: this.toOutput(pending.script) });
         return true;
+    }
+
+    /** The scripted pre-spawn refusal for a candidate, or undefined when
+     *  the guard admits the spawn. */
+    private preSpawnRefusal(candidate: ToolCandidate): BoundaryResult | undefined {
+        const pre = this.spec.preSpawn;
+        if (pre === undefined) {
+            return undefined;
+        }
+        if (pre.refusal === "candidate-invalidated") {
+            return {
+                kind: "candidate-invalidated",
+                candidate,
+                observation: pre.observation,
+                observedIdentity: pre.observedIdentity === undefined ? null : pre.observedIdentity,
+            };
+        }
+        return { kind: "launch-failed", candidate };
     }
 
     private compileScriptFor(sequence: number): FakeBoundaryCall {

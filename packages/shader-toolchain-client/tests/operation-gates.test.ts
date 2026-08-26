@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { initialToolState, admitCompile, admitHandshake, type ToolCompatibilityState } from "../src/tool-compatibility.js";
-import type { ToolCandidate } from "../src/host-boundary.js";
+import type { BoundaryOutput, ToolCandidate } from "../src/host-boundary.js";
 import { applyCompatibilityEvent } from "../src/tool-compatibility.js";
-import { readHandshakeDocument } from "../src/handshake-document.js";
+import { readHandshakeOutput } from "../src/process-output.js";
+import { utf8Encode } from "../src/utf8.js";
 
 const CANDIDATE: ToolCandidate = {
     rule: "sibling-build",
@@ -17,10 +18,23 @@ const REASONABLE = {
     requirement: { identity: "gglab-shaderc", minimumVersion: "1.0.0", versionComparison: "semver" },
 } as const;
 
+const HANDSHAKE_TEXT =
+    '{"command":"describe","success":true,"status":"ok","exitCode":0,"processContractVersion":1,"toolIdentity":"gglab-shaderc","toolVersion":"1.1.0","producerKind":"dxc","producerIdentity":"Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)","supportedTargets":["gglab-dx12","gglab-vulkan13"],"diagnostics":[]}';
+
+function outputOf(text: string): BoundaryOutput {
+    return {
+        stdout: utf8Encode(text),
+        stderr: new Uint8Array(0),
+        exitCode: 0,
+        timedOut: false,
+        canceled: false,
+    };
+}
+
 function compatibleState(candidate: ToolCandidate = CANDIDATE): ToolCompatibilityState {
     const state = applyCompatibilityEvent(
         { status: "discovered", candidate },
-        { kind: "handshake", candidate, read: readHandshakeDocument('{"command":"describe","success":true,"status":"ok","exitCode":0,"processContractVersion":1,"toolIdentity":"gglab-shaderc","toolVersion":"1.1.0","producerKind":"dxc","producerIdentity":"Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)","supportedTargets":["gglab-dx12","gglab-vulkan13"],"diagnostics":[]}') },
+        { kind: "handshake", candidate, result: { kind: "spawned", process: readHandshakeOutput(outputOf(HANDSHAKE_TEXT)) } },
         REASONABLE,
     );
     if (state.status !== "compatible") {

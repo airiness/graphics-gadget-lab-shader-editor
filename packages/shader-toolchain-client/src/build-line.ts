@@ -33,12 +33,17 @@ import type { CompileFailureDocument, CompileSuccessDocument } from "./result-en
  *  evidence envelope; a failure carries the tool's own failure envelope
  *  when one was produced and read, and the termination fact when the
  *  attempt ended without a machine document (timeout, no document);
- *  a cancellation is explicit on its own. */
-/** The termination facts of a failed attempt, each one distinct:
+ *  a cancellation is explicit on its own.
+ *
+ *  The termination facts of a failed attempt, each one distinct:
  *  `timed-out` (bounded execution ended it), `channel-violated` (a
  *  channel rule of the process contract broke — polluted stderr,
- *  undecodable stdout, an exit-code mismatch), or `no-machine-document`
- *  (nothing machine-readable on the channel at all). */
+ *  undecodable stdout, an exit-code mismatch), `no-machine-document`
+ *  (nothing machine-readable on the channel at all),
+ *  `candidate-invalidated` (the host's pre-spawn provenance check
+ *  refused the launch — the path changed / vanished / became unreadable
+ *  after the candidate resolved), or `launch-failed` (bounded execution
+ *  itself could not launch the candidate). */
 export type AttemptOutcome =
     | { readonly kind: "succeeded"; readonly envelope: CompileSuccessDocument }
     | {
@@ -48,6 +53,8 @@ export type AttemptOutcome =
             | "timed-out"
             | "channel-violated"
             | "no-machine-document"
+            | "candidate-invalidated"
+            | "launch-failed"
             | undefined;
       }
     | { readonly kind: "canceled" };

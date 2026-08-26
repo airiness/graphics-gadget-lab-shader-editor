@@ -11,11 +11,15 @@ matching the observed process exit code), the strict readers for the
 published handshake (`describe`) and result (`compile`) envelopes, the
 version/identity verdicts, the candidate-observation identity (path +
 observed identity; a proof binds to the exact observation it was taken
-under) and the tool-compatibility state machine around it, the revisioned
+under) and the tool-compatibility state machine around it — total over
+every settlement: a canceled handshake is not evidence, a timed-out /
+channel-violated / unreadable handshake is unproven, a launch failure is
+unproven, and an invalidated candidate loses any proof — the revisioned
 build-line rules (stale / current / last-good), and the host-boundary
 contract (the four allowlisted capabilities, the pre-spawn provenance
-guarantee with its structured candidate-changed refusal, and the request /
-result shapes) with its reference fake.
+guarantee with its structured pre-spawn refusals — the candidate-invalidated
+fact (changed / missing / unreadable) and the launch-failed fact — and the
+request / result shapes) with its reference fake.
 
 Consumed by the editor composition and the CLI authoring frontend. The
 toolchain's wire contracts are published by the main GGLab repository; this

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { BoundaryResult, HostToolBoundary, ToolCandidate } from "../src/host-boundary.js";
 import type { NativeCompileRequest } from "../src/native-compile-request.js";
+import { utf8Encode } from "../src/utf8.js";
 import {
     FakeHostBoundary,
-    utf8Encode,
     type FakeBoundaryCall,
     type FakeToolchainSpec,
 } from "../src/testing/fake-host-boundary.js";
@@ -67,6 +67,7 @@ describe("the reference fake host boundary", () => {
                 "discover",
                 "handshake",
                 "handshakeCalls",
+                "preSpawnRefusal",
                 "releasePending",
                 "toOutput",
             ].sort(),
@@ -123,23 +124,39 @@ describe("the reference fake host boundary", () => {
         expect(output.stdout).toEqual(utf8Encode(DESCRIBE_SUCCESS));
     });
 
-    it("refuses the spawn BEFORE it happens when the candidate's observation changed — a structured result, never a launch of an unverified executable", async () => {
+    it("refuses the spawn BEFORE it happens when the candidate's observation is invalidated — a structured result, never a launch of an unverified executable", async () => {
         const observedNow = "file-identity:sha256:bb";
-        const check = { kind: "changed" as const, observedIdentity: observedNow };
-        const handshake = new FakeHostBoundary(spec({ candidateCheck: check }));
-        const handshakeResult = await handshake.handshake(CANDIDATE);
-        expect(handshakeResult).toEqual({
-            kind: "candidate-changed",
+        const handshake = new FakeHostBoundary(
+            spec({ preSpawn: { refusal: "candidate-invalidated", observation: "changed", observedIdentity: observedNow } }),
+        );
+        expect(await handshake.handshake(CANDIDATE)).toEqual({
+            kind: "candidate-invalidated",
             candidate: CANDIDATE,
+            observation: "changed",
             observedIdentity: observedNow,
         });
 
-        const compile = new FakeHostBoundary(spec({ candidateCheck: check, keepCompilePending: true }));
-        const handle = await compile.compile(CANDIDATE, REQUEST);
-        const settlement = await handle.result;
-        expect(settlement).toEqual({
-            kind: "candidate-changed",
+        const missing = new FakeHostBoundary(
+            spec({ preSpawn: { refusal: "candidate-invalidated", observation: "missing" } }),
+        );
+        expect(await missing.handshake(CANDIDATE)).toEqual({
+            kind: "candidate-invalidated",
             candidate: CANDIDATE,
+            observation: "missing",
+            observedIdentity: null,
+        });
+
+        const compile = new FakeHostBoundary(
+            spec({
+                preSpawn: { refusal: "candidate-invalidated", observation: "changed", observedIdentity: observedNow },
+                keepCompilePending: true,
+            }),
+        );
+        const handle = await compile.compile(CANDIDATE, REQUEST);
+        expect(await handle.result).toEqual({
+            kind: "candidate-invalidated",
+            candidate: CANDIDATE,
+            observation: "changed",
             observedIdentity: observedNow,
         });
         // A refused spawn is not an in-flight attempt: cancel reports it
@@ -149,6 +166,14 @@ describe("the reference fake host boundary", () => {
             canceled: false,
             alreadySettled: true,
         });
+    });
+
+    it("reports bounded execution failing to launch as a structured fact — launch-failed, not a crash", async () => {
+        const handshake = new FakeHostBoundary(spec({ preSpawn: { refusal: "launch-failed" } }));
+        expect(await handshake.handshake(CANDIDATE)).toEqual({ kind: "launch-failed", candidate: CANDIDATE });
+        const compile = new FakeHostBoundary(spec({ preSpawn: { refusal: "launch-failed" } }));
+        const handle = await compile.compile(CANDIDATE, REQUEST);
+        expect(await handle.result).toEqual({ kind: "launch-failed", candidate: CANDIDATE });
     });
 
     it("issues separate BuildIds and settles each spawn with its own script", async () => {
