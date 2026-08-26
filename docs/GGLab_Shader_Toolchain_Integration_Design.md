@@ -261,11 +261,16 @@ Reader discipline:
   editor itself reads, and is not automatically projected onto an external
   wire contract (published optional fields are optional; how they are
   handled is the contract's business, not ours to pre-declare).
-- Until the client supports a published contract, its supported set is
-  empty. That is exactly why, today, every real tool is
-  `discovered-but-unproven` — and none may enter the compile path. This is a
-  state of the world, visible and explainable, not a missing feature to be
-  papered over.
+- The supported set is exactly one declared fact, declared exactly once in
+  the client (its declaration module). The published machine process
+  contract v1 is in that set — the client's reader for that published form
+  is complete and tested. Any axis OUTSIDE the declaration is explicitly
+  unsupported, and the state ladder shows it verbatim (unproven when the
+  client declares no range at all; incompatible when a declared range does
+  not cover the observed axis) — an explicit refusal of the axis, never a
+  hidden guess. The declaration is a state of the world, visible and
+  explainable, and it moves only when the toolchain publishes or extends
+  the contract through its own review.
 - When the toolchain publishes (or extends) the contract through its own
   review, the client gains a strict reader for that published form —
   consumption of an external contract, never a definition of one.
@@ -698,8 +703,9 @@ vocabulary (contract facts, envelopes, the `NativeCompileRequest` shape,
 build intents, result states); the host-boundary contract (allowlisted
 operations + request/result shapes) and reference host-boundary fakes; the
 strict reader for the published result envelope; the handshake facts
-interface + the (today empty) supported-range declaration and its explicit
-"contract not supported" result; the version/identity/target verdicts; the
+interface + the supported-range declaration (the published v1 axis) and
+its explicit "contract not supported" result for axes outside the
+declaration; the version/identity/target verdicts; the
 ToolCompatibility state machine; the build-intent and build-line rules
 (stale/current/last-good, ordered by buildId); the full §14 pure suite.
 *Exit:* package tests green; `shader-graph-core` unmodified and

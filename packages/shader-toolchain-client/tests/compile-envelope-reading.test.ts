@@ -129,8 +129,9 @@ describe("the strict compile result envelope reader", () => {
         expectRejected(readCompileDocument(withoutField(compileFailureDocument("compile-failed", 4, "x"), "diagnostics")), "missing-field", "failure without diagnostics");
     });
 
-    it("rejects an unknown field rather than silently ignoring it", () => {
-        expectRejected(readCompileDocument(withField(COMPILE_SUCCESS, "experiment", 1)), "unexpected-field", "extra field on success");
+    it("ignores fields outside the contract's shape — the tolerance rule is the contract's, not a client pre-declaration", () => {
+        const extra = withField(COMPILE_SUCCESS, "experiment", 1);
+        expect(readCompileDocument(extra).status, extra).toBe("read");
     });
 
     it("rejects mistyped evidence fields", () => {
@@ -158,9 +159,9 @@ describe("the strict compile result envelope reader", () => {
         expectRejected(readCompileDocument(mistyped), "field-type-mismatch", mistyped);
     });
 
-    it("rejects failure envelopes that carry result fields or without diagnostics", () => {
+    it("rejects failure envelopes that carry the KNOWN success-only evidence, or that lack diagnostics", () => {
         const withEvidence = withField(compileFailureDocument("compile-failed", 4, "x"), "binaryHash", "9c".repeat(32));
-        expectRejected(readCompileDocument(withEvidence), "unexpected-field", withEvidence);
+        expectRejected(readCompileDocument(withEvidence), "forbidden-field", withEvidence);
         expectRejected(
             readCompileDocument(withField(compileFailureDocument("compile-failed", 4, "x"), "diagnostics", [])),
             "diagnostics-malformed",

@@ -3,12 +3,18 @@
  * client reads: the handshake (describe) document and the compile result
  * envelope.
  *
- * These are transcribed from the toolchain's own machine-readable
- * contract — the single-line stdout documents the process contract
- * defines and the toolchain's self-test suite proves — and they are the
- * only wire shapes these reader tests assert against. The real tool is
- * never a test fixture and never a test dependency; no test here touches
- * a human-facing output surface.
+ * These follow the toolchain's own machine-readable contract — the
+ * single-line stdout documents the process contract defines and the
+ * toolchain's self-test suite proves — and they are the only wire shapes
+ * these reader tests assert against. The real tool is never a test
+ * fixture and never a test dependency; no test here touches a
+ * human-facing output surface.
+ *
+ * Where a field carries a concrete value (for example
+ * `producerIdentity`), the golden holds a representative valid fixture:
+ * that field is a runtime-observed identity, not a fixed constant of
+ * the contract. A real-tool smoke against the actual `gglab-shaderc`
+ * describe output still proves the real document reads.
  *
  * The supportedTargets wire name "gglab-vulkan13" is the single-table
  * authority from the toolchain repository; the shorter spelling seen in

@@ -115,9 +115,11 @@ describe("the strict handshake reader", () => {
         expectRejected(readHandshakeDocument(withoutField(DESCRIBE_USAGE_ERROR, "diagnostics")), "missing-field", "failure without diagnostics");
     });
 
-    it("rejects an unknown field rather than silently ignoring it", () => {
-        expectRejected(readHandshakeDocument(withField(DESCRIBE_SUCCESS, "experimental", true)), "unexpected-field", "extra field");
-        expectRejected(readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "extra", 1)), "unexpected-field", "extra field on failure");
+    it("ignores fields outside the contract's shape — the wire contract owns its tolerance policy, the client does not pre-declare one", () => {
+        const successExtra = withField(DESCRIBE_SUCCESS, "experimental", true);
+        expect(readHandshakeDocument(successExtra).status, successExtra).toBe("read");
+        const failureExtra = withField(DESCRIBE_USAGE_ERROR, "extra", 1);
+        expect(readHandshakeDocument(failureExtra).status, failureExtra).toBe("read");
     });
 
     it("rejects a status outside the published vocabulary", () => {
@@ -126,9 +128,44 @@ describe("the strict handshake reader", () => {
         expectRejected(readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "status", "compile-failed")), "status-outside-vocabulary", "compile status on a handshake");
     });
 
-    it("rejects business fields on a failure payload — absent, not ignored", () => {
-        expectRejected(readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "toolIdentity", "gglab-shaderc")), "unexpected-field", "failure carrying toolIdentity");
-        expectRejected(readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "supportedTargets", ["gglab-dx12"])), "unexpected-field", "failure carrying supportedTargets");
+    it("rejects the KNOWN success-only fields on a failure payload — a contract rule, absent not ignored", () => {
+        expectRejected(readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "toolIdentity", "gglab-shaderc")), "forbidden-field", "failure carrying toolIdentity");
+        expectRejected(readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "supportedTargets", ["gglab-dx12"])), "forbidden-field", "failure carrying supportedTargets");
+    });
+
+    it("treats an out-of-range axis as a VALID machine document the client does not consume — refused at the axis, before any payload interpretation", () => {
+        // A future-axis document, even one carrying fields the client has
+        // never seen, is refused AS AN AXIS OBSERVATION, never as
+        // malformed: the negotiation bootstrap holds.
+        const futureAxis = withField(DESCRIBE_SUCCESS, "processContractVersion", 2);
+        const futureOutcome = readHandshakeDocument(futureAxis);
+        expect(futureOutcome.status, futureAxis).toBe("unsupported-contract");
+        if (futureOutcome.status === "unsupported-contract") {
+            expect(futureOutcome.contract).toEqual({
+                supported: false,
+                reason: "observed-version-outside-range",
+                observedVersion: 2,
+                range: { minimum: 1, maximum: 1 },
+            });
+        }
+
+        const futureAxisNewField = withField(withField(DESCRIBE_SUCCESS, "processContractVersion", 2), "futureFact", 42);
+        expect(readHandshakeDocument(futureAxisNewField).status).toBe("unsupported-contract");
+
+        const futureFailure = withField(DESCRIBE_USAGE_ERROR, "processContractVersion", 2);
+        expect(readHandshakeDocument(futureFailure).status).toBe("unsupported-contract");
+
+        // The null-declaration world is reachable explicitly and refuses
+        // the same way, with its own structured reason.
+        const noDeclaration = readHandshakeDocument(DESCRIBE_SUCCESS, null);
+        expect(noDeclaration.status).toBe("unsupported-contract");
+        if (noDeclaration.status === "unsupported-contract") {
+            expect(noDeclaration.contract).toEqual({
+                supported: false,
+                reason: "no-supported-contract-declared",
+                observedVersion: 1,
+            });
+        }
     });
 
     it("rejects mistyped fields", () => {

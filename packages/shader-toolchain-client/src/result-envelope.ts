@@ -1,29 +1,31 @@
 /**
- * The strict reader for the published compile result envelope — an
+ * The reader for the published compile result envelope — an
  * already-published, stable toolchain contract (machine-readable, tested
- * in the toolchain repository), independent of the describe
- * process-contract axis: it carries no processContractVersion of its own.
+ * in the toolchain repository).
  *
- * Consuming this envelope is client work: parse it strictly, check its
- * status vocabulary, extract the build and artifact facts. The reader
- * holds the exact field set of each document kind and rejects unknown,
- * missing, or mistyped data explicitly — never partially accepting, never
- * inventing a fact, never scraping prose.
+ * The envelope is independent of the describe process-contract axis: it
+ * carries no `processContractVersion` of its own, so no axis gate runs —
+ * the contract's own tolerance rules apply directly: required fields and
+ * types are strict, the status vocabulary is closed, the
+ * known-but-forbidden fields (a failure document carrying the
+ * success-only result evidence) reject, and fields outside the contract's
+ * shape are IGNORED — the wire contract owns its tolerance policy, this
+ * client does not pre-declare it.
  *
- * The reader is the shape authority on the TypeScript side: it trusts the
- * document's own fields (status, exitCode, identities) and does not
+ * Consuming this envelope is client work: read it, check its status
+ * vocabulary, extract the build and artifact facts. The reader trusts
+ * the document's own fields (status, exitCode, identities) and does not
  * re-derive the contract's own mappings (for example status to exit
  * code) — that consistency is the toolchain's obligation, proven by the
  * toolchain's own self-tests.
  *
  * The three publication fields (artifactId, runtimeArtifactBinaryPath,
- * runtimeArtifactManifestPath) form one published group on the wire: the
- * reader requires them exactly together and models them as the nested
- * `publication` value.
+ * runtimeArtifactManifestPath) form one published group on the wire (the
+ * contract's own rule): the reader requires them exactly together and
+ * models them as the nested `publication` value.
  */
 import type { ToolDiagnostic } from "./contract-facts.js";
 import {
-    firstUnknownField,
     isBoolean,
     isDigestHex,
     isIntegralNumber,
@@ -91,11 +93,11 @@ export type CompileReadReason =
     | "not-an-object"
     | "command-not-compile"
     | "missing-field"
-    | "unexpected-field"
     | "field-type-mismatch"
     | "status-outside-vocabulary"
     | "publication-group-incomplete"
-    | "diagnostics-malformed";
+    | "diagnostics-malformed"
+    | "forbidden-field";
 
 /** An explicit, structured reading refusal — never a partial document. */
 export interface CompileRejection {
@@ -107,27 +109,6 @@ export type CompileReadOutcome =
     | { readonly status: "read"; readonly document: CompileDocument }
     | { readonly status: "rejected"; readonly rejection: CompileRejection };
 
-const SUCCESS_FIELDS = [
-    "command",
-    "success",
-    "status",
-    "exitCode",
-    "recipeId",
-    "buildKey",
-    "binaryHash",
-    "binaryFormat",
-    "target",
-    "binaryPath",
-    "cacheRecordPath",
-    "fromCache",
-    "diagnostics",
-    "artifactId",
-    "runtimeArtifactBinaryPath",
-    "runtimeArtifactManifestPath",
-] as const;
-
-const FAILURE_FIELDS = ["command", "success", "status", "exitCode", "diagnostics"] as const;
-
 const FAILURE_STATUSES: readonly CompileFailureStatus[] = [
     "invalid-request",
     "source-not-found",
@@ -138,6 +119,22 @@ const FAILURE_STATUSES: readonly CompileFailureStatus[] = [
 ];
 
 const BINARY_FORMATS: readonly CompileBinaryFormat[] = ["spirv", "dxil"];
+
+/** The success-only result evidence a failure document must NOT carry —
+ *  known fields the contract assigns to the success kind only. */
+const SUCCESS_ONLY_FIELDS = [
+    "recipeId",
+    "buildKey",
+    "binaryHash",
+    "binaryFormat",
+    "target",
+    "binaryPath",
+    "cacheRecordPath",
+    "fromCache",
+    "artifactId",
+    "runtimeArtifactBinaryPath",
+    "runtimeArtifactManifestPath",
+] as const;
 
 function rejection(reason: CompileReadReason, detail: string): CompileReadOutcome {
     return { status: "rejected", rejection: { reason, detail } };
@@ -154,7 +151,8 @@ function missingField(fields: readonly string[], raw: Record<string, unknown>): 
 
 /**
  * Reads one published result envelope from the tool's stdout text (the
- * same channel discipline: one single-line JSON document, stderr empty).
+ * same channel discipline: one single-line JSON document on stdout,
+ * stderr empty).
  */
 export function readCompileDocument(text: string): CompileReadOutcome {
     const document = text.trim();
@@ -177,30 +175,35 @@ export function readCompileDocument(text: string): CompileReadOutcome {
     if (!isPlainObject(raw)) {
         return rejection("not-an-object", "the document root is not a JSON object");
     }
+
+    // Phase A — the minimal envelope, every document kind.
     if (raw.command !== "compile") {
         return rejection(
             "command-not-compile",
             `the document carries command ${JSON.stringify(raw.command)}; a result envelope carries "compile"`,
         );
     }
-
-    const unexpected = firstUnknownField(raw, SUCCESS_FIELDS);
-    if (unexpected !== "") {
-        return rejection("unexpected-field", `the document carries the unknown field "${unexpected}"`);
+    if (!("success" in raw)) {
+        return rejection("missing-field", 'the document is missing the required field "success"');
     }
     if (!isBoolean(raw.success)) {
         return rejection("field-type-mismatch", `the success field must be a boolean, found ${JSON.stringify(raw.success)}`);
     }
+    if (!("exitCode" in raw)) {
+        return rejection("missing-field", 'the document is missing the required field "exitCode"');
+    }
+    if (!isIntegralNumber(raw.exitCode)) {
+        return rejection("field-type-mismatch", `the exitCode field must be an integer, found ${JSON.stringify(raw.exitCode)}`);
+    }
 
+    // Phase B — the payload of the success or the failure kind.
     if (raw.success === true) {
-        const required = SUCCESS_FIELDS.filter((field) => !["artifactId", "runtimeArtifactBinaryPath", "runtimeArtifactManifestPath"].includes(field));
-        const missing = missingField(required, raw);
+        const missing = missingField(
+            ["status", "recipeId", "buildKey", "binaryHash", "binaryFormat", "target", "binaryPath", "cacheRecordPath", "fromCache", "diagnostics"],
+            raw,
+        );
         if (missing !== null) {
             return missing;
-        }
-        const exitCode = raw.exitCode;
-        if (!isIntegralNumber(exitCode)) {
-            return rejection("field-type-mismatch", `the exitCode field must be an integer, found ${JSON.stringify(exitCode)}`);
         }
         if (raw.status !== "ok") {
             return rejection(
@@ -235,9 +238,8 @@ export function readCompileDocument(text: string): CompileReadOutcome {
             return rejection("diagnostics-malformed", diagnostics.detail);
         }
 
-        // The publication group: exactly together on the wire, exactly
-        // together in the read value — partial presence is a contract
-        // violation and rejects.
+        // The publication group: one published group on the wire, exactly
+        // together — partial presence is a contract violation and rejects.
         const publicationKeys = ["artifactId", "runtimeArtifactBinaryPath", "runtimeArtifactManifestPath"];
         const present = publicationKeys.filter((field) => field in raw);
         let publication: CompilePublication | undefined;
@@ -271,7 +273,7 @@ export function readCompileDocument(text: string): CompileReadOutcome {
                 command: "compile",
                 success: true,
                 status: "ok",
-                exitCode,
+                exitCode: raw.exitCode as number,
                 recipeId: raw.recipeId as string,
                 buildKey: raw.buildKey as string,
                 binaryHash: raw.binaryHash as string,
@@ -286,29 +288,26 @@ export function readCompileDocument(text: string): CompileReadOutcome {
         };
     }
 
-    const missing = missingField(FAILURE_FIELDS, raw);
+    const missing = missingField(["status", "diagnostics"], raw);
     if (missing !== null) {
         return missing;
     }
-    const exitCode = raw.exitCode;
-    if (!isIntegralNumber(exitCode)) {
-        return rejection("field-type-mismatch", `the exitCode field must be an integer, found ${JSON.stringify(exitCode)}`);
+    // Known-but-forbidden: the success-only result evidence must be ABSENT
+    // on a failure document (the contract assigns it to the success
+    // kind). This is a contract rule, not a tolerance pre-declaration.
+    for (const field of SUCCESS_ONLY_FIELDS) {
+        if (field in raw) {
+            return rejection(
+                "forbidden-field",
+                `a failure document must not carry the success-only field "${field}"`,
+            );
+        }
     }
     if (typeof raw.status !== "string" || !FAILURE_STATUSES.includes(raw.status as CompileFailureStatus)) {
         return rejection(
             "status-outside-vocabulary",
             `a failure document carries one of ${FAILURE_STATUSES.map((status) => `"${status}"`).join(", ")}, found ${JSON.stringify(raw.status)}`,
         );
-    }
-    // The published failure envelope carries no business fields: the
-    // success-only evidence must be absent, not ignored.
-    for (const businessField of ["recipeId", "buildKey", "binaryHash", "binaryFormat", "target", "binaryPath", "cacheRecordPath", "fromCache", "artifactId", "runtimeArtifactBinaryPath", "runtimeArtifactManifestPath"] as const) {
-        if (businessField in raw) {
-            return rejection(
-                "unexpected-field",
-                `a failure document must not carry the result field "${businessField}"`,
-            );
-        }
     }
     const diagnostics = readDiagnosticArray(raw.diagnostics);
     if (!diagnostics.ok) {
@@ -326,7 +325,7 @@ export function readCompileDocument(text: string): CompileReadOutcome {
             command: "compile",
             success: false,
             status: raw.status as CompileFailureStatus,
-            exitCode,
+            exitCode: raw.exitCode as number,
             diagnostics: diagnostics.diagnostics,
         },
     };

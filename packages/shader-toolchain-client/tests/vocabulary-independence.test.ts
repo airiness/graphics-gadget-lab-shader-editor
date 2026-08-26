@@ -65,7 +65,7 @@ describe("the client's vocabulary independence", () => {
         expect(manifest.dependencies ?? {}).toEqual({});
     });
 
-    it("declares the world state directly: no supported handshake contract yet", () => {
-        expect(clientSupportedContractRange).toBeNull();
+    it("declares the published v1 axis exactly — nothing more, nothing less", () => {
+        expect(clientSupportedContractRange).toEqual({ minimum: 1, maximum: 1 });
     });
 });

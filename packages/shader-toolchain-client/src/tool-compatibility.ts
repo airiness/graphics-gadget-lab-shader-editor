@@ -12,11 +12,20 @@
  * for any RESOLVED candidate — discovered, unproven, and incompatible
  * alike; refusing it on unproven would make compatible unreachable. Only
  * `unavailable` has no candidate to handshake.
+ *
+ * Proof is bound to a candidate OBSERVATION: the handshake event carries
+ * the candidate the editor actually handshook, and the proof records it.
+ * A candidate whose provenance has changed (the same path now holding
+ * another binary) is a different observation: the old proof stops
+ * applying, the state returns to discovered-for-that-candidate through
+ * the normal events, and the handshake again — never a service keeping a
+ * hidden "current tool".
  */
 import type { HandshakeReadOutcome } from "./handshake-document.js";
-import type { SupportedContractRange } from "./contract-range.js";
-import { judgeContractSupport, type ContractSupportVerdict } from "./contract-range.js";
+import type { ContractSupportVerdict } from "./contract-range.js";
 import type { ToolDiagnostic, ToolFacts, ToolRequirement } from "./contract-facts.js";
+import type { ToolCandidate } from "./host-boundary.js";
+import { candidatesEqual } from "./host-boundary.js";
 import {
     judgeToolIdentity,
     judgeToolVersion,
@@ -35,6 +44,10 @@ export type UnprovenReason =
         readonly reason: "handshake-facts-absent";
         readonly detail: string;
         readonly diagnostics: readonly ToolDiagnostic[];
+      }
+    | {
+        readonly reason: "proof-not-for-this-candidate";
+        readonly detail: string;
       };
 
 /** One structured incompatibility — a fact the tool itself reports
@@ -54,16 +67,17 @@ export type CompatibilityMismatch =
       };
 
 /** The proof the client holds: the contract axis the facts were proven
- *  under (the facts themselves are kept beside it). */
+ *  under, bound to the exact candidate observation they were proven for. */
 export interface ToolProof {
     readonly processContractVersion: number;
+    readonly candidate: ToolCandidate;
 }
 
 /** The tool's state as the client judges it. `unavailable` is the initial
  *  state: no candidate resolved by the discovery rules. */
 export type ToolCompatibilityState =
     | { readonly status: "unavailable" }
-    | { readonly status: "discovered" }
+    | { readonly status: "discovered"; readonly candidate: ToolCandidate }
     | {
         readonly status: "unproven";
         readonly reasons: readonly UnprovenReason[];
@@ -81,21 +95,29 @@ export type ToolCompatibilityState =
 /** The state before any discovery event: the tool is not resolvable. */
 export const initialToolState: ToolCompatibilityState = { status: "unavailable" };
 
-/** A tool-side event. `handshake` carries the CLIENT-SIDE reading of the
- *  published document (a well-read document or an explicit structured
- *  refusal) — the reader does the parsing, the machine does the judgment. */
+/** A tool-side event. `handshake` carries the candidate observation that
+ *  was actually handshook and the CLIENT-SIDE reading of the published
+ *  document (a well-read document, an unsupported-axis observation, or an
+ *  explicit structured refusal) — the reader does the parsing and the
+ *  axis gate, the machine does the judgment. */
 export type CompatibilityEvent =
     | { readonly kind: "discovery-failed" }
-    | { readonly kind: "candidate-resolved" }
+    | { readonly kind: "candidate-resolved"; readonly candidate: ToolCandidate }
     | { readonly kind: "candidate-lost" }
-    | { readonly kind: "handshake"; readonly read: HandshakeReadOutcome };
+    | {
+        readonly kind: "handshake";
+        readonly candidate: ToolCandidate;
+        readonly read: HandshakeReadOutcome;
+      };
 
-/** The stable judgment inputs the machine holds for the session: the
- *  requirement (from the descriptor, mapped by the editor) and the
- *  client's declared supported range (null: declares no contract). */
+/** The stable judgment input the machine holds for the session: the
+ *  requirement (from the descriptor, mapped by the editor). The
+ *  contract-axis judgment arrived earlier with the reading itself — the
+ *  reader gated the axis against the client's declaration before the
+ *  machine ever saw it — so the machine's own job is identity and
+ *  version, plus mapping the axis judgment it was handed. */
 export interface CompatibilityJudgment {
     readonly requirement: ToolRequirement;
-    readonly supportedRange: SupportedContractRange | null;
 }
 
 function factsFromHandshake(document: {
@@ -133,11 +155,13 @@ export function applyCompatibilityEvent(
     if (event.kind === "candidate-resolved") {
         // A newly resolved candidate is a FACT — proof is established by
         // the handshake, so even a previously compatible tool returns to
-        // `discovered` and re-enters through (re-)handshake.
-        return { status: "discovered" };
+        // `discovered` and re-enters through (re-)handshake. A changed
+        // observation (same path, new binary) is a different candidate:
+        // the old proof stops applying with it.
+        return { status: "discovered", candidate: event.candidate };
     }
 
-    // handshake: legal for any resolved candidate; with none, a no-op.
+    // handshake: legal for any resolved state; with none, a no-op.
     if (state.status === "unavailable") {
         return state;
     }
@@ -154,25 +178,13 @@ export function applyCompatibilityEvent(
             ],
         };
     }
-    const document = event.read.document;
-    if (document.success !== true) {
-        return {
-            status: "unproven",
-            reasons: [
-                {
-                    reason: "handshake-facts-absent",
-                    detail: `the handshake reported ${document.status} (exit ${document.exitCode})`,
-                    diagnostics: [...document.diagnostics],
-                },
-            ],
-        };
-    }
 
-    const contract = judgeContractSupport(
-        document.processContractVersion,
-        judgment.supportedRange,
-    );
-    if (contract.supported !== true) {
+    if (event.read.status === "unsupported-contract") {
+        const contract = event.read.contract;
+        if (contract.supported !== false) {
+            // unreachable: this outcome exists exactly for the refusal
+            throw new Error("an unsupported-contract reading carrying a supported verdict is impossible");
+        }
         if (contract.reason === "no-supported-contract-declared") {
             // The client declares no supported contract at all: the
             // honest state is unproven, not a contradiction the tool
@@ -188,6 +200,20 @@ export function applyCompatibilityEvent(
         return {
             status: "incompatible",
             mismatches: [{ kind: "contract-axis", contract }],
+        };
+    }
+
+    const document = event.read.document;
+    if (document.success !== true) {
+        return {
+            status: "unproven",
+            reasons: [
+                {
+                    reason: "handshake-facts-absent",
+                    detail: `the handshake reported ${document.status} (exit ${document.exitCode})`,
+                    diagnostics: [...document.diagnostics],
+                },
+            ],
         };
     }
 
@@ -207,7 +233,7 @@ export function applyCompatibilityEvent(
     return {
         status: "compatible",
         provenFacts: facts,
-        proof: { processContractVersion: document.processContractVersion },
+        proof: { processContractVersion: document.processContractVersion, candidate: event.candidate },
     };
 }
 
@@ -239,11 +265,35 @@ export function admitHandshake(state: ToolCompatibilityState): OperationAdmissio
 /**
  * A COMPILE request is never formed from an unavailable, discovered,
  * unproven, or incompatible tool: each refusal is structured and carries
- * the state's own reasons. Only a compatible, proven tool admits one.
+ * the state's own reasons. Only a compatible, proven tool admits one —
+ * and only for the EXACT candidate observation its proof was taken
+ * under: a changed observation (same path, a replaced binary) means the
+ * proof does not apply to this candidate, and the refusal says so.
  */
-export function admitCompile(state: ToolCompatibilityState): OperationAdmission {
+export function admitCompile(
+    state: ToolCompatibilityState,
+    candidate: ToolCandidate,
+): OperationAdmission {
     if (state.status === "compatible") {
-        return { admitted: true };
+        if (candidatesEqual(state.proof.candidate, candidate)) {
+            return { admitted: true };
+        }
+        return {
+            admitted: false,
+            reasons: [
+                {
+                    reason: "tool-unproven",
+                    reasons: [
+                        {
+                            reason: "proof-not-for-this-candidate",
+                            detail:
+                                "the proof was taken under a different candidate observation (path or provenance changed); " +
+                                "re-resolve and re-handshake this candidate",
+                        },
+                    ],
+                },
+            ],
+        };
     }
     if (state.status === "unavailable") {
         return { admitted: false, reasons: [{ reason: "tool-unavailable" }] };

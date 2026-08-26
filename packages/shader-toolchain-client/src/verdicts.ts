@@ -85,8 +85,8 @@ export function judgeToolVersion(
             status: "unparseable-version",
             detail:
                 observed === null
-                    ? `the tool's version "${reported.toolVersion}" is not a numeric MAJOR.MINOR.PATCH triple`
-                    : `the requirement's minimum "${required.minimumVersion}" is not a numeric MAJOR.MINOR.PATCH triple`,
+                    ? `the tool's version "${reported.toolVersion}" is not a valid SemVer 2.0.0 version`
+                    : `the requirement's minimum "${required.minimumVersion}" is not a valid SemVer 2.0.0 version`,
         };
     }
     const below = compareSemver(observed, minimum) < 0;

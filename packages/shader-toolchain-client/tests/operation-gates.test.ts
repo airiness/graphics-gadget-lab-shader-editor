@@ -1,62 +1,49 @@
 import { describe, expect, it } from "vitest";
-import {
-    admitCompile,
-    admitHandshake,
-    type ToolCompatibilityState,
-} from "../src/tool-compatibility.js";
-import { initialToolState } from "../src/tool-compatibility.js";
+import { initialToolState, admitCompile, admitHandshake, type ToolCompatibilityState } from "../src/tool-compatibility.js";
+import type { ToolCandidate } from "../src/host-boundary.js";
+import { applyCompatibilityEvent } from "../src/tool-compatibility.js";
+import { readHandshakeDocument } from "../src/handshake-document.js";
 
-/**
- * The client's tool-operation guarantee, split by gate (toolchain
- * integration design, section 14): a COMPILE request is never formed out
- * of an unavailable / discovered / unproven / incompatible tool — the
- * refusal is a structured result carrying the state's own reasons
- * (named in the design's NotReady reason vocabulary); a HANDSHAKE IS
- * formed for any resolved candidate — refusing it on unproven would make
- * compatible unreachable.
- */
-const UNAVAILABLE = initialToolState;
-const DISCOVERED: ToolCompatibilityState = { status: "discovered" };
-const UNPROVEN: ToolCompatibilityState = {
-    status: "unproven",
-    reasons: [
-        {
-            reason: "contract-not-supported",
-            contract: { supported: false, reason: "no-supported-contract-declared", observedVersion: 1 },
-        },
-    ],
+const CANDIDATE: ToolCandidate = {
+    rule: "sibling-build",
+    toolPath: "C:/gglab/build/output/x64/Debug/gglab-shaderc.exe",
+    observationIdentity: "file-identity:sha256:9c",
+    resolvedAt: 1_700_000_000_000,
 };
-const INCOMPATIBLE: ToolCompatibilityState = {
-    status: "incompatible",
-    mismatches: [
-        {
-            kind: "identity",
-            identity: { status: "mismatch", requiredIdentity: "gglab-shaderc", reportedIdentity: "other-tool" },
-        },
-    ],
-};
-const COMPATIBLE: ToolCompatibilityState = {
-    status: "compatible",
-    provenFacts: {
-        toolIdentity: "gglab-shaderc",
-        toolVersion: "1.1.0",
-        processContractVersion: 1,
-        producerKind: "dxc",
-        producerIdentity: "Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)",
-        supportedTargets: ["gglab-dx12", "gglab-vulkan13"],
-    },
-    proof: { processContractVersion: 1 },
-};
+
+const OTHER_OBSERVATION: ToolCandidate = { ...CANDIDATE, observationIdentity: "file-identity:replaced-binary" };
+
+const REASONABLE = {
+    requirement: { identity: "gglab-shaderc", minimumVersion: "1.0.0", versionComparison: "semver" },
+} as const;
+
+function compatibleState(candidate: ToolCandidate = CANDIDATE): ToolCompatibilityState {
+    const state = applyCompatibilityEvent(
+        { status: "discovered", candidate },
+        { kind: "handshake", candidate, read: readHandshakeDocument('{"command":"describe","success":true,"status":"ok","exitCode":0,"processContractVersion":1,"toolIdentity":"gglab-shaderc","toolVersion":"1.1.0","producerKind":"dxc","producerIdentity":"Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)","supportedTargets":["gglab-dx12","gglab-vulkan13"],"diagnostics":[]}') },
+        REASONABLE,
+    );
+    if (state.status !== "compatible") {
+        throw new Error("test setup: the handshake must prove the tool");
+    }
+    return state;
+}
 
 describe("the handshake gate", () => {
-    it("is legal for every resolved candidate", () => {
-        for (const state of [DISCOVERED, UNPROVEN, INCOMPATIBLE, COMPATIBLE] as readonly ToolCompatibilityState[]) {
+    it("is legal for every resolved candidate state", () => {
+        const states: readonly ToolCompatibilityState[] = [
+            { status: "discovered", candidate: CANDIDATE },
+            { status: "unproven", reasons: [{ reason: "handshake-facts-absent", detail: "x", diagnostics: [] }] },
+            { status: "incompatible", mismatches: [] },
+            compatibleState(),
+        ];
+        for (const state of states) {
             expect(admitHandshake(state)).toEqual({ admitted: true });
         }
     });
 
     it("is refused only while unavailable — no candidate to handshake", () => {
-        expect(admitHandshake(UNAVAILABLE)).toEqual({
+        expect(admitHandshake(initialToolState)).toEqual({
             admitted: false,
             reasons: [{ reason: "tool-unavailable" }],
         });
@@ -64,43 +51,86 @@ describe("the handshake gate", () => {
 });
 
 describe("the compile gate", () => {
-    it("admits a compile request only for a compatible, proven tool", () => {
-        expect(admitCompile(COMPATIBLE)).toEqual({ admitted: true });
+    it("admits a compile request only for the candidate observation its proof was taken under", () => {
+        const state = compatibleState();
+        expect(admitCompile(state, CANDIDATE)).toEqual({ admitted: true });
     });
 
-    it("refuses with the state's own structured reasons, never silently", () => {
-        expect(admitCompile(UNAVAILABLE).admitted).toBe(false);
-        expect(admitCompile(DISCOVERED).admitted).toBe(false);
-        expect(admitCompile(UNPROVEN).admitted).toBe(false);
-        expect(admitCompile(INCOMPATIBLE).admitted).toBe(false);
-    });
-
-    it("carries the NotReady-reason vocabulary verbatim", () => {
-        const refused = admitCompile(UNPROVEN);
+    it("refuses a different candidate observation for a proven tool — proof does not travel", () => {
+        const state = compatibleState();
+        const refused = admitCompile(state, OTHER_OBSERVATION);
+        expect(refused.admitted).toBe(false);
         if (refused.admitted !== false) {
-            throw new Error("test setup: an unproven tool must be refused");
+            throw new Error("test setup: the refusal is expected");
         }
         expect(refused.reasons).toEqual([
-            { reason: "tool-unproven", reasons: UNPROVEN.status === "unproven" ? UNPROVEN.reasons : [] },
+            {
+                reason: "tool-unproven",
+                reasons: [
+                    {
+                        reason: "proof-not-for-this-candidate",
+                        detail:
+                            "the proof was taken under a different candidate observation (path or provenance changed); " +
+                            "re-resolve and re-handshake this candidate",
+                    },
+                ],
+            },
         ]);
-        const incompatibleRefusal = admitCompile(INCOMPATIBLE);
-        if (incompatibleRefusal.admitted !== false) {
-            throw new Error("test setup: an incompatible tool must be refused");
-        }
-        expect(incompatibleRefusal.reasons).toEqual([
-            { reason: "tool-incompatible", mismatches: INCOMPATIBLE.status === "incompatible" ? INCOMPATIBLE.mismatches : [] },
-        ]);
-        const discoveredRefusal = admitCompile(DISCOVERED);
+    });
+
+    it("refuses every other resolved state with its own structured reasons", () => {
+        expect(admitCompile(initialToolState, CANDIDATE)).toEqual({
+            admitted: false,
+            reasons: [{ reason: "tool-unavailable" }],
+        });
+
+        const discovered = { status: "discovered", candidate: CANDIDATE } as ToolCompatibilityState;
+        const discoveredRefusal = admitCompile(discovered, CANDIDATE);
+        expect(discoveredRefusal.admitted).toBe(false);
         if (discoveredRefusal.admitted !== false) {
-            throw new Error("test setup: a discovered-only tool must be refused");
+            throw new Error("test setup: the refusal is expected");
         }
         const discoveredReason = discoveredRefusal.reasons[0];
-        if (discoveredReason === undefined) {
-            throw new Error("test setup: exactly one reason is expected");
+        if (discoveredReason === undefined || discoveredReason.reason !== "tool-discovered") {
+            throw new Error("test setup: the tool-discovered reason is expected");
         }
-        expect(discoveredReason.reason).toBe("tool-discovered");
-        if (discoveredReason.reason === "tool-discovered") {
-            expect(discoveredReason.detail).toContain("handshake");
+        expect(discoveredReason.detail).toContain("handshake");
+
+        const unproven: ToolCompatibilityState = {
+            status: "unproven",
+            reasons: [
+                {
+                    reason: "contract-not-supported",
+                    contract: { supported: false, reason: "no-supported-contract-declared", observedVersion: 1 },
+                },
+            ],
+        };
+        expect(admitCompile(unproven, CANDIDATE).admitted).toBe(false);
+
+        const incompatible: ToolCompatibilityState = {
+            status: "incompatible",
+            mismatches: [
+                {
+                    kind: "identity",
+                    identity: { status: "mismatch", requiredIdentity: "gglab-shaderc", reportedIdentity: "other-tool" },
+                },
+            ],
+        };
+        const incompatibleRefusal = admitCompile(incompatible, CANDIDATE);
+        expect(incompatibleRefusal.admitted).toBe(false);
+        if (incompatibleRefusal.admitted !== false) {
+            throw new Error("test setup: the refusal is expected");
         }
+        expect(incompatibleRefusal.reasons).toEqual([
+            {
+                reason: "tool-incompatible",
+                mismatches: [
+                    {
+                        kind: "identity",
+                        identity: { status: "mismatch", requiredIdentity: "gglab-shaderc", reportedIdentity: "other-tool" },
+                    },
+                ],
+            },
+        ]);
     });
 });

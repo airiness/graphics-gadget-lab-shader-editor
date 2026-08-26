@@ -16,23 +16,45 @@
  *   test-side implementation of the same boundary, deterministic, with no
  *   process and no argv.
  *
- * The boundary's output is exactly this: the raw stdout bytes, the exit
- * code, and the timeout/cancel state. Envelope parsing, status
- * interpretation, version comparison, and diagnostic classification all
- * happen above it, on the client's readers — the raw bytes and exit code
- * ARE the boundary's entire output.
+ * The boundary's output is exactly this: the raw stdout bytes, the raw
+ * stderr bytes, the exit code, and the timeout/cancel state. Envelope
+ * parsing, status interpretation, channel discipline (the contract
+ * places exactly one machine document on stdout and leaves stderr
+ * EMPTY), version comparison, and diagnostic classification all happen
+ * above it, on the client's readers — the raw bytes and exit code ARE
+ * the boundary's entire output. The host owns bounded execution; it
+ * captures both streams, it never interprets either one.
  */
 import type { BuildId, NativeCompileRequest } from "./native-compile-request.js";
 
 /** The discovery rules the tool resolution walks, first hit wins. */
 export type DiscoveryRule = "explicit-config" | "sibling-build" | "bundled";
 
-/** A resolved candidate — a FACT record, never a readiness claim. */
+/** A resolved candidate — a FACT record of one candidate observation,
+ *  never a readiness claim. */
 export interface ToolCandidate {
     readonly rule: DiscoveryRule;
     readonly toolPath: string;
+    /** The host-generated observation identity of the file AT the moment
+     *  of resolution (file identity, size/mtime, a hash, or the host's
+     *  opaque provenance token — the host implementation decides what it
+     *  is). A changed observation of the same path — the binary replaced
+     *  under the path — is a DIFFERENT candidate, and a proof taken under
+     *  the old observation stops applying. */
+    readonly observationIdentity: string;
     /** Session time (epoch milliseconds) the candidate resolved. */
     readonly resolvedAt: number;
+}
+
+/** Two candidate observations are the same when every observation fact
+ *  agrees — path, provenance identity, rule, and resolution moment. */
+export function candidatesEqual(a: ToolCandidate, b: ToolCandidate): boolean {
+    return (
+        a.rule === b.rule &&
+        a.toolPath === b.toolPath &&
+        a.observationIdentity === b.observationIdentity &&
+        a.resolvedAt === b.resolvedAt
+    );
 }
 
 /** One structured failure reason for one discovery rule. */
@@ -61,12 +83,14 @@ export interface DiscoverOutcome {
 }
 
 /**
- * The boundary's entire output: raw stdout bytes, exit code, and the
- * timeout/cancel state. No parsed document, no verdict, no diagnostics —
- * those are the client's work on the bytes.
+ * The boundary's entire output: raw stdout bytes, raw stderr bytes,
+ * exit code, and the timeout/cancel state. No parsed document, no
+ * verdict, no diagnostics, no channel judgment — those are the client's
+ * work on the bytes.
  */
 export interface BoundaryOutput {
     readonly stdout: Uint8Array;
+    readonly stderr: Uint8Array;
     readonly exitCode: number;
     readonly timedOut: boolean;
     readonly canceled: boolean;
@@ -96,7 +120,13 @@ export interface CancelOutcome {
  */
 export interface HostToolBoundary {
     discover(request: DiscoverRequest): Promise<DiscoverOutcome>;
+    /** Handshakes the tool AT the candidate path; the result bytes are
+     *  the client's to read. */
     handshake(candidate: ToolCandidate): Promise<BoundaryOutput>;
-    compile(request: NativeCompileRequest): Promise<CompileAttemptHandle>;
+    /** Compiles by spawning the tool at the candidate path — the EXACT
+     *  candidate the editor holds (and, for proof, the candidate the
+     *  client's proof was taken under). The boundary owns no "current
+     *  tool" of its own. */
+    compile(candidate: ToolCandidate, request: NativeCompileRequest): Promise<CompileAttemptHandle>;
     cancel(buildId: BuildId): Promise<CancelOutcome>;
 }

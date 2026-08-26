@@ -12,6 +12,7 @@ import { DESCRIBE_SUCCESS } from "./fixtures/envelope-goldens.js";
 const CANDIDATE: ToolCandidate = {
     rule: "sibling-build",
     toolPath: "C:/gglab/build/output/x64/Debug/gglab-shaderc.exe",
+    observationIdentity: "file-identity:sha256:9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c",
     resolvedAt: 1_700_000_000_000,
 };
 
@@ -92,14 +93,35 @@ describe("the reference fake host boundary", () => {
         });
     });
 
-    it("settles a handshake with the exact scripted output surface", async () => {
+    it("settles a handshake with the exact scripted output surface — stderr in the contract's own empty shape by default", async () => {
         const fake = new FakeHostBoundary(spec());
         const output = await fake.handshake(CANDIDATE);
         expect(output.stdout).toEqual(utf8Encode(DESCRIBE_SUCCESS));
+        expect(output.stderr).toEqual(new Uint8Array(0));
         expect(output.exitCode).toBe(0);
         expect(output.timedOut).toBe(false);
         expect(output.canceled).toBe(false);
         expect(fake.handshakeCalls).toBe(1);
+    });
+
+    it("carries a polluted stderr as raw bytes for the client to judge — the fake interprets nothing", async () => {
+        const pollution = "dxc: warning: something to the side channel";
+        const fake = new FakeHostBoundary(
+            spec({ handshake: { stdout: DESCRIBE_SUCCESS, exitCode: 0, stderr: pollution } }),
+        );
+        const output = await fake.handshake(CANDIDATE);
+        expect(output.stderr).toEqual(utf8Encode(pollution));
+        expect(output.stdout).toEqual(utf8Encode(DESCRIBE_SUCCESS));
+    });
+
+    it("settles a canceled attempt with both streams empty and the canceled fact", async () => {
+        const fake = new FakeHostBoundary(spec({ keepCompilePending: true }));
+        const inFlight = await fake.compile(CANDIDATE, REQUEST);
+        await fake.cancel(inFlight.buildId);
+        const settled = await inFlight.result;
+        expect(settled.canceled).toBe(true);
+        expect(settled.stdout).toEqual(new Uint8Array(0));
+        expect(settled.stderr).toEqual(new Uint8Array(0));
     });
 
     it("issues separate BuildIds and settles each attempt with its own script", async () => {
@@ -112,8 +134,8 @@ describe("the reference fake host boundary", () => {
                 ],
             }),
         );
-        const first = await fake.compile(REQUEST);
-        const second = await fake.compile(REQUEST);
+        const first = await fake.compile(CANDIDATE, REQUEST);
+        const second = await fake.compile(CANDIDATE, REQUEST);
         expect(first.buildId).not.toEqual(second.buildId);
         const firstResult = await first.result;
         const secondResult = await second.result;
@@ -129,12 +151,12 @@ describe("the reference fake host boundary", () => {
         );
         // Before any compile: nothing is in flight — an explicit fact.
         expect(fake.releasePending()).toBe(false);
-        const pending = await fake.compile(REQUEST);
+        const pending = await fake.compile(CANDIDATE, REQUEST);
         expect(fake.releasePending(pending.buildId)).toBe(true);
         const settled = await pending.result;
         expect(settled.stdout).toEqual(utf8Encode(ok));
         // A second in-flight attempt coexists until its own settlement.
-        const second = await fake.compile(REQUEST);
+        const second = await fake.compile(CANDIDATE, REQUEST);
         expect(second.buildId.sequence).toBe(2);
         expect(fake.releasePending(pending.buildId)).toBe(false);
         expect(fake.releasePending(second.buildId)).toBe(true);
@@ -143,7 +165,7 @@ describe("the reference fake host boundary", () => {
 
     it("cancels an in-flight attempt as an explicit terminal state, and reports an already-settled fact", async () => {
         const fake = new FakeHostBoundary(spec({ keepCompilePending: true }));
-        const inFlight = await fake.compile(REQUEST);
+        const inFlight = await fake.compile(CANDIDATE, REQUEST);
         const cancelled = await fake.cancel(inFlight.buildId);
         expect(cancelled).toEqual({
             buildId: inFlight.buildId,
@@ -161,7 +183,7 @@ describe("the reference fake host boundary", () => {
         const fake = new FakeHostBoundary(
             spec({ compile: [{ stdout: "", exitCode: -1, timedOut: true }] }),
         );
-        const attempt = await fake.compile(REQUEST);
+        const attempt = await fake.compile(CANDIDATE, REQUEST);
         const output = await attempt.result;
         expect(output.timedOut).toBe(true);
         expect(output.exitCode).toBe(-1);

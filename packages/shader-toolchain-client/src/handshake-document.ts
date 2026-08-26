@@ -1,26 +1,39 @@
 /**
- * The strict reader for the published handshake (describe) document —
- * the single-line JSON document the machine process contract places on
+ * The reader for the published handshake (describe) document — the
+ * single-line JSON document the machine process contract places on
  * stdout, with stderr left empty.
  *
- * Discipline (toolchain integration design, section 7): the reader holds
- * the document shapes strictly — the exact field set of each document
- * kind, the exact field types, a status vocabulary drawn from the
- * published contract — and never partially accepts, invents, or silently
- * reinterprets unfamiliar data. Unknown or missing fields reject
- * explicitly.
+ * Reading is a two-phase negotiation, following the contract's own
+ * tolerance rules (required fields, types, and closed status vocabulary
+ * are strict; fields outside a document's shape are IGNORED — the wire
+ * contract owns its tolerance policy, this client does not pre-declare
+ * it):
  *
- * Reading is NOT consuming: this reader proves the document's shape.
- * Whether the observed process-contract version is in the client's
- * declared supported range is the separate axis decision in
- * contract-range, and whether the facts meet the requirement is the
- * verdicts'. Today, with the declared range empty, a well-read describe
- * document still leaves the tool discovered-but-unproven — both layers
- * visible, neither papered over.
+ * - Phase A — the minimal envelope every document kind carries:
+ *   `command "describe"`, `success`, `exitCode`, and the
+ *   `processContractVersion` axis (its type is envelope-level).
+ * - The support gate — the observed axis is judged against the client's
+ *   declared supported range BEFORE any payload is interpreted. An
+ *   unsupported axis is a valid machine document whose contract the
+ *   client does not consume: an explicit "unsupported-contract" result,
+ *   never a malformed-document refusal.
+ * - Phase B — the payload of the one supported contract (v1): the
+ *   required fields, their types, the closed status vocabulary, and the
+ *   known-but-forbidden fields (a failure document carrying the
+ *   success-only business facts) are strict; fields outside the v1 shape
+ *   are ignored.
+ *
+ * Whether the proven facts meet the requirement is the verdicts'; both
+ * layers stay visible, neither papered over.
  */
 import type { ToolDiagnostic } from "./contract-facts.js";
+import type { SupportedContractRange } from "./contract-range-declaration.js";
+import { clientSupportedContractRange } from "./contract-range-declaration.js";
 import {
-    firstUnknownField,
+    judgeContractSupport,
+    type ContractSupportVerdict,
+} from "./contract-range.js";
+import {
     isBoolean,
     isIntegralNumber,
     isPlainObject,
@@ -52,8 +65,8 @@ export interface HandshakeFailureDocument {
     readonly success: false;
     readonly status: HandshakeFailureStatus;
     readonly exitCode: number;
-    /** The process-contract version axis stays present on failure
-     *  documents too — it is the axis of the contract itself. */
+    /** The axis stays present on failure documents too: it is the axis
+     *  of the contract itself. */
     readonly processContractVersion: number;
     /** Non-empty, carried verbatim, and the entire failure payload. */
     readonly diagnostics: readonly ToolDiagnostic[];
@@ -67,10 +80,10 @@ export type HandshakeReadReason =
     | "not-an-object"
     | "command-not-describe"
     | "missing-field"
-    | "unexpected-field"
     | "field-type-mismatch"
     | "status-outside-vocabulary"
-    | "diagnostics-malformed";
+    | "diagnostics-malformed"
+    | "forbidden-field";
 
 /** An explicit, structured reading refusal — never a partial document. */
 export interface HandshakeRejection {
@@ -78,38 +91,39 @@ export interface HandshakeRejection {
     readonly detail: string;
 }
 
+/**
+ * The three reading outcomes:
+ * - `read` — envelope accepted, the axis is in the declared range, and
+ *   the v1 payload checks out;
+ * - `unsupported-contract` — a VALID document whose axis the client does
+ *   not consume: the observed axis and its explicit judgment, carried
+ *   verbatim for the state machine;
+ * - `rejected` — the document does not check out at the envelope or
+ *   payload level, with the side named.
+ */
 export type HandshakeReadOutcome =
     | { readonly status: "read"; readonly document: HandshakeDocument }
+    | {
+        readonly status: "unsupported-contract";
+        readonly contract: ContractSupportVerdict;
+      }
     | { readonly status: "rejected"; readonly rejection: HandshakeRejection };
-
-const SUCCESS_FIELDS = [
-    "command",
-    "success",
-    "status",
-    "exitCode",
-    "processContractVersion",
-    "toolIdentity",
-    "toolVersion",
-    "producerKind",
-    "producerIdentity",
-    "supportedTargets",
-    "diagnostics",
-] as const;
-
-const FAILURE_FIELDS = [
-    "command",
-    "success",
-    "status",
-    "exitCode",
-    "processContractVersion",
-    "diagnostics",
-] as const;
 
 const FAILURE_STATUSES: readonly HandshakeFailureStatus[] = [
     "usage-error",
     "compiler-unavailable",
     "internal-error",
 ];
+
+/** The success-only business facts a failure document must NOT carry —
+ *  known fields the contract assigns to the success kind only. */
+const SUCCESS_ONLY_FIELDS = [
+    "toolIdentity",
+    "toolVersion",
+    "producerKind",
+    "producerIdentity",
+    "supportedTargets",
+] as const;
 
 function rejection(reason: HandshakeReadReason, detail: string): HandshakeReadOutcome {
     return { status: "rejected", rejection: { reason, detail } };
@@ -125,11 +139,16 @@ function missingField(fields: readonly string[], raw: Record<string, unknown>): 
 }
 
 /**
- * Reads one published handshake document from the tool's stdout text.
- * The channel discipline (a single-line JSON document, stderr empty) is
- * enforced on the text before parsing.
+ * Reads one published handshake document from the tool's stdout text. The
+ * channel discipline (exactly one single-line JSON document on stdout) is
+ * enforced on the text before parsing. The support gate runs on the
+ * client's declared range by default; the null-declaration world is
+ * reachable by passing `null` explicitly.
  */
-export function readHandshakeDocument(text: string): HandshakeReadOutcome {
+export function readHandshakeDocument(
+    text: string,
+    range: SupportedContractRange | null = clientSupportedContractRange,
+): HandshakeReadOutcome {
     const document = text.trim();
     if (document.length === 0) {
         return rejection("not-json", "the document is empty; the handshake produced no machine document");
@@ -150,36 +169,53 @@ export function readHandshakeDocument(text: string): HandshakeReadOutcome {
     if (!isPlainObject(raw)) {
         return rejection("not-an-object", "the document root is not a JSON object");
     }
+
+    // Phase A — the minimal envelope, every document kind.
     if (raw.command !== "describe") {
         return rejection(
             "command-not-describe",
             `the document carries command ${JSON.stringify(raw.command)}; a handshake document carries "describe"`,
         );
     }
-
-    const unexpected = firstUnknownField(raw, SUCCESS_FIELDS);
-    if (unexpected !== "") {
-        return rejection("unexpected-field", `the document carries the unknown field "${unexpected}"`);
+    if (!("success" in raw)) {
+        return rejection("missing-field", 'the document is missing the required field "success"');
     }
     if (!isBoolean(raw.success)) {
         return rejection("field-type-mismatch", `the success field must be a boolean, found ${JSON.stringify(raw.success)}`);
     }
+    if (!("exitCode" in raw)) {
+        return rejection("missing-field", 'the document is missing the required field "exitCode"');
+    }
+    if (!isIntegralNumber(raw.exitCode)) {
+        return rejection("field-type-mismatch", `the exitCode field must be an integer, found ${JSON.stringify(raw.exitCode)}`);
+    }
+    if (!("processContractVersion" in raw)) {
+        return rejection(
+            "missing-field",
+            'the document is missing the required field "processContractVersion"',
+        );
+    }
+    if (!isIntegralNumber(raw.processContractVersion)) {
+        return rejection(
+            "field-type-mismatch",
+            `the processContractVersion field must be an integer, found ${JSON.stringify(raw.processContractVersion)}`,
+        );
+    }
 
+    // The support gate: before any payload interpretation.
+    const contract = judgeContractSupport(raw.processContractVersion, range);
+    if (contract.supported !== true) {
+        return { status: "unsupported-contract", contract };
+    }
+
+    // Phase B — the supported contract's payload (v1).
     if (raw.success === true) {
-        const missing = missingField(SUCCESS_FIELDS, raw);
+        const missing = missingField(
+            ["status", "toolIdentity", "toolVersion", "producerKind", "producerIdentity", "supportedTargets", "diagnostics"],
+            raw,
+        );
         if (missing !== null) {
             return missing;
-        }
-        const exitCode = raw.exitCode;
-        if (!isIntegralNumber(exitCode)) {
-            return rejection("field-type-mismatch", `the exitCode field must be an integer, found ${JSON.stringify(exitCode)}`);
-        }
-        const processContractVersion = raw.processContractVersion;
-        if (!isIntegralNumber(processContractVersion)) {
-            return rejection(
-                "field-type-mismatch",
-                `the processContractVersion field must be an integer, found ${JSON.stringify(processContractVersion)}`,
-            );
         }
         if (raw.status !== "ok") {
             return rejection(
@@ -208,8 +244,8 @@ export function readHandshakeDocument(text: string): HandshakeReadOutcome {
                 command: "describe",
                 success: true,
                 status: "ok",
-                exitCode,
-                processContractVersion,
+                exitCode: raw.exitCode as number,
+                processContractVersion: raw.processContractVersion as number,
                 toolIdentity: raw.toolIdentity as string,
                 toolVersion: raw.toolVersion as string,
                 producerKind: raw.producerKind as string,
@@ -220,36 +256,26 @@ export function readHandshakeDocument(text: string): HandshakeReadOutcome {
         };
     }
 
-    const missing = missingField(FAILURE_FIELDS, raw);
+    const missing = missingField(["status", "diagnostics"], raw);
     if (missing !== null) {
         return missing;
     }
-    const exitCode = raw.exitCode;
-    if (!isIntegralNumber(exitCode)) {
-        return rejection("field-type-mismatch", `the exitCode field must be an integer, found ${JSON.stringify(exitCode)}`);
-    }
-    const processContractVersion = raw.processContractVersion;
-    if (!isIntegralNumber(processContractVersion)) {
-        return rejection(
-            "field-type-mismatch",
-            `the processContractVersion field must be an integer, found ${JSON.stringify(processContractVersion)}`,
-        );
+    // Known-but-forbidden: the success-only business facts must be ABSENT
+    // on a failure document (the contract assigns them to the success
+    // kind). This is a contract rule, not a tolerance pre-declaration.
+    for (const field of SUCCESS_ONLY_FIELDS) {
+        if (field in raw) {
+            return rejection(
+                "forbidden-field",
+                `a failure handshake document must not carry the success-only field "${field}"`,
+            );
+        }
     }
     if (typeof raw.status !== "string" || !FAILURE_STATUSES.includes(raw.status as HandshakeFailureStatus)) {
         return rejection(
             "status-outside-vocabulary",
             `a failure handshake document carries one of ${FAILURE_STATUSES.map((status) => `"${status}"`).join(", ")}, found ${JSON.stringify(raw.status)}`,
         );
-    }
-    // The published failure payload carries no business fields: the
-    // success-only facts must be absent, not ignored.
-    for (const businessField of ["toolIdentity", "toolVersion", "producerKind", "producerIdentity", "supportedTargets"] as const) {
-        if (businessField in raw) {
-            return rejection(
-                "unexpected-field",
-                `a failure handshake document must not carry the business field "${businessField}"`,
-            );
-        }
     }
     const diagnostics = readDiagnosticArray(raw.diagnostics);
     if (!diagnostics.ok) {
@@ -267,8 +293,8 @@ export function readHandshakeDocument(text: string): HandshakeReadOutcome {
             command: "describe",
             success: false,
             status: raw.status as HandshakeFailureStatus,
-            exitCode,
-            processContractVersion,
+            exitCode: raw.exitCode as number,
+            processContractVersion: raw.processContractVersion as number,
             diagnostics: diagnostics.diagnostics,
         },
     };

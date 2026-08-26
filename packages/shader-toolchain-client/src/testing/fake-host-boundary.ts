@@ -10,6 +10,10 @@
  * a compile attempt stays pending until `releasePending()` settles it
  * with the next scripted call or `cancel(buildId)` settles it as
  * canceled — no real time elapses in the script.
+ *
+ * The whole output surface is scriptable, stderr INCLUDED: the default
+ * is the contract's own channel shape (stdout document, stderr empty);
+ * a polluted stderr is a scripted fact the client can then judge.
  */
 import type {
     BoundaryOutput,
@@ -27,6 +31,9 @@ import type { BuildId, NativeCompileRequest } from "../native-compile-request.js
 export interface FakeBoundaryCall {
     /** The exact stdout document (a single-line JSON text) or raw bytes. */
     readonly stdout: string | Uint8Array;
+    /** The exact stderr bytes: empty (the contract's own channel shape)
+     *  by default, scriptable for pollution cases. */
+    readonly stderr?: string | Uint8Array | undefined;
     readonly exitCode: number;
     readonly timedOut?: boolean | undefined;
 }
@@ -122,9 +129,11 @@ export class FakeHostBoundary implements HostToolBoundary {
         return this.toOutput(this.spec.handshake);
     }
 
-    async compile(request: NativeCompileRequest): Promise<CompileAttemptHandle> {
-        // The boundary serializes and executes the approved request
-        // host-internal; the fake returns the scripted output surface.
+    async compile(candidate: ToolCandidate, request: NativeCompileRequest): Promise<CompileAttemptHandle> {
+        // The boundary serializes and executes the approved request at
+        // the candidate path, host-internal; the fake returns the
+        // scripted output surface for the candidate given.
+        void candidate;
         void request;
         this.compileCallCount += 1;
         const buildId: BuildId = { sequence: this.compileCallCount };
@@ -147,6 +156,7 @@ export class FakeHostBoundary implements HostToolBoundary {
             this.pending.delete(buildId.sequence);
             pending.resolve({
                 stdout: new Uint8Array(0),
+                stderr: new Uint8Array(0),
                 exitCode: -1,
                 timedOut: false,
                 canceled: true,
@@ -191,8 +201,15 @@ export class FakeHostBoundary implements HostToolBoundary {
 
     private toOutput(call: FakeBoundaryCall): BoundaryOutput {
         const stdout = typeof call.stdout === "string" ? utf8Encode(call.stdout) : call.stdout;
+        const stderr =
+            call.stderr === undefined
+                ? new Uint8Array(0)
+                : typeof call.stderr === "string"
+                  ? utf8Encode(call.stderr)
+                  : call.stderr;
         return {
             stdout,
+            stderr,
             exitCode: call.exitCode,
             timedOut: call.timedOut === true,
             canceled: false,

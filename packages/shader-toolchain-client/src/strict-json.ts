@@ -34,19 +34,6 @@ export function isDigestHex(value: unknown): value is string {
     return typeof value === "string" && /^[0-9a-fA-F]{64}$/u.test(value);
 }
 
-/**
- * The first key of `raw` that is not in the expected field set, or the
- * empty string when the object carries no unexpected field.
- */
-export function firstUnknownField(raw: Record<string, unknown>, expected: readonly string[]): string {
-    for (const key of Object.keys(raw)) {
-        if (!expected.includes(key)) {
-            return key;
-        }
-    }
-    return "";
-}
-
 export type DiagnosticArrayOutcome =
     | { readonly ok: true; readonly diagnostics: readonly ToolDiagnostic[] }
     | { readonly ok: false; readonly detail: string };

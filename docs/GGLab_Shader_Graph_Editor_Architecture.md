@@ -1824,9 +1824,10 @@ level is in `GGLab_Shader_Toolchain_Integration_Design.md`:
    NativeBuildReadiness (composed ONCE by the editor orchestration):
    `Ready` or `NotReady{reasons}`. A request may only be issued when the
    composition is `Ready`: no dev bypass, no environment-flag exception, and
-   no such path to configure because none exists. A real tool before the
-   toolchain handshake contract exists is `discovered-but-unproven`, full
-   stop.
+   no such path to configure because none exists. A real tool whose
+   process-contract axis lies outside the client's declared supported
+   range, or whose facts miss the requirement, is `unproven` /
+   `incompatible`, full stop: no compile request is formed out of it.
 2. The handshake wire contract is **owned by the external GGLab Shader
    Toolchain contract authority** (normative design in the GGLab docs
    repository; implementation and contract self-tests in the main GGLab

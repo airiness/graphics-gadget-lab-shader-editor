@@ -1,44 +1,48 @@
 import { describe, expect, it } from "vitest";
 import { clientSupportedContractRange } from "../src/contract-range-declaration.js";
 import { judgeContractSupport } from "../src/contract-range.js";
-import { DESCRIBE_SUCCESS, DESCRIBE_INTERNAL_ERROR } from "./fixtures/envelope-goldens.js";
-import { readHandshakeDocument } from "../src/handshake-document.js";
 
 describe("the client's supported-range declaration", () => {
-    it("declares no supported handshake contract today — the explicit empty state", () => {
-        expect(clientSupportedContractRange).toBeNull();
+    it("declares the published machine process contract v1 — exactly", () => {
+        expect(clientSupportedContractRange).toEqual({ minimum: 1, maximum: 1 });
     });
 
-    it("refuses every observed contract axis under the empty declaration, never silently accepting", () => {
-        expect(judgeContractSupport(0)).toEqual({
+    it("supports the published axis and refuses every other axis, never silently", () => {
+        expect(judgeContractSupport(1)).toEqual({
+            supported: true,
+            observedVersion: 1,
+            range: { minimum: 1, maximum: 1 },
+        });
+    });
+
+    it("refuses axes below and above the declared range on both inclusive bounds", () => {
+        expect(judgeContractSupport(0)).toMatchObject({
             supported: false,
-            reason: "no-supported-contract-declared",
+            reason: "observed-version-outside-range",
             observedVersion: 0,
         });
-        expect(judgeContractSupport(1)).toEqual({
+        expect(judgeContractSupport(2)).toMatchObject({
             supported: false,
-            reason: "no-supported-contract-declared",
-            observedVersion: 1,
+            reason: "observed-version-outside-range",
+            observedVersion: 2,
         });
-        expect(judgeContractSupport(99)).toEqual({
+        expect(judgeContractSupport(99)).toMatchObject({
             supported: false,
-            reason: "no-supported-contract-declared",
-            observedVersion: 99,
+            reason: "observed-version-outside-range",
         });
+    });
+
+    it("still keeps the null-declaration world reachable: an explicit refusal, not a default", () => {
+        for (const observed of [0, 1, 99]) {
+            expect(judgeContractSupport(observed, null)).toEqual({
+                supported: false,
+                reason: "no-supported-contract-declared",
+                observedVersion: observed,
+            });
+        }
     });
 
     it("honors an explicitly supplied range on both inclusive bounds", () => {
-        const range = { minimum: 1, maximum: 1 };
-        expect(judgeContractSupport(1, range).supported).toBe(true);
-        expect(judgeContractSupport(0, range)).toMatchObject({
-            supported: false,
-            reason: "observed-version-outside-range",
-        });
-        expect(judgeContractSupport(2, range)).toMatchObject({
-            supported: false,
-            reason: "observed-version-outside-range",
-        });
-
         const wider = { minimum: 2, maximum: 3 };
         expect(judgeContractSupport(2, wider).supported).toBe(true);
         expect(judgeContractSupport(3, wider).supported).toBe(true);
@@ -50,23 +54,5 @@ describe("the client's supported-range declaration", () => {
             supported: false,
             reason: "observed-version-outside-range",
         });
-    });
-
-    it("keeps reading and consuming visibly separate: a published v1 document reads, its axis is still unsupported", () => {
-        // A success document and a failure document of the published v1
-        // contract both read strictly under the golden shapes…
-        for (const text of [DESCRIBE_SUCCESS, DESCRIBE_INTERNAL_ERROR]) {
-            const outcome = readHandshakeDocument(text);
-            expect(outcome.status).toBe("read");
-        }
-        // …while the client's declared range still refuses the axis:
-        const read = readHandshakeDocument(DESCRIBE_SUCCESS);
-        if (read.status === "read") {
-            expect(judgeContractSupport(read.document.processContractVersion)).toEqual({
-                supported: false,
-                reason: "no-supported-contract-declared",
-                observedVersion: 1,
-            });
-        }
     });
 });
