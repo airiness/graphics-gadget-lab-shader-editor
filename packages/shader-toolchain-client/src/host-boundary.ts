@@ -24,6 +24,12 @@
  * above it, on the client's readers — the raw bytes and exit code ARE
  * the boundary's entire output. The host owns bounded execution; it
  * captures both streams, it never interprets either one.
+ *
+ * And one guarantee the boundary owes the client: a spawn happens ONLY
+ * after the host's provenance check confirms the candidate's path still
+ * observes the candidate's identity — otherwise the call settles as the
+ * structured `candidate-changed` refusal, not a spawn of an unverified
+ * executable (see `BoundaryResult`).
  */
 import type { BuildId, NativeCompileRequest } from "./native-compile-request.js";
 
@@ -42,19 +48,24 @@ export interface ToolCandidate {
      *  under the path — is a DIFFERENT candidate, and a proof taken under
      *  the old observation stops applying. */
     readonly observationIdentity: string;
-    /** Session time (epoch milliseconds) the candidate resolved. */
+    /** Session time (epoch milliseconds) the candidate resolved.
+     *  OBSERVATION METADATA for inspection — NOT part of the candidate's
+     *  identity: looking at the same unmodified executable again does
+     *  not invalidate a proof. */
     readonly resolvedAt: number;
 }
 
-/** Two candidate observations are the same when every observation fact
- *  agrees — path, provenance identity, rule, and resolution moment. */
+/**
+ * Two candidate observations are the same when their identity facts
+ * agree: the path and the observed identity of the file at that path.
+ * The discovery rule is WHERE the path was found (not what the
+ * executable is), and `resolvedAt` is when it was looked at — neither
+ * is identity. Same unmodified executable under the same path: the same
+ * candidate, no matter how often it is re-resolved or found by a
+ * different rule.
+ */
 export function candidatesEqual(a: ToolCandidate, b: ToolCandidate): boolean {
-    return (
-        a.rule === b.rule &&
-        a.toolPath === b.toolPath &&
-        a.observationIdentity === b.observationIdentity &&
-        a.resolvedAt === b.resolvedAt
-    );
+    return a.toolPath === b.toolPath && a.observationIdentity === b.observationIdentity;
 }
 
 /** One structured failure reason for one discovery rule. */
@@ -97,10 +108,11 @@ export interface BoundaryOutput {
 }
 
 /** compile is issued, then settled: the handle carries the attempt's
- *  BuildId and its eventual output. */
+ *  BuildId and its eventual settlement (execution output, or the
+ *  structured candidate-changed refusal). */
 export interface CompileAttemptHandle {
     readonly buildId: BuildId;
-    readonly result: Promise<BoundaryOutput>;
+    readonly result: Promise<BoundaryResult>;
 }
 
 export interface CancelOutcome {
@@ -114,19 +126,50 @@ export interface CancelOutcome {
 }
 
 /**
+ * The settlement of a handshake or compile call. An OUTCOME, always a
+ * value — and the candidate's provenance is part of it:
+ *
+ * - `spawned` — execution happened (bounded, whole-output captured); the
+ *   raw output surface is the boundary's entire result;
+ * - `candidate-changed` — the host's pre-spawn provenance check found
+ *   the path now observes a DIFFERENT identity than the candidate
+ *   carried: the host did NOT spawn and reports the path's current
+ *   observed identity so the caller can re-discover and re-handshake.
+ *
+ * This is the boundary's guarantee: `handshake(candidate)` and
+ * `compile(candidate, request)` only spawn an executable whose current
+ * observation matches the candidate they were given. What the candidate
+ * identity MEANS (file identity, size/mtime, a hash, an opaque host
+ * token) is the host implementation's business; the check-before-spawn
+ * semantics and the structured refusal are the contract's.
+ */
+export type BoundaryResult =
+    | { readonly kind: "spawned"; readonly output: BoundaryOutput }
+    | {
+        readonly kind: "candidate-changed";
+        readonly candidate: ToolCandidate;
+        readonly observedIdentity: string;
+      };
+
+/**
  * The four capabilities and their shapes. The service implements this
  * boundary and nothing else: it cannot be asked to spawn an argv, to
  * judge a readiness, or to read a protocol.
  */
 export interface HostToolBoundary {
     discover(request: DiscoverRequest): Promise<DiscoverOutcome>;
-    /** Handshakes the tool AT the candidate path; the result bytes are
-     *  the client's to read. */
-    handshake(candidate: ToolCandidate): Promise<BoundaryOutput>;
+    /**
+     * Handshakes the tool AT the candidate path, after the pre-spawn
+     * provenance check: spawned-and-executed output, or the structured
+     * candidate-changed refusal — never a spawn of an unverified
+     * executable.
+     */
+    handshake(candidate: ToolCandidate): Promise<BoundaryResult>;
     /** Compiles by spawning the tool at the candidate path — the EXACT
      *  candidate the editor holds (and, for proof, the candidate the
-     *  client's proof was taken under). The boundary owns no "current
-     *  tool" of its own. */
+     *  client's proof was taken under) — under the same pre-spawn
+     *  provenance guarantee. The boundary owns no "current tool" of its
+     *  own. */
     compile(candidate: ToolCandidate, request: NativeCompileRequest): Promise<CompileAttemptHandle>;
     cancel(buildId: BuildId): Promise<CancelOutcome>;
 }

@@ -248,9 +248,9 @@ describe("the ToolCompatibility state machine", () => {
             expect(rebound.proof.candidate).toEqual(otherObservation);
         }
 
-        // And a candidate-resolved event for yet another observation drops
+        // And a candidate-resolved event for a distinct observation drops
         // the proof entirely — back to the FACT.
-        const thirdObservation: ToolCandidate = { ...CANDIDATE, resolvedAt: 1_700_000_001_000 };
+        const thirdObservation: ToolCandidate = { ...CANDIDATE, observationIdentity: "file-identity:third-binary" };
         const dropped = applyCompatibilityEvent(rebound, { kind: "candidate-resolved", candidate: thirdObservation }, REQUIREMENT);
         expect(dropped).toEqual({ status: "discovered", candidate: thirdObservation });
     });

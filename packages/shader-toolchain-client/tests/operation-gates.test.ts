@@ -56,6 +56,15 @@ describe("the compile gate", () => {
         expect(admitCompile(state, CANDIDATE)).toEqual({ admitted: true });
     });
 
+    it("keeps the proof valid for a re-observation of the SAME executable — resolvedAt is metadata, not identity", () => {
+        const state = compatibleState();
+        // Looked at later, and found by a different rule — but the path
+        // and the observed file identity are unchanged: the same
+        // candidate, and the proof still applies.
+        const reSeen = { ...CANDIDATE, resolvedAt: 1_750_000_000_000, rule: "bundled" as const };
+        expect(admitCompile(state, reSeen)).toEqual({ admitted: true });
+    });
+
     it("refuses a different candidate observation for a proven tool — proof does not travel", () => {
         const state = compatibleState();
         const refused = admitCompile(state, OTHER_OBSERVATION);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { HostToolBoundary, ToolCandidate } from "../src/host-boundary.js";
+import type { BoundaryResult, HostToolBoundary, ToolCandidate } from "../src/host-boundary.js";
 import type { NativeCompileRequest } from "../src/native-compile-request.js";
 import {
     FakeHostBoundary,
@@ -39,6 +39,15 @@ function spec(change: Partial<FakeToolchainSpec> = {}): FakeToolchainSpec {
 
 function aSuccessCall(stdout: string, exitCode: number): FakeBoundaryCall {
     return { stdout, exitCode };
+}
+
+/** Unwraps a settlement onto its execution output — a structured refusal
+ *  is an explicit test failure. */
+function outputOf(result: BoundaryResult, what: string) {
+    if (result.kind !== "spawned") {
+        throw new Error(`test setup: ${what} must settle as spawned`);
+    }
+    return result.output;
 }
 
 describe("the reference fake host boundary", () => {
@@ -95,7 +104,7 @@ describe("the reference fake host boundary", () => {
 
     it("settles a handshake with the exact scripted output surface — stderr in the contract's own empty shape by default", async () => {
         const fake = new FakeHostBoundary(spec());
-        const output = await fake.handshake(CANDIDATE);
+        const output = outputOf(await fake.handshake(CANDIDATE), "the handshake");
         expect(output.stdout).toEqual(utf8Encode(DESCRIBE_SUCCESS));
         expect(output.stderr).toEqual(new Uint8Array(0));
         expect(output.exitCode).toBe(0);
@@ -109,27 +118,44 @@ describe("the reference fake host boundary", () => {
         const fake = new FakeHostBoundary(
             spec({ handshake: { stdout: DESCRIBE_SUCCESS, exitCode: 0, stderr: pollution } }),
         );
-        const output = await fake.handshake(CANDIDATE);
+        const output = outputOf(await fake.handshake(CANDIDATE), "the handshake");
         expect(output.stderr).toEqual(utf8Encode(pollution));
         expect(output.stdout).toEqual(utf8Encode(DESCRIBE_SUCCESS));
     });
 
-    it("settles a canceled attempt with both streams empty and the canceled fact", async () => {
-        const fake = new FakeHostBoundary(spec({ keepCompilePending: true }));
-        const inFlight = await fake.compile(CANDIDATE, REQUEST);
-        await fake.cancel(inFlight.buildId);
-        const settled = await inFlight.result;
-        expect(settled.canceled).toBe(true);
-        expect(settled.stdout).toEqual(new Uint8Array(0));
-        expect(settled.stderr).toEqual(new Uint8Array(0));
+    it("refuses the spawn BEFORE it happens when the candidate's observation changed — a structured result, never a launch of an unverified executable", async () => {
+        const observedNow = "file-identity:sha256:bb";
+        const check = { kind: "changed" as const, observedIdentity: observedNow };
+        const handshake = new FakeHostBoundary(spec({ candidateCheck: check }));
+        const handshakeResult = await handshake.handshake(CANDIDATE);
+        expect(handshakeResult).toEqual({
+            kind: "candidate-changed",
+            candidate: CANDIDATE,
+            observedIdentity: observedNow,
+        });
+
+        const compile = new FakeHostBoundary(spec({ candidateCheck: check, keepCompilePending: true }));
+        const handle = await compile.compile(CANDIDATE, REQUEST);
+        const settlement = await handle.result;
+        expect(settlement).toEqual({
+            kind: "candidate-changed",
+            candidate: CANDIDATE,
+            observedIdentity: observedNow,
+        });
+        // A refused spawn is not an in-flight attempt: cancel reports it
+        // as already settled.
+        expect(await compile.cancel(handle.buildId)).toEqual({
+            buildId: handle.buildId,
+            canceled: false,
+            alreadySettled: true,
+        });
     });
 
-    it("issues separate BuildIds and settles each attempt with its own script", async () => {
-        const ok = `{"command":"compile","success":true,"status":"ok","exitCode":0,"recipeId":"${"3f".repeat(32)}","buildKey":"${"5e".repeat(32)}","binaryHash":"${"9c".repeat(32)}","binaryFormat":"dxil","target":"gglab-dx12","binaryPath":"C:/gglab/build/cache/${"9c".repeat(32)}.dxil","cacheRecordPath":"C:/gglab/build/cache/${"9c".repeat(32)}.dxil.json","fromCache":false,"diagnostics":[]}`;
+    it("issues separate BuildIds and settles each spawn with its own script", async () => {
         const fake = new FakeHostBoundary(
             spec({
                 compile: [
-                    aSuccessCall(ok, 0),
+                    aSuccessCall(COMPILE_OK, 0),
                     { stdout: "", exitCode: 4, timedOut: false },
                 ],
             }),
@@ -137,33 +163,33 @@ describe("the reference fake host boundary", () => {
         const first = await fake.compile(CANDIDATE, REQUEST);
         const second = await fake.compile(CANDIDATE, REQUEST);
         expect(first.buildId).not.toEqual(second.buildId);
-        const firstResult = await first.result;
-        const secondResult = await second.result;
-        expect(firstResult.stdout).toEqual(utf8Encode(ok));
+        const firstResult = outputOf(await first.result, "the first compile");
+        const secondResult = outputOf(await second.result, "the second compile");
+        expect(firstResult.stdout).toEqual(utf8Encode(COMPILE_OK));
         expect(secondResult.exitCode).toBe(4);
         expect(fake.compileCalls).toBe(2);
     });
 
-    it("keeps attempts in flight under the script's control, with no time elapsing", async () => {
-        const ok = `{"command":"compile","success":true,"status":"ok","exitCode":0,"recipeId":"${"3f".repeat(32)}","buildKey":"${"5e".repeat(32)}","binaryHash":"${"9c".repeat(32)}","binaryFormat":"dxil","target":"gglab-dx12","binaryPath":"C:/gglab/build/cache/${"9c".repeat(32)}.dxil","cacheRecordPath":"C:/gglab/build/cache/${"9c".repeat(32)}.dxil.json","fromCache":false,"diagnostics":[]}`;
+    it("keeps spawns in flight under the script's control, with no time elapsing", async () => {
         const fake = new FakeHostBoundary(
-            spec({ keepCompilePending: true, compile: [aSuccessCall(ok, 0), { stdout: "", exitCode: 7 }] }),
+            spec({ keepCompilePending: true, compile: [aSuccessCall(COMPILE_OK, 0), { stdout: "", exitCode: 7 }] }),
         );
         // Before any compile: nothing is in flight — an explicit fact.
         expect(fake.releasePending()).toBe(false);
         const pending = await fake.compile(CANDIDATE, REQUEST);
         expect(fake.releasePending(pending.buildId)).toBe(true);
-        const settled = await pending.result;
-        expect(settled.stdout).toEqual(utf8Encode(ok));
-        // A second in-flight attempt coexists until its own settlement.
+        const settled = outputOf(await pending.result, "the pending compile");
+        expect(settled.stdout).toEqual(utf8Encode(COMPILE_OK));
+        // A second in-flight spawn coexists until its own settlement.
         const second = await fake.compile(CANDIDATE, REQUEST);
         expect(second.buildId.sequence).toBe(2);
         expect(fake.releasePending(pending.buildId)).toBe(false);
         expect(fake.releasePending(second.buildId)).toBe(true);
-        expect((await second.result).exitCode).toBe(7);
+        const secondSettled = outputOf(await second.result, "the second compile");
+        expect(secondSettled.exitCode).toBe(7);
     });
 
-    it("cancels an in-flight attempt as an explicit terminal state, and reports an already-settled fact", async () => {
+    it("cancels an in-flight spawn as an explicit terminal state, and reports an already-settled fact", async () => {
         const fake = new FakeHostBoundary(spec({ keepCompilePending: true }));
         const inFlight = await fake.compile(CANDIDATE, REQUEST);
         const cancelled = await fake.cancel(inFlight.buildId);
@@ -172,9 +198,10 @@ describe("the reference fake host boundary", () => {
             canceled: true,
             alreadySettled: false,
         });
-        const settled = await inFlight.result;
+        const settled = outputOf(await inFlight.result, "the canceled compile");
         expect(settled.canceled).toBe(true);
         expect(settled.stdout).toEqual(new Uint8Array(0));
+        expect(settled.stderr).toEqual(new Uint8Array(0));
         const again = await fake.cancel(inFlight.buildId);
         expect(again.alreadySettled).toBe(true);
     });
@@ -184,7 +211,7 @@ describe("the reference fake host boundary", () => {
             spec({ compile: [{ stdout: "", exitCode: -1, timedOut: true }] }),
         );
         const attempt = await fake.compile(CANDIDATE, REQUEST);
-        const output = await attempt.result;
+        const output = outputOf(await attempt.result, "the timed-out compile");
         expect(output.timedOut).toBe(true);
         expect(output.exitCode).toBe(-1);
         expect(output.stdout).toEqual(new Uint8Array(0));

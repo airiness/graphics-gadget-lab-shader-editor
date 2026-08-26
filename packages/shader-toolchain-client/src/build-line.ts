@@ -34,12 +34,21 @@ import type { CompileFailureDocument, CompileSuccessDocument } from "./result-en
  *  when one was produced and read, and the termination fact when the
  *  attempt ended without a machine document (timeout, no document);
  *  a cancellation is explicit on its own. */
+/** The termination facts of a failed attempt, each one distinct:
+ *  `timed-out` (bounded execution ended it), `channel-violated` (a
+ *  channel rule of the process contract broke — polluted stderr,
+ *  undecodable stdout, an exit-code mismatch), or `no-machine-document`
+ *  (nothing machine-readable on the channel at all). */
 export type AttemptOutcome =
     | { readonly kind: "succeeded"; readonly envelope: CompileSuccessDocument }
     | {
         readonly kind: "failed";
         readonly envelope?: CompileFailureDocument | undefined;
-        readonly termination?: "timed-out" | "no-machine-document" | undefined;
+        readonly termination?:
+            | "timed-out"
+            | "channel-violated"
+            | "no-machine-document"
+            | undefined;
       }
     | { readonly kind: "canceled" };
 

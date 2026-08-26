@@ -39,10 +39,14 @@ export type DiagnosticArrayOutcome =
     | { readonly ok: false; readonly detail: string };
 
 /**
- * Reads the published diagnostics array strictly: every entry must be an
- * object with a `message` string and at most a `sourceIdentity` string —
- * no unknown keys, no untyped prose. Entries are carried verbatim; the
- * toolchain owns their meaning and location authority.
+ * Reads the published diagnostics array under the contract's own
+ * tolerance rules: every entry must be an object carrying a `message`
+ * string, and MAY carry a `sourceIdentity` string (the toolchain's own
+ * location authority, emitted only when it holds one); a mis-typed
+ * `sourceIdentity` rejects, and unknown fields inside an entry are
+ * IGNORED, exactly as at the document top level — the contract owns its
+ * tolerance policy. Carried message/sourceIdentity are what the client
+ * records; entries are never reinterpreted.
  */
 export function readDiagnosticArray(raw: unknown): DiagnosticArrayOutcome {
     if (!Array.isArray(raw)) {
@@ -54,18 +58,14 @@ export function readDiagnosticArray(raw: unknown): DiagnosticArrayOutcome {
         if (!isPlainObject(entry)) {
             return { ok: false, detail: `diagnostics[${index}] is not a JSON object` };
         }
-        if (entry.message === undefined || entry.message === null) {
+        if (!("message" in entry)) {
             return { ok: false, detail: `diagnostics[${index}] is missing its message` };
         }
-        if (!isString(entry.message)) {
+        const message = entry.message;
+        if (!isString(message)) {
             return { ok: false, detail: `diagnostics[${index}].message is not a string` };
         }
-        const unexpected = Object.keys(entry).find((key) => key !== "message" && key !== "sourceIdentity");
-        if (unexpected !== undefined) {
-            return { ok: false, detail: `diagnostics[${index}] carries the unknown field "${unexpected}"` };
-        }
-        const message = entry.message;
-        if (entry.sourceIdentity !== undefined) {
+        if ("sourceIdentity" in entry) {
             if (!isString(entry.sourceIdentity)) {
                 return { ok: false, detail: `diagnostics[${index}].sourceIdentity is not a string` };
             }

@@ -1,9 +1,12 @@
 /**
  * The "semver" comparison rule — the only comparison rule the client
- * implements. Versions follow SemVer 2.0.0 exactly: MAJOR.MINOR.PATCH
- * core (no leading zeros), an optional pre-release (dot identifiers;
- * numeric identifiers carry no leading zeros), an optional build
- * metadata tail.
+ * implements. Versions follow the SemVer 2.0.0 grammar and precedence
+ * over the JS-safe numeric domain: MAJOR.MINOR.PATCH core (no leading
+ * zeros), an optional pre-release (dot identifiers; numeric
+ * identifiers carry no leading zeros), an optional build metadata tail.
+ * Numeric components whose value exceeds Number.MAX_SAFE_INTEGER are
+ * explicitly unparseable in this implementation (a documented domain
+ * bound, not a silent approximation).
  *
  * Precedence per SemVer 2.0.0 section 11: the numeric core first; a
  * pre-release sorts BEFORE the release of the same core; pre-release

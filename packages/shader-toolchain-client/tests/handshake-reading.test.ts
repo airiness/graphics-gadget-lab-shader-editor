@@ -183,16 +183,24 @@ describe("the strict handshake reader", () => {
             "diagnostic without a message",
         );
         expectRejected(
-            readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "diagnostics", [{ message: "x", note: "prose" }])),
-            "diagnostics-malformed",
-            "diagnostic with an unknown field",
-        );
-        expectRejected(
             readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "diagnostics", [{ message: "x", sourceIdentity: 7 }])),
             "diagnostics-malformed",
             "non-string sourceIdentity",
         );
         expectRejected(readHandshakeDocument(withField(DESCRIBE_SUCCESS, "diagnostics", "a message")), "diagnostics-malformed", "diagnostics as a string");
+    });
+
+    it("ignores unknown fields inside a diagnostic entry — the contract owns its tolerance policy, at every level", () => {
+        const text = withField(DESCRIBE_USAGE_ERROR, "diagnostics", [
+            { message: "dxc reported an error", severity: "error" },
+        ]);
+        const outcome = readHandshakeDocument(text);
+        expect(outcome.status, text).toBe("read");
+        if (outcome.status === "read") {
+            expect(outcome.document.diagnostics).toEqual([
+                { message: "dxc reported an error" },
+            ]);
+        }
     });
 
     it("keeps the diagnostic source-identity fact when the tool reports one", () => {

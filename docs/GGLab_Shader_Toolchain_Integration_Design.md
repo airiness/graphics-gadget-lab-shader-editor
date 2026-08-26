@@ -109,11 +109,32 @@ Each resolved candidate is a fact record — never a readiness claim:
 
 ```text
 toolCandidate = {
-  rule:       explicit-config | sibling-build | bundled,
-  toolPath:   <resolved executable>,
-  resolvedAt: <session time>
+  rule:                explicit-config | sibling-build | bundled,
+  toolPath:            <resolved executable>,
+  observationIdentity: <host-generated identity of the file at resolution>,
+  resolvedAt:          <session time — observation METADATA, not identity>
 }
 ```
+
+The candidate's identity is `toolPath + observationIdentity`: the rule is
+WHERE the path was found (not what the executable is), and the resolution
+moment is WHEN it was looked at — looking at the same unmodified
+executable again invalidates nothing. `observationIdentity` is
+host-generated (file identity, size/mtime, a hash, or the host's opaque
+provenance token — the host implementation decides what it is); a changed
+observation of the same path — the binary replaced under the path — is a
+DIFFERENT candidate.
+
+Because of that, proof binds to the exact candidate observation it was
+taken under, and it never travels: a proof under one observation applies
+to no other, and a changed observation loses its proof (re-discover,
+re-handshake the new candidate). The boundary enforces the other half of
+the guarantee — provenance continuity AT SPAWN TIME: `handshake(candidate)`
+and `compile(candidate, request)` spawn only after the host's pre-spawn
+check confirms the path's current observation still matches the
+candidate's identity; a mismatch settles as the structured
+`candidate-changed` refusal (the path's current observed identity, for
+re-discovery) and is NOT a spawn of an unverified executable.
 
 If no rule resolves a candidate, discovery fails as the state `unavailable`,
 carrying one structured reason per failed rule (which rule, why it failed).
@@ -135,9 +156,10 @@ cannot know:
 ```text
 unavailable    no candidate resolved by the discovery rules
 discovered     a candidate resolved — a FACT, never a readiness claim
-unproven       resolved, but not machine-readably proven compatible; the honest
-               state of every real tool until the toolchain handshake contract
-               exists and the client declares it supported
+unproven       resolved, but not machine-readably proven compatible: the
+               observed process-contract axis falls outside the client's
+               declared supported range, the tool's machine facts are
+               absent, or its handshake does not read
 incompatible   resolved, and the TOOL's facts contradict the required ones
 compatible     proven machine-readably compatible
 ```
@@ -155,10 +177,14 @@ compatibility; target readiness is ONE BUILD's compatibility.
 
 ```text
 (any)                     → unavailable   discovery fails on all rules
-discovered/unproven/…     → discovered    a new candidate resolves
-discovered                → unproven      handshake attempted; the client does not
-                                          support a published contract, or the
-                                          tool's facts are absent
+discovered/unproven/…     → discovered    a new candidate observation resolves —
+                                           an observation event, so any proof of a
+                                           prior observation drops with it
+discovered                → unproven      handshake attempted; the observed
+                                           contract axis is outside the client's
+                                           declared supported range, or the
+                                           tool's machine facts are absent, or
+                                           the handshake does not read
 discovered                → incompatible  the tool's facts contradict the required
                                           ones (identity mismatch, version below
                                           the required minimum, contract axis
@@ -166,10 +192,14 @@ discovered                → incompatible  the tool's facts contradict the requ
                                            fact, not part of this verdict
 unproven / incompatible   → compatible    a (re-)handshake proves the tool's
                                            facts under a contract the client
-                                           supports (how an updated same-path
-                                           binary re-enters)
+                                           supports; the proof BINDS to the exact
+                                           candidate observation it was taken under
 compatible                 → unproven / incompatible   tool facts change and
-                                          proof is lost
+                                          proof is lost — or a changed
+                                          observation of the candidate resolves
+                                          (the binary replaced at the path) and
+                                          the proof bound to the old observation
+                                          no longer applies
 (any)                     → unavailable   the tool is no longer resolvable
 ```
 
@@ -210,7 +240,9 @@ Guarantees, per layer — each layer guarantees exactly what it owns:
     is WITHDRAWN — it would make `compatible` unreachable.
   - Compile gate (client-side half): it never forms a legal COMPILE operation
     (a `NativeCompileRequest`) out of an unavailable / unproven /
-    incompatible tool; the refusal is a structured result.
+    incompatible tool — and only for the candidate observation its proof was
+    taken under; a changed observation is refused as unproven again. Every
+    refusal is a structured result.
   It composes nothing — it does not know the descriptor profile, the host,
   or the target, and it is not asked.
 - **The Tauri service guarantees the boundary level:** it executes only
@@ -274,6 +306,15 @@ Reader discipline:
 - When the toolchain publishes (or extends) the contract through its own
   review, the client gains a strict reader for that published form —
   consumption of an external contract, never a definition of one.
+- The client owns the channel interpretation BELOW the document level too:
+  over the boundary's raw execution facts (stdout bytes, stderr bytes, exit
+  code, timeout, cancel) it judges the process-level contract — the terminal
+  states first (canceled / timed-out settle before anything is read), then
+  channel discipline (stderr must be empty; stdout must decode as UTF-8),
+  then the document reading, and only then the consistency fact that the
+  intact document's own exit code equals the process exit code the host
+  observed. The editor composes states from those outcomes, never from raw
+  stream or exit-code checks of its own.
 
 **The result envelope is already a published, stable toolchain contract**
 (machine-readable, tested in the toolchain repository). Consuming it —
@@ -312,13 +353,21 @@ Tauri ShaderToolService       the product host boundary: validates the
                               approved request into the tool's invocation
                               (structural arguments — host-internal, no shell
                               string, no policy), and executes bounded
-                              (timeout/cancel; raw output bytes + exit code
+                              (timeout/cancel; the pre-spawn provenance
+                              check precedes the spawn; stdout + stderr
+                              bytes + exit code + timeout/cancel state —
+                              or the structured candidate-changed refusal —
                               are the entire output)
    ↓
 gglab-shaderc                 production compilation (its own policy, its own evidence)
    ↓
-raw output + exit code →      the Toolchain Client parses the published
-                              envelope → verdicts + result facts
+raw output surface →         the Toolchain Client owns the full
+                              interpretation, level by level: process-level
+                              channel facts FIRST (canceled/timed-out are
+                              terminal; stderr must be empty; stdout must
+                              decode; the document's exit code must equal
+                              the observed process exit code), THEN the
+                              envelope read — verdicts + result facts
 ```
 
 **Build intent and attempt identity — three concepts, not one.**
@@ -358,9 +407,11 @@ The service is the GUI's process boundary and nothing else.
 ```text
 capabilities (exactly these, plus the existing scoped document/descriptor file I/O):
   discover(config)            → toolCandidate facts + per-rule failure reasons
-  handshake(candidate)        → raw output bytes + exit code + timeout state
-  compile(NativeCompileRequest) → buildId ; later: raw output bytes + exit code +
-                                timeout state
+  handshake(candidate)        → execution output (stdout bytes + stderr bytes
+                                + exit code + timeout/cancel state) — or the
+                                structured candidate-changed refusal BEFORE
+                                the spawn
+  compile(candidate, request) → buildId ; the same settlement when it settles
   cancel(buildId)             → explicit canceled state for that build
 
 the boundary's actual job (all host-internal, in Rust):
@@ -369,10 +420,15 @@ the boundary's actual job (all host-internal, in Rust):
   serialization  an APPROVED request is mapped to the tool's invocation —
                  structural arguments, no shell string, ever; this mapping is
                  a host-internal detail and owns no DXC/backend policy
-  execution      the discovered tool at the candidate path is spawned, nothing
-                 else; output bytes captured whole (bounded) or timed out;
-                 timeout and cancel enforced per build; the raw output bytes +
-                 exit code are the ENTIRE output of the boundary
+  execution      the pre-spawn provenance check runs FIRST: the
+                 candidate's path is observed and compared to its carried
+                 identity; a mismatch settles as the structured
+                 candidate-changed refusal and does NOT spawn. Otherwise the
+                 tool at the candidate path is spawned, nothing else; BOTH
+                 streams captured whole (bounded) or timed out; timeout and
+                 cancel enforced per build; the output surface (stdout + stderr
+                 bytes, exit code, timeout/cancel state) — or the
+                 candidate-changed refusal — is the ENTIRE output of the boundary
   staging        the private per-attempt area (§10)
 ```
 
@@ -383,7 +439,9 @@ no generic spawn(argv) — the service exposes only the four capabilities above
     and serializes only approved requests
 no protocol interpretation in Rust — no envelope parsing, status
     interpretation, version comparison, or diagnostic classification
-    (the raw bytes + exit code ARE the output)
+    (the raw output surface — stdout + stderr bytes, exit
+    code, timeout/cancel state — or the candidate-changed
+    refusal — is the entire output)
 no readiness logic in the service — it does not know the descriptor, the
     profile, the host state, or the target policy; whether a request is
     allowed is decided above it, and the service cannot be asked

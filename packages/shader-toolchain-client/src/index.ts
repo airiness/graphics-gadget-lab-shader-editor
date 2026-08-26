@@ -34,4 +34,6 @@ export * from "./tool-compatibility.js";
 export * from "./native-compile-request.js";
 export * from "./build-line.js";
 export * from "./host-boundary.js";
+export * from "./utf8.js";
+export * from "./process-output.js";
 export * from "./testing/fake-host-boundary.js";
