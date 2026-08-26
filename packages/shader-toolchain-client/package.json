@@ -1,0 +1,19 @@
+{
+  "name": "@gglab/shader-toolchain-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Headless GGLab shader toolchain client: the machine-protocol vocabulary, the strict readers for the published handshake and result envelopes, the tool-compatibility state machine, and the revisioned build-line rules.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
+  }
+}
