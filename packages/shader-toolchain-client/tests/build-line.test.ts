@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ToolFacts } from "../src/contract-facts.js";
 import {
+    attemptOutcomeOfCompileResult,
     attemptStateOf,
     currentAttemptOf,
     emptyLine,
@@ -8,8 +9,10 @@ import {
     recordToLine,
     reportBuildLine,
     type AttemptRecord,
+    type AttemptTermination,
     type BuildLine,
 } from "../src/build-line.js";
+import type { ToolCandidate } from "../src/host-boundary.js";
 import { buildIntentOf, type BuildIntent, type NativeCompileRequest } from "../src/native-compile-request.js";
 import { readCompileDocument } from "../src/result-envelope.js";
 import { COMPILE_FAILURE_EXAMPLE, COMPILE_SUCCESS } from "./fixtures/envelope-goldens.js";
@@ -70,7 +73,7 @@ function failed(sequence: number, intent: BuildIntent): AttemptRecord {
     return { buildId: { sequence }, intent, outcome: { kind: "failed", envelope: failureEnvelope() } };
 }
 
-function failedWith(sequence: number, intent: BuildIntent, termination: "timed-out" | "no-machine-document"): AttemptRecord {
+function failedWith(sequence: number, intent: BuildIntent, termination: AttemptTermination): AttemptRecord {
     return { buildId: { sequence }, intent, outcome: { kind: "failed", termination } };
 }
 
@@ -159,7 +162,7 @@ describe("the revisioned build-line rules", () => {
     it("a late success of the CURRENT intent after a newer failure is still current (newest SUCCESS within the intent)", () => {
         let line: BuildLine = emptyLine();
         line = recordToLine(line, succeeded(1, INTENT_DX12));
-        line = recordToLine(line, failedWith(2, INTENT_DX12, "timed-out"));
+        line = recordToLine(line, failedWith(2, INTENT_DX12, { kind: "timed-out" }));
         expect(currentAttemptOf(line, INTENT_DX12)?.buildId.sequence).toBe(1);
         const success = line.attempts.find((record) => record.buildId.sequence === 1);
         if (success === undefined) {
@@ -242,5 +245,125 @@ describe("the revisioned build-line rules", () => {
         const report = reportBuildLine(line, INTENT_VULKAN);
         expect(report.states.map((entry) => entry.buildId.sequence)).toEqual([3, 2, 1]);
         expect(report.states.map((entry) => entry.state)).toEqual(["canceled", "failed", "last-good"]);
+    });
+});
+
+describe("the compile settlement → attempt outcome mapping (client-owned)", () => {
+    const CANDIDATE: ToolCandidate = {
+        rule: "sibling-build",
+        toolPath: "C:/gglab/build/output/x64/Debug/gglab-shaderc.exe",
+        observationIdentity: "file-identity:sha256:9c",
+        resolvedAt: 1_700_000_000_000,
+    };
+
+    it("is total over every settlement the boundary can report", () => {
+        // A refuted candidate keeps the host's own observation facts —
+        // the Inspector never falls back to a bare word.
+        expect(
+            attemptOutcomeOfCompileResult({ kind: "candidate-invalidated", candidate: CANDIDATE, observation: "changed", observedIdentity: "file-identity:bb" }),
+        ).toEqual({
+            kind: "failed",
+            termination: { kind: "candidate-invalidated", observation: "changed", observedIdentity: "file-identity:bb" },
+        });
+        expect(
+            attemptOutcomeOfCompileResult({ kind: "candidate-invalidated", candidate: CANDIDATE, observation: "missing", observedIdentity: null }),
+        ).toEqual({
+            kind: "failed",
+            termination: { kind: "candidate-invalidated", observation: "missing", observedIdentity: null },
+        });
+        expect(attemptOutcomeOfCompileResult({ kind: "launch-failed", candidate: CANDIDATE })).toEqual({
+            kind: "failed",
+            termination: { kind: "launch-failed" },
+        });
+    });
+
+    it("walks the spawned settlements through the process-level reading", () => {
+        const result = attemptOutcomeOfCompileResult({
+            kind: "spawned",
+            output: {
+                stdout: utf8Encode(COMPILE_SUCCESS),
+                stderr: new Uint8Array(0),
+                exitCode: 0,
+                timedOut: false,
+                canceled: false,
+            },
+        });
+        if (result.kind !== "succeeded") {
+            throw new Error("test setup: the success golden must map to a successful attempt");
+        }
+        expect(result.envelope.success).toBe(true);
+
+        expect(
+            attemptOutcomeOfCompileResult({
+                kind: "spawned",
+                output: { stdout: new Uint8Array(0), stderr: new Uint8Array(0), exitCode: -1, timedOut: false, canceled: true },
+            }),
+        ).toEqual({ kind: "canceled" });
+
+        expect(
+            attemptOutcomeOfCompileResult({
+                kind: "spawned",
+                output: { stdout: new Uint8Array(0), stderr: new Uint8Array(0), exitCode: -1, timedOut: true, canceled: false },
+            }),
+        ).toEqual({ kind: "failed", termination: { kind: "timed-out" } });
+
+        const polluted = "dxc: something on the side channel";
+        expect(
+            attemptOutcomeOfCompileResult({
+                kind: "spawned",
+                output: { stdout: utf8Encode(COMPILE_SUCCESS), stderr: utf8Encode(polluted), exitCode: 0, timedOut: false, canceled: false },
+            }),
+        ).toEqual({
+            kind: "failed",
+            termination: {
+                kind: "channel-violated",
+                violation: { reason: "stderr-non-empty", byteLength: utf8Encode(polluted).byteLength },
+            },
+        });
+
+        const garbage = attemptOutcomeOfCompileResult({
+            kind: "spawned",
+            output: { stdout: utf8Encode("{ nope"), stderr: new Uint8Array(0), exitCode: 0, timedOut: false, canceled: false },
+        });
+        if (garbage.kind !== "failed" || garbage.termination?.kind !== "no-machine-document") {
+            throw new Error("test setup: the garbage must map to no-machine-document");
+        }
+        expect(garbage.termination.rejection.reason).toBe("not-json");
+    });
+
+    it("keeps the tool's own envelopes when a document was read", () => {
+        const failureOutcome = readCompileDocument(COMPILE_FAILURE_EXAMPLE);
+        if (failureOutcome.status !== "read" || failureOutcome.document.success !== false) {
+            throw new Error("test setup: the failure golden must read as a failure document");
+        }
+        const failureDoc = failureOutcome.document;
+        const failure = attemptOutcomeOfCompileResult({
+            kind: "spawned",
+            output: {
+                stdout: utf8Encode(COMPILE_FAILURE_EXAMPLE),
+                stderr: new Uint8Array(0),
+                exitCode: failureDoc.exitCode,
+                timedOut: false,
+                canceled: false,
+            },
+        });
+        expect(failure).toEqual({ kind: "failed", envelope: failureDoc });
+
+        const successOutcome = readCompileDocument(COMPILE_SUCCESS);
+        if (successOutcome.status !== "read" || successOutcome.document.success !== true) {
+            throw new Error("test setup: the success golden must read as a success document");
+        }
+        const successDoc = successOutcome.document;
+        const success = attemptOutcomeOfCompileResult({
+            kind: "spawned",
+            output: {
+                stdout: utf8Encode(COMPILE_SUCCESS),
+                stderr: new Uint8Array(0),
+                exitCode: successDoc.exitCode,
+                timedOut: false,
+                canceled: false,
+            },
+        });
+        expect(success).toEqual({ kind: "succeeded", envelope: successDoc });
     });
 });

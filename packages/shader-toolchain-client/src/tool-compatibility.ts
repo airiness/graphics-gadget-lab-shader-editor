@@ -15,14 +15,16 @@
  *
  * Proof is bound to a candidate OBSERVATION: the handshake event carries
  * the candidate the editor actually handshook, and the proof records it.
- * A candidate whose provenance has changed (the same path now holding
- * another binary, or no file at all) is a different observation: the
- * host's settlement says so structurally (candidate-invalidated), the
- * proof bound to the old observation no longer applies, and the state
- * returns to discovered-for-that-candidate — never a service keeping a
- * hidden "current tool". Bounded execution failing to launch at all is
- * equally structured (launch-failed), and equally unproven: a fact, not
- * a crash.
+ * A candidate whose provenance has failed (the same path now holding
+ * another binary, no file at all, or an unreadable one) is refuted by
+ * the host — regardless of whether the host reports it on a handshake or
+ * on a compile settlement, that is a CANDIDATE LIFECYCLE event, not a
+ * handshake settlement: the refuted observation is no longer a valid
+ * candidate FACT, so the tool returns to `unavailable` (no currently
+ * valid resolved candidate), the proof bound to it is void, and only a
+ * fresh discovery + handshake can re-enter. Bounded execution failing to
+ * launch at all is equally structured (launch-failed), and equally
+ * unproven: a fact, not a crash.
  *
  * A handshake CANCELED by the operator is NOT tool evidence: no fact was
  * reported, so the state stays as it was.
@@ -90,8 +92,12 @@ export interface ToolProof {
     readonly candidate: ToolCandidate;
 }
 
-/** The tool's state as the client judges it. `unavailable` is the initial
- *  state: no candidate resolved by the discovery rules. */
+/** The tool's state as the client judges it. `unavailable` means NO
+ *  CURRENTLY VALID resolved candidate: the discovery rules found
+ *  nothing, or the resolved observation was refuted (invalidated) by
+ *  the host at spawn time. It is the initial state, and the state the
+ *  tool returns to until discovery and handshake re-establish a candidate
+ *  and its proof. */
 export type ToolCompatibilityState =
     | { readonly status: "unavailable" }
     | { readonly status: "discovered"; readonly candidate: ToolCandidate }
@@ -117,27 +123,37 @@ export const initialToolState: ToolCompatibilityState = { status: "unavailable" 
  * settlement, fully read. `spawned` carries the PROCESS-LEVEL outcome of
  * the read — the terminal states (canceled, timed-out), the channel
  * discipline (channel-violated), the unsupported-axis observation, the
- * structured rejection, or the intact document (read); the other two
- * kinds are the host's pre-spawn refusal and the bounded-execution
- * launch failure. The readers do the parsing, the axis gate, and the
- * channel judgment; the machine does the state judgment.
+ * structured rejection, or the intact document (read); `launch-failed`
+ * is the bounded-execution launch failure. Candidate invalidation does
+ * NOT ride a handshake settlement: it is its own lifecycle event below
+ * (the host reports it on a handshake or on a compile attempt alike).
+ * The readers do the parsing, the axis gate, and the channel judgment;
+ * the machine does the state judgment.
  */
 export type HandshakeSettlement =
     | { readonly kind: "spawned"; readonly process: HandshakeProcessOutcome }
-    | {
-        readonly kind: "candidate-invalidated";
-        readonly observation: CandidateObservation;
-        readonly observedIdentity: string | null;
-      }
     | { readonly kind: "launch-failed" };
 
-/** A tool-side event. `handshake` carries the candidate observation
- *  actually handshook and its settlement (see `HandshakeSettlement`) —
- *  the machine is total over every settlement kind. */
+/**
+ * A tool-side event. `handshake` carries the candidate observation
+ * actually handshook and its settlement (see `HandshakeSettlement`).
+ * `candidate-invalidated` is a candidate LIFECYCLE event — the host's
+ * provenance refutation fires here whether it was reported on a
+ * handshake or a compile attempt, so the machine is total over every
+ * source: the refuted observation stops being a valid candidate FACT,
+ * any proof bound to it is void, and the tool returns to `unavailable`
+ * until discovery produces a fresh observation.
+ */
 export type CompatibilityEvent =
     | { readonly kind: "discovery-failed" }
     | { readonly kind: "candidate-resolved"; readonly candidate: ToolCandidate }
     | { readonly kind: "candidate-lost" }
+    | {
+        readonly kind: "candidate-invalidated";
+        readonly candidate: ToolCandidate;
+        readonly observation: CandidateObservation;
+        readonly observedIdentity: string | null;
+      }
     | {
         readonly kind: "handshake";
         readonly candidate: ToolCandidate;
@@ -186,6 +202,15 @@ export function applyCompatibilityEvent(
     if (event.kind === "discovery-failed" || event.kind === "candidate-lost") {
         return { status: "unavailable" };
     }
+    // The host refuted the resolved observation at spawn time (changed /
+    // missing / unreadable — on a handshake or a compile attempt, both).
+    // `discovered` is a FACT; a refuted observation is no longer a fact,
+    // so the tool returns to `unavailable` — no currently valid resolved
+    // candidate — where its proof is void and there is nothing to
+    // handshake. Only a fresh discovery + handshake re-enters.
+    if (event.kind === "candidate-invalidated") {
+        return { status: "unavailable" };
+    }
     if (event.kind === "candidate-resolved") {
         // A newly resolved candidate is a FACT — proof is established by
         // the handshake, so even a previously compatible tool returns to
@@ -205,14 +230,6 @@ export function applyCompatibilityEvent(
     // at the process level (terminal states, channel discipline, the
     // axis, the document) before the state judgment.
     const result = event.result;
-    if (result.kind === "candidate-invalidated") {
-        // Provenance continuity broke at spawn time (changed / missing /
-        // unreadable): any proof was taken under the old observation and
-        // no longer applies; the candidate is again a FACT that must be
-        // re-handshoked — and re-discovered first, for a fresh
-        // observation.
-        return { status: "discovered", candidate: event.candidate };
-    }
     if (result.kind === "launch-failed") {
         // Bounded execution itself could not launch the candidate: a
         // structured fact, not a crash.

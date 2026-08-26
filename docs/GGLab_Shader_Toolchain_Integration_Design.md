@@ -163,7 +163,8 @@ cannot know:
 **Tool compatibility (judged by the Toolchain Client):**
 
 ```text
-unavailable    no candidate resolved by the discovery rules
+unavailable    no CURRENTLY VALID resolved candidate — none found, or the
+               resolved observation was refuted by the host at spawn time
 discovered     a candidate resolved — a FACT, never a readiness claim
 unproven       resolved, but not machine-readably proven compatible: the
                observed process-contract axis falls outside the client's
@@ -211,10 +212,11 @@ compatible                 → unproven / incompatible   tool facts change and
                                           (the binary replaced at the path) and
                                           the proof bound to the old observation
                                           no longer applies
-(any resolved)            → discovered    the host reports the candidate's
-                                           observation invalidated (changed / missing / unreadable) — the proof
-                                           bound to the old observation no longer applies;
-                                           re-discover and re-handshake
+(any)                     → unavailable   the host refutes the candidate's observation
+                                           (changed / missing / unreadable) on a handshake or a compile
+                                           attempt — the refuted observation is no longer a
+                                           fact, the proof bound to it is void, and there is no candidate
+                                           left to handshake; a fresh discovery + handshake re-enters
 (any)                     → unavailable   the tool is no longer resolvable
 ```
 

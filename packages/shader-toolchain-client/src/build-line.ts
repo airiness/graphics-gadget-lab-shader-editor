@@ -27,37 +27,106 @@
  */
 import type { BuildId, BuildIntent } from "./native-compile-request.js";
 import { buildIntentsEqual } from "./native-compile-request.js";
-import type { CompileFailureDocument, CompileSuccessDocument } from "./result-envelope.js";
+import type {
+    CompileFailureDocument,
+    CompileRejection,
+    CompileSuccessDocument,
+} from "./result-envelope.js";
+import type { ChannelViolation } from "./process-output.js";
+import type { BoundaryResult, CandidateObservation } from "./host-boundary.js";
+import { readCompileOutput } from "./process-output.js";
+
+/** One structured termination of a failed attempt — each distinct, and
+ *  carrying the host's or the contract's own facts (the Build Inspector
+ *  can surface them verbatim): `timed-out` (bounded execution ended
+ *  it), `channel-violated` (a channel rule of the process contract
+ *  broke — with the violation), `no-machine-document` (nothing
+ *  machine-readable on the channel — with the structured rejection),
+ *  `candidate-invalidated` (the host's pre-spawn provenance check
+ *  refused the launch — with the host's own observation facts: changed /
+ *  missing / unreadable + the current identity), or `launch-failed`
+ *  (bounded execution itself could not launch the candidate). */
+export type AttemptTermination =
+    | { readonly kind: "timed-out" }
+    | { readonly kind: "channel-violated"; readonly violation: ChannelViolation }
+    | { readonly kind: "no-machine-document"; readonly rejection: CompileRejection }
+    | {
+        readonly kind: "candidate-invalidated";
+        readonly observation: CandidateObservation;
+        readonly observedIdentity: string | null;
+      }
+    | { readonly kind: "launch-failed" };
 
 /** The read outcome of one attempt. A success carries the tool's own
  *  evidence envelope; a failure carries the tool's own failure envelope
- *  when one was produced and read, and the termination fact when the
- *  attempt ended without a machine document (timeout, no document);
- *  a cancellation is explicit on its own.
- *
- *  The termination facts of a failed attempt, each one distinct:
- *  `timed-out` (bounded execution ended it), `channel-violated` (a
- *  channel rule of the process contract broke — polluted stderr,
- *  undecodable stdout, an exit-code mismatch), `no-machine-document`
- *  (nothing machine-readable on the channel at all),
- *  `candidate-invalidated` (the host's pre-spawn provenance check
- *  refused the launch — the path changed / vanished / became unreadable
- *  after the candidate resolved), or `launch-failed` (bounded execution
- *  itself could not launch the candidate). */
+ *  when one was produced and read, or a structured termination fact
+ *  (see `AttemptTermination`) when the attempt ended before a machine
+ *  document could be read; a cancellation is explicit on its own. */
 export type AttemptOutcome =
     | { readonly kind: "succeeded"; readonly envelope: CompileSuccessDocument }
     | {
         readonly kind: "failed";
         readonly envelope?: CompileFailureDocument | undefined;
-        readonly termination?:
-            | "timed-out"
-            | "channel-violated"
-            | "no-machine-document"
-            | "candidate-invalidated"
-            | "launch-failed"
-            | undefined;
+        readonly termination?: AttemptTermination | undefined;
       }
     | { readonly kind: "canceled" };
+
+/**
+ * The client's single mapping of everything the boundary can settle a
+ * compile attempt into one attempt outcome — the Build Inspector and the
+ * editor record outcomes, they never interpret settlements:
+ *
+ * - `candidate-invalidated` → a failed attempt, termination carrying
+ *   the host's own observation facts (changed / missing / unreadable,
+ *   and the current identity when it holds one);
+ * - `launch-failed` → a failed attempt under that termination fact;
+ * - a spawned `canceled` → `canceled`;
+ * - a spawned `timed-out` → a failed attempt (timed-out);
+ * - a spawned `channel-violated` → a failed attempt (with the
+ *   violation);
+ * - a spawned `rejected` → a failed attempt (no-machine-document, with
+ *   the structured rejection);
+ * - a spawned failure document → a failed attempt with the tool's own
+ *   envelope;
+ * - a spawned success document → a successful attempt with the tool's
+ *   own envelope.
+ */
+export function attemptOutcomeOfCompileResult(result: BoundaryResult): AttemptOutcome {
+    if (result.kind === "candidate-invalidated") {
+        return {
+            kind: "failed",
+            termination: {
+                kind: "candidate-invalidated",
+                observation: result.observation,
+                observedIdentity: result.observedIdentity,
+            },
+        };
+    }
+    if (result.kind === "launch-failed") {
+        return { kind: "failed", termination: { kind: "launch-failed" } };
+    }
+    const process = readCompileOutput(result.output);
+    if (process.kind === "canceled") {
+        return { kind: "canceled" };
+    }
+    if (process.kind === "timed-out") {
+        return { kind: "failed", termination: { kind: "timed-out" } };
+    }
+    if (process.kind === "channel-violated") {
+        return { kind: "failed", termination: { kind: "channel-violated", violation: process.violation } };
+    }
+    if (process.kind === "rejected") {
+        return {
+            kind: "failed",
+            termination: { kind: "no-machine-document", rejection: process.rejection },
+        };
+    }
+    const document = process.document;
+    if (document.success === true) {
+        return { kind: "succeeded", envelope: document };
+    }
+    return { kind: "failed", envelope: document };
+}
 
 /** One concrete attempt, bound to the intent it belongs to and ordered
  *  by its BuildId. */

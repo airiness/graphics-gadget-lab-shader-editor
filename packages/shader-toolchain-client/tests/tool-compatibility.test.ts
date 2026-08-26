@@ -256,7 +256,7 @@ describe("the ToolCompatibility state machine", () => {
         }
     });
 
-    it("loses the proof when the host refuses a spawn over an invalidated candidate — back to the FACT", () => {
+    it("drops the proof when the host invalidates the candidate's observation — from whatever path it arrived", () => {
         const compatible = applyCompatibilityEvent(
             { status: "discovered", candidate: CANDIDATE },
             handshake(CANDIDATE, DESCRIBE_SUCCESS),
@@ -267,17 +267,37 @@ describe("the ToolCompatibility state machine", () => {
         }
         expect(compatible.proof.candidate).toEqual(CANDIDATE);
 
-        for (const result of [
-            { kind: "candidate-invalidated" as const, observation: "changed" as const, observedIdentity: "file-identity:replaced" },
-            { kind: "candidate-invalidated" as const, observation: "missing" as const, observedIdentity: null },
-            { kind: "candidate-invalidated" as const, observation: "unreadable" as const, observedIdentity: null },
+        // Candidate invalidation is a LIFECYCLE event: the host reports it
+        // alike on a handshake or on a compile attempt, and the refuted
+        // observation stops being a FACT. The tool goes to `unavailable` —
+        // no currently valid candidate, nothing to handshake, and the old
+        // observation cannot loop back into proof. Re-entry is only a
+        // fresh discovery for a new observation + handshake.
+        for (const observation of [
+            { observation: "changed" as const, observedIdentity: "file-identity:replaced" },
+            { observation: "missing" as const, observedIdentity: null },
+            { observation: "unreadable" as const, observedIdentity: null },
         ]) {
-            const event: CompatibilityEvent = { kind: "handshake", candidate: CANDIDATE, result };
-            expect(applyCompatibilityEvent(compatible, event, REQUIREMENT)).toEqual({
-                status: "discovered",
+            const event: CompatibilityEvent = {
+                kind: "candidate-invalidated",
                 candidate: CANDIDATE,
+                observation: observation.observation,
+                observedIdentity: observation.observedIdentity,
+            };
+            expect(applyCompatibilityEvent(compatible, event, REQUIREMENT)).toEqual({
+                status: "unavailable",
             });
         }
+
+        // And from any resolved state, not only compatible.
+        expect(
+            applyCompatibilityEvent({ status: "discovered", candidate: CANDIDATE }, {
+                kind: "candidate-invalidated",
+                candidate: CANDIDATE,
+                observation: "missing",
+                observedIdentity: null,
+            }, REQUIREMENT),
+        ).toEqual({ status: "unavailable" });
     });
 
     it("collects every contradicted fact as a visible mismatch", () => {
