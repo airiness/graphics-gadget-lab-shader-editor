@@ -92,11 +92,14 @@ export function sessionSettle(session: NativeBuildSession, buildId: BuildId, out
     }
     const line = recordToLine(session.line, { buildId: issued.buildId, intent: issued.intent, outcome });
     const inFlight = session.inFlight.filter((attempt) => attempt.buildId.sequence !== buildId.sequence);
-    // The intent anchor keeps naming the newest in-flight attempt while
-    // any remain; when the line goes quiet it keeps the last settled
-    // attempt's intent (the projection stays meaningful after quieting).
-    const lastIssued = inFlight[inFlight.length - 1] ?? { buildId: issued.buildId, intent: issued.intent };
-    return { line, inFlight, lastIssued };
+    // The anchor is the LAST ISSUED attempt — a settlement NEVER moves it.
+    // If the newly issued one settles before an older one is still in
+    // flight, the anchor stays on the intent of the newer attempt: it is
+    // current against ITS intent, and the late old attempt can only land
+    // as stale (or failed) evidence. Moving the anchor back to the older
+    // attempt would be the "slow old completion becomes current" bug this
+    // store exists to prevent (§11). Only a new issue ever moves it.
+    return { line, inFlight, lastIssued: session.lastIssued };
 }
 
 /**

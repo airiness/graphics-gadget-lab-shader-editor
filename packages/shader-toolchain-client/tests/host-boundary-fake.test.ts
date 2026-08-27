@@ -214,6 +214,25 @@ describe("the reference fake host boundary", () => {
         expect(secondSettled.exitCode).toBe(7);
     });
 
+    it("settles an in-flight spawn with an explicit structured settlement when the world reports one — the script is only the default", async () => {
+        const fake = new FakeHostBoundary(spec({ keepCompilePending: true }));
+        const inFlight = await fake.compile(CANDIDATE, REQUEST);
+        const settlement: BoundaryResult = {
+            kind: "candidate-invalidated",
+            candidate: CANDIDATE,
+            observation: "missing",
+            observedIdentity: null,
+        };
+        expect(fake.releasePending(inFlight.buildId, settlement)).toBe(true);
+        await expect(inFlight.result).resolves.toEqual(settlement);
+        // The scripted settlement is unchanged for the others: a fresh
+        // spawn still settles with its own script.
+        const next = await fake.compile(CANDIDATE, REQUEST);
+        expect(fake.releasePending(next.buildId)).toBe(true);
+        const scripted = outputOf(await next.result, "the scripted settlement");
+        expect(scripted.stdout).toEqual(utf8Encode(COMPILE_OK));
+    });
+
     it("cancels an in-flight spawn as an explicit terminal state, and reports an already-settled fact", async () => {
         const fake = new FakeHostBoundary(spec({ keepCompilePending: true }));
         const inFlight = await fake.compile(CANDIDATE, REQUEST);

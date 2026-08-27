@@ -200,11 +200,27 @@ same executable must not oscillate between `incompatible` and `compatible`
 when the user changes the target. Tool compatibility is the TOOL's
 compatibility; target readiness is ONE BUILD's compatibility.
 
+A re-statement of the REQUIREMENT (the judgment input — the tool
+identity, minimum version, comparison rule) is tool-side too: every
+verdict was taken under it, so a changed requirement voids them. The
+candidate observation is unaffected (the tool did not change; the
+demand did), so the tool drops to `discovered` keeping its candidate,
+and a fresh handshake re-proves it under the new requirement. The
+client never re-judges from stored facts and never compares versions
+itself — re-proof is the handshake. A re-statement of the SAME value
+changed nothing: the verdict stands.
+
 ```text
 (any)                     → unavailable   discovery fails on all rules
 discovered/unproven/…     → discovered    a new candidate observation resolves —
                                            an observation event, so any proof of a
                                            prior observation drops with it
+discovered/unproven/…     → discovered    the REQUIREMENT (judgment input) is
+                                           re-stated — every verdict taken under
+                                           the old requirement is void; the
+                                           candidate observation stays a fact
+                                           (the tool did not change; the demand
+                                           did); a fresh handshake re-proves
 discovered                → unproven      handshake attempted; the observed
                                            contract axis is outside the client's
                                            declared supported range, or the
@@ -742,6 +758,21 @@ anywhere.
       same gglab-shaderc version): a DIFFERENT BuildIntent — a slow result
       of the old producer lands late and cannot become current; the late
       result is `stale` evidence with its intent visible.
+  12. two different intents in flight, and the NEWER one settles FIRST
+     (the mirror of 5's order): the newer one is current the moment it
+     settles; the late old attempt lands as `stale` and cannot displace
+     it — the intent anchor never moves backwards;
+  13. a candidate-invalidation settlement landing INSIDE the second
+     attempt's admission window: the tool state drops (it is a lifecycle
+     event for the current state), but the admitted attempt keeps its
+     OWN admission-bound intent — its BuildIntent never rebinds to a
+     later state, and its settlement never crashes against a state
+     without proven facts;
+  14. a requirement CHANGE (higher minimum, new identity, …) voids the
+     verdict taken under the old requirement: the candidate observation
+     stays a fact (→ `discovered`, NotReady until re-proof), a fresh
+     handshake re-proves under the new requirement, and a re-statement
+     of the SAME value changes nothing.
 
 **Non-normative test invariants:** no test asserts against a human-facing
 tool surface (`--version` text, `targets` listing, help output) — such a

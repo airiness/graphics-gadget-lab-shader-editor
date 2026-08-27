@@ -439,6 +439,61 @@ describe("the ToolCompatibility state machine", () => {
         }
     });
 
+    it("a requirement change voids the verdicts taken under the old one — the candidate stays a fact, the handshake re-proves", () => {
+        // Proven, unproven, and incompatible alike: every verdict was
+        // judged under the old requirement, so a re-statement of it
+        // voids it — dropping the tool to `discovered` with ITS
+        // candidate preserved (the tool did not change; the demand did).
+        const proven = applyCompatibilityEvent(
+            { status: "discovered", candidate: CANDIDATE },
+            handshake(CANDIDATE, DESCRIBE_SUCCESS),
+            REQUIREMENT,
+        );
+        const unproven: ToolCompatibilityState = {
+            status: "unproven",
+            candidate: CANDIDATE,
+            reasons: [{ reason: "handshake-timed-out" }],
+        };
+        const incompatible: ToolCompatibilityState = {
+            status: "incompatible",
+            candidate: CANDIDATE,
+            mismatches: [{ kind: "version", version: { status: "below-minimum", observedVersion: "0.9.0", minimumVersion: "1.0.0" } }],
+        };
+        const raised = { requirement: { ...REQUIRED, minimumVersion: "2.0.0" } };
+        for (const state of [proven, unproven, incompatible]) {
+            expect(
+                applyCompatibilityEvent(state, { kind: "requirement-changed" }, raised).status,
+                `a ${state.status} verdict is void under the new requirement`,
+            ).toBe("discovered");
+        }
+        const dropped = applyCompatibilityEvent(proven, { kind: "requirement-changed" }, raised);
+        if (dropped.status !== "discovered") {
+            throw new Error("test setup: the dropped state must be discovered with the candidate kept");
+        }
+        expect(dropped.candidate, "the candidate observation is still a fact").toEqual(CANDIDATE);
+
+        // And the fresh handshake judges against the NEW requirement —
+        // the tool's facts (1.1.0) fail the raised minimum: the client's
+        // own structured verdict, never an editor-side comparison.
+        const rejudged = applyCompatibilityEvent(dropped, handshake(CANDIDATE, DESCRIBE_SUCCESS), raised);
+        expect(rejudged.status).toBe("incompatible");
+
+        // …and a requirement the tool already satisfies re-proves
+        // compatible — through the same handshake path.
+        const lowered = applyCompatibilityEvent(dropped, handshake(CANDIDATE, DESCRIBE_SUCCESS), {
+            requirement: { ...REQUIRED, minimumVersion: "0.5.0" },
+        });
+        expect(lowered.status).toBe("compatible");
+
+        // `unavailable` holds nothing to void; `discovered` holds no
+        // verdict yet — both come out exactly as they are.
+        expect(applyCompatibilityEvent(initialToolState, { kind: "requirement-changed" }, raised)).toEqual({ status: "unavailable" });
+        expect(applyCompatibilityEvent({ status: "discovered", candidate: CANDIDATE }, { kind: "requirement-changed" }, raised)).toEqual({
+            status: "discovered",
+            candidate: CANDIDATE,
+        });
+    });
+
     it("ignores the stale settlements of a superseded candidate — a slow A never invalidates a fresh B", () => {
         const A = CANDIDATE;
         const B: ToolCandidate = { ...CANDIDATE, observationIdentity: "file-identity:fresh-observation" };

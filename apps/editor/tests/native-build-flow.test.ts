@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
     FakeHostBoundary,
     reportBuildLine,
+    type AttemptOutcome,
+    type BoundaryResult,
+    type BuildId,
     type CompatibilityJudgment,
     type HostToolBoundary,
     type NativeCompileRequest,
@@ -132,6 +135,26 @@ function reasonsOf(flow: NativeBuildFlow, target: string): string[] {
     return readiness.status === "NotReady" ? readiness.reasons.map((reason) => reason.reason) : [];
 }
 
+/** The product path — the flow's ONE compile entry (design section 6:
+ *  only a `Ready` composition issues; the public API has no other
+ *  issuer). This helper stands in for the tests that expect the gate to
+ *  admit; the refusal leg reads the gate's value directly. */
+async function issue(
+    flow: NativeBuildFlow,
+    request: NativeCompileRequest,
+    input: Parameters<NativeBuildFlow["compile"]>[1],
+): Promise<{ buildId: BuildId; outcome: Promise<AttemptOutcome> }> {
+    const admission = await flow.compile(request, input);
+    if (admission.admitted !== true) {
+        const reasons =
+            admission.gate.readiness.status === "NotReady"
+                ? admission.gate.readiness.reasons.map((reason) => reason.reason).join(", ")
+                : "the request is not well-formed";
+        throw new Error(`test setup: the gate must admit (refused: ${reasons})`);
+    }
+    return { buildId: admission.buildId, outcome: admission.outcome };
+}
+
 /* Scenario 1 — the happy chain through the gate. */
 describe("1 · Ready composition issues; the artifact facts are explicit in the line", () => {
     it("compatible tool + compatible descriptor + capable host + configured target → Ready → compile → artifact facts visible", async () => {
@@ -145,7 +168,7 @@ describe("1 · Ready composition issues; the artifact facts are explicit in the 
         expect(flow.readiness(readinessInput("gglab-dx12"))).toEqual({ status: "Ready" });
         const gate = flow.compileGate(request("gglab-dx12"), readinessInput("gglab-dx12"));
         expect(gate.admitted).toBe(true);
-        const attempt = await flow.beginCompile(request("gglab-dx12"));
+        const attempt = await issue(flow, request("gglab-dx12"), readinessInput("gglab-dx12"));
         const outcome = await attempt.outcome;
         expect(outcome.kind).toBe("succeeded");
         if (outcome.kind === "succeeded") {
@@ -272,11 +295,11 @@ describe("5 · a target change is a different intent; the late old result cannot
         const flow = makeFlow(fake);
         await bringUp(flow);
         expect(flow.compileGate(request("gglab-dx12"), readinessInput("gglab-dx12")).admitted).toBe(true);
-        const attempt1 = await flow.beginCompile(request("gglab-dx12")); // in flight (world pending)
+        const attempt1 = await issue(flow, request("gglab-dx12"), readinessInput("gglab-dx12")); // in flight (world pending)
         // The target configuration changes — a DIFFERENT intent over the
         // same source bytes — and the gate admits the new one.
         expect(flow.compileGate(request("gglab-vulkan13"), readinessInput("gglab-vulkan13")).admitted).toBe(true);
-        const attempt2 = await flow.beginCompile(request("gglab-vulkan13")); // in flight
+        const attempt2 = await issue(flow, request("gglab-vulkan13"), readinessInput("gglab-vulkan13")); // in flight
         expect(attempt2.buildId.sequence, "each attempt keeps its own identity").not.toBe(attempt1.buildId.sequence);
 
         // The SLOW OLD attempt settles LATE (after the newer one was
@@ -310,9 +333,9 @@ describe("6 · a failure after success never erases the explicit last-good", () 
         });
         const flow = makeFlow(fake);
         await bringUp(flow);
-        const first = await (await flow.beginCompile(request("gglab-dx12"))).outcome;
+        const first = await (await issue(flow, request("gglab-dx12"), readinessInput("gglab-dx12"))).outcome;
         expect(first.kind).toBe("succeeded");
-        const failure = await (await flow.beginCompile(request("gglab-dx12"))).outcome;
+        const failure = await (await issue(flow, request("gglab-dx12"), readinessInput("gglab-dx12"))).outcome;
         expect(failure.kind).toBe("failed");
         if (failure.kind === "failed" && "envelope" in failure) {
             expect(failure.envelope.status).toBe("compile-failed");
@@ -337,10 +360,10 @@ describe("7 · a cancel in flight is an explicit canceled state; the prior state
         });
         const flow = makeFlow(fake);
         await bringUp(flow);
-        const attempt1 = await flow.beginCompile(request("gglab-dx12"));
+        const attempt1 = await issue(flow, request("gglab-dx12"), readinessInput("gglab-dx12"));
         fake.releasePending({ sequence: attempt1.buildId.sequence }); // the safe result lands first
         await attempt1.outcome;
-        const attempt2 = await flow.beginCompile(request("gglab-dx12")); // in flight
+        const attempt2 = await issue(flow, request("gglab-dx12"), readinessInput("gglab-dx12")); // in flight
         const cancelOutcome = await flow.cancel({ sequence: attempt2.buildId.sequence });
         expect(cancelOutcome.canceled).toBe(true);
         const settled = await attempt2.outcome;
@@ -361,7 +384,7 @@ describe("8 · a timeout is an explicit failed state with the timeout fact, not 
         });
         const flow = makeFlow(fake);
         await bringUp(flow);
-        const attempt = await flow.beginCompile(request("gglab-dx12"));
+        const attempt = await issue(flow, request("gglab-dx12"), readinessInput("gglab-dx12"));
         const outcome = await attempt.outcome;
         expect(outcome.kind).toBe("failed");
         if (outcome.kind === "failed" && "termination" in outcome) {
@@ -385,8 +408,8 @@ describe("9 · two quick attempts with identical source bytes: separate identiti
         });
         const flow = makeFlow(fake);
         await bringUp(flow);
-        const attempt1 = await flow.beginCompile(request("gglab-dx12"));
-        const attempt2 = await flow.beginCompile(request("gglab-dx12"));
+        const attempt1 = await issue(flow, request("gglab-dx12"), readinessInput("gglab-dx12"));
+        const attempt2 = await issue(flow, request("gglab-dx12"), readinessInput("gglab-dx12"));
         expect(attempt2.buildId.sequence, "each attempt owns its own identity").not.toBe(attempt1.buildId.sequence);
         // The NEWER one settles first (the world decides its own order),
         // then the older one lands late — same intent, BuildId order.
@@ -483,12 +506,12 @@ describe("11 · a proven producer change is a different intent; the late old evi
         await flow.discover({ bundled: false });
         await flow.handshake(); // the path proves producer A
         expect(flow.provenFacts?.producerIdentity).toContain("10.0.26100.2");
-        const attempt1 = await flow.beginCompile(request("gglab-dx12")); // in flight under producer A
+        const attempt1 = await issue(flow, request("gglab-dx12"), readinessInput("gglab-dx12")); // in flight under producer A
         // The same path now proves the NEW producer (a re-handshake —
         // legal on any resolved candidate):
         await flow.handshake();
         expect(flow.provenFacts?.producerIdentity, "the fresh proof carries producer B").toContain("10.0.26100.99");
-        const attempt2 = await flow.beginCompile(request("gglab-dx12")); // in flight under producer B
+        const attempt2 = await issue(flow, request("gglab-dx12"), readinessInput("gglab-dx12")); // in flight under producer B
         // The SLOW OLD evidence (producer A) settles after the newer
         // attempt was issued — it may never become current.
         worldA.releasePending({ sequence: 1 });
@@ -506,5 +529,231 @@ describe("11 · a proven producer change is a different intent; the late old evi
         expect(newEntry?.state, "the new producer's attempt is current once it settles").toBe("current");
         expect(oldEntry?.intent.tool.producerIdentity, "the old evidence carries ITS OWN intent (producer A)").toContain("10.0.26100.2");
         expect(newEntry?.intent.tool.producerIdentity, "the new evidence carries producer B").toContain("10.0.26100.99");
+    });
+});
+
+/* Scenario 12 — the NEWER attempt settles first: the anchor never moves
+ *  backwards, and the late old attempt can only be stale evidence.
+ *  (The mirror of scenario 5's order — the "slow old completion cannot
+ *  become current" rule under the settlement order §5's test could not
+ *  produce.) */
+describe("12 · the newer intent settles first: current stays with it; the late old attempt is stale", () => {
+    it("both in flight (different intents) → the newer settles first and is current; the old lands late as stale, the newer remains current", async () => {
+        const fake = new FakeHostBoundary({
+            discovery: { kind: "resolved", candidate: CANDIDATE },
+            handshake: { stdout: describeDocument(FACTS_OK), exitCode: 0 },
+            compile: [
+                { stdout: compileOk("gglab-dx12"), exitCode: 0 },
+                { stdout: compileOk("gglab-vulkan13"), exitCode: 0 },
+            ],
+            keepCompilePending: true,
+        });
+        const flow = makeFlow(fake);
+        await bringUp(flow);
+        const attempt1 = await issue(flow, request("gglab-dx12"), readinessInput("gglab-dx12")); // old intent, in flight
+        const attempt2 = await issue(flow, request("gglab-vulkan13"), readinessInput("gglab-vulkan13")); // new intent, in flight
+        // The NEWER one settles first — while the old one is still in
+        // flight. Its intent must already be the current one.
+        fake.releasePending({ sequence: attempt2.buildId.sequence });
+        const newestOutcome = await attempt2.outcome;
+        expect(newestOutcome.kind).toBe("succeeded");
+        const whileOldStillInFlight = reportOf(flow);
+        expect(
+            whileOldStillInFlight.current?.buildId.sequence,
+            "the newer attempt is current the moment it settles — no older in-flight attempt displaces it",
+        ).toBe(attempt2.buildId.sequence);
+        expect(whileOldStillInFlight.current?.intent.target).toBe("gglab-vulkan13");
+        // The OLD one lands LATE: retained evidence, stale under the
+        // current intent — and it must not drag the anchor back to its
+        // own intent, nor take the current's place.
+        fake.releasePending({ sequence: attempt1.buildId.sequence });
+        const lateOutcome = await attempt1.outcome;
+        expect(lateOutcome.kind).toBe("succeeded");
+        const report = reportOf(flow);
+        const oldEntry = report.states.find((entry) => entry.buildId.sequence === attempt1.buildId.sequence);
+        const newEntry = report.states.find((entry) => entry.buildId.sequence === attempt2.buildId.sequence);
+        expect(oldEntry, "the late old attempt RETAINED as evidence").toBeDefined();
+        expect(oldEntry?.state, "the slow old completion cannot become current, however late it lands").toBe("stale");
+        expect(newEntry?.state, "the newer attempt REMAINS current").toBe("current");
+        expect(report.current?.buildId.sequence, "current is still the newer attempt").toBe(attempt2.buildId.sequence);
+        expect(
+            flow.buildSession.lastIssued?.buildId.sequence,
+            "the anchor is the LAST ISSUED attempt — no settlement has ever moved it backwards",
+        ).toBe(attempt2.buildId.sequence);
+        expect(flow.buildSession.lastIssued?.intent.target, "the anchor's intent is the newer one").toBe("gglab-vulkan13");
+    });
+});
+
+/* Scenario 13 — the BuildIntent of an attempt is bound to the proof
+ *  ADMISSION was taken under. A candidate-invalidation settlement that
+ *  lands inside the second admission's window is a lifecycle event for
+ *  the CURRENT state: it must not mis-bind the new attempt's identity
+ *  (and must not crash it against a state that no longer carries
+ *  proven facts). */
+describe("13 · an attempt's intent binds to the proof of its admission, never to a later state", () => {
+    it("an invalidation settling inside the admission window drops the tool state, but the new attempt keeps its own intent and settles cleanly", async () => {
+        const fake = new FakeHostBoundary({
+            discovery: { kind: "resolved", candidate: CANDIDATE },
+            handshake: { stdout: describeDocument(FACTS_OK), exitCode: 0 },
+            compile: [
+                { stdout: compileOk("gglab-dx12"), exitCode: 0 },
+                { stdout: compileOk("gglab-dx12"), exitCode: 0 },
+            ],
+            keepCompilePending: true,
+        });
+        const worldInvalidation: BoundaryResult = {
+            kind: "candidate-invalidated",
+            candidate: CANDIDATE,
+            observation: "missing",
+            observedIdentity: null,
+        };
+        const boundary: HostToolBoundary = {
+            discover: (req) => fake.discover(req),
+            handshake: (candidate) => fake.handshake(candidate),
+            compile: async (candidate, request) => {
+                const admission = await fake.compile(candidate, request);
+                // The world moves in the SECOND attempt's admission window:
+                // the first attempt settles with the host's provenance
+                // refutation — a candidate-lifecycle event that drops the
+                // tool state to `unavailable` (no proven facts left).
+                if (admission.buildId.sequence === 2) {
+                    fake.releasePending({ sequence: 1 }, worldInvalidation);
+                }
+                return admission;
+            },
+            cancel: (buildId) => fake.cancel(buildId),
+        };
+        const flow = makeFlow(boundary);
+        await bringUp(flow);
+        expect(flow.tool.status).toBe("compatible");
+
+        const attempt1 = await issue(flow, request("gglab-dx12"), readinessInput("gglab-dx12")); // in flight
+        // The admission of #2 runs WHILE #1 settles as invalidated:
+        // the world has no proven facts by the time #2 is admitted.
+        const attempt2 = await issue(flow, request("gglab-dx12"), readinessInput("gglab-dx12"));
+        expect(flow.tool.status, "the late invalidation IS a lifecycle event for the current state").toBe("unavailable");
+        expect(flow.buildSession.inFlight.map((attempt) => attempt.buildId.sequence), "only the new attempt is in flight").toEqual([
+            attempt2.buildId.sequence,
+        ]);
+
+        // #2's intent is bound to the proof THAT ADMISSION was taken under
+        // (the proven facts of attempt #1's world) — never to whatever
+        // the state became afterwards (here: nothing at all).
+        const inFlightSecond = flow.buildSession.inFlight.find((attempt) => attempt.buildId.sequence === attempt2.buildId.sequence);
+        expect(inFlightSecond, "the new attempt is in flight with a fixed intent").toBeDefined();
+        if (inFlightSecond !== undefined) {
+            expect(inFlightSecond.intent.sourceIdentity).toBe("cd".repeat(32));
+            expect(inFlightSecond.intent.target).toBe("gglab-dx12");
+            expect(inFlightSecond.intent.tool.identity).toBe("gglab-shaderc");
+            expect(inFlightSecond.intent.tool.version).toBe(FACTS_OK.toolVersion);
+            expect(inFlightSecond.intent.tool.producerIdentity).toBe(FACTS_OK.producerIdentity);
+        }
+
+        // #1 settles as an explicit failure with the host's own facts…
+        const firstOutcome = await attempt1.outcome;
+        expect(firstOutcome.kind).toBe("failed");
+        if (firstOutcome.kind === "failed" && "termination" in firstOutcome) {
+            expect(firstOutcome.termination).toMatchObject({ kind: "candidate-invalidated", observation: "missing" });
+        }
+        // …and #2 still settles under ITS OWN admission bound.
+        fake.releasePending({ sequence: 2 });
+        const secondOutcome = await attempt2.outcome;
+        expect(secondOutcome.kind).toBe("succeeded");
+        const report = reportOf(flow);
+        expect(report.states.map((entry) => entry.buildId.sequence).sort((a, b) => a - b)).toEqual([
+            attempt1.buildId.sequence,
+            attempt2.buildId.sequence,
+        ]);
+        expect(report.states.find((entry) => entry.buildId.sequence === 1)?.state).toBe("failed");
+        expect(report.states.find((entry) => entry.buildId.sequence === attempt2.buildId.sequence)?.state).toBe("current");
+        expect(report.states.find((entry) => entry.buildId.sequence === attempt2.buildId.sequence)?.intent.tool.version, "its intent carries the admitted proof").toBe(FACTS_OK.toolVersion);
+    });
+});
+
+/* Scenario 14 — a requirement change is a tool-side event: the verdict
+ *  taken under the old requirement is void (the candidate observation is
+ *  still a fact), and a fresh handshake re-proves it under the new one —
+ *  never an editor-side version comparison, never a stale Compatible. */
+describe("14 · a re-stated requirement voids the old verdict; the handshake re-proves under the new one", () => {
+    it("a compatible proof under the old requirement is NOT a verdict under the new one: discovered, NotReady, and the client's own fresh judgment", async () => {
+        const fake = new FakeHostBoundary({
+            discovery: { kind: "resolved", candidate: CANDIDATE },
+            handshake: { stdout: describeDocument(FACTS_OK), exitCode: 0 },
+            compile: [{ stdout: compileOk("gglab-dx12"), exitCode: 0 }],
+        });
+        const flow = makeFlow(fake);
+        await bringUp(flow);
+        expect(flow.tool.status).toBe("compatible");
+        expect(flow.compileGate(request("gglab-dx12"), readinessInput("gglab-dx12")).admitted).toBe(true);
+
+        // The descriptor re-states its requirement (minimum 2.0.0): the
+        // tool (1.2.0) does not meet it — a fact only the client's
+        // judgment can state, on a FRESH handshake.
+        const invalidated = flow.updateJudgment({ identity: "gglab-shaderc", minimumVersion: "2.0.0", versionComparison: "semver" });
+        expect(invalidated, "a proven verdict stood under the old requirement").toBe(true);
+        expect(flow.tool, "the verdict and its proof dissolve; the candidate observation stays a fact").toEqual({
+            status: "discovered",
+            candidate: CANDIDATE,
+        });
+        const admission = await flow.compile(request("gglab-dx12"), readinessInput("gglab-dx12"));
+        expect(admission.admitted, "no compile issues while the verdict is void").toBe(false);
+        if (admission.admitted === false) {
+            expect(admission.gate.readiness.status).toBe("NotReady");
+            if (admission.gate.readiness.status === "NotReady") {
+                expect(admission.gate.readiness.reasons.map((reason) => reason.reason)).toContain("ToolDiscovered");
+            }
+        }
+
+        // The fresh handshake is judged under the NEW requirement: the
+        // tool's own facts fail it, structured and visible.
+        await flow.handshake();
+        expect(flow.tool.status, "the fresh judgment contradicts the raised minimum").toBe("incompatible");
+        if (flow.tool.status === "incompatible") {
+            expect(flow.tool.mismatches.map((mismatch) => mismatch.kind)).toEqual(["version"]);
+            expect(flow.tool.mismatches[0]).toMatchObject({ kind: "version", version: { status: "below-minimum" } });
+        }
+        expect(fake.compileCalls, "nothing was issued across the change").toBe(0);
+    });
+
+    it("a requirement the tool already satisfies still re-enters through a fresh handshake — and then compiles", async () => {
+        const fake = new FakeHostBoundary({
+            discovery: { kind: "resolved", candidate: CANDIDATE },
+            handshake: { stdout: describeDocument(FACTS_OK), exitCode: 0 },
+            compile: [{ stdout: compileOk("gglab-dx12"), exitCode: 0 }],
+        });
+        const flow = makeFlow(fake);
+        await bringUp(flow);
+        expect(flow.tool.status).toBe("compatible");
+
+        const invalidated = flow.updateJudgment({ identity: "gglab-shaderc", minimumVersion: "0.5.0", versionComparison: "semver" });
+        expect(invalidated).toBe(true);
+        expect(flow.tool).toEqual({ status: "discovered", candidate: CANDIDATE });
+
+        await flow.handshake();
+        expect(flow.tool.status, "the fresh proof stands under the new requirement").toBe("compatible");
+        const admission = await flow.compile(request("gglab-dx12"), readinessInput("gglab-dx12"));
+        expect(admission.admitted, "under the new requirement the gate admits again").toBe(true);
+        if (admission.admitted === true) {
+            expect(await admission.outcome).toMatchObject({ kind: "succeeded" });
+        }
+        expect(fake.compileCalls).toBe(1);
+    });
+
+    it("re-stating the SAME requirement changes nothing: no invalidation, no re-handshake needed", async () => {
+        const fake = new FakeHostBoundary({
+            discovery: { kind: "resolved", candidate: CANDIDATE },
+            handshake: { stdout: describeDocument(FACTS_OK), exitCode: 0 },
+            compile: [{ stdout: compileOk("gglab-dx12"), exitCode: 0 }],
+        });
+        const flow = makeFlow(fake);
+        await bringUp(flow);
+        expect(flow.tool.status).toBe("compatible");
+        const before = flow.handshakeRecord;
+        expect(before, "a proof attempt was recorded").not.toBeNull();
+        expect(flow.updateJudgment({ identity: "gglab-shaderc", minimumVersion: "1.0.0", versionComparison: "semver" }), "a re-statement with the same value is a no-op").toBe(false);
+        expect(flow.tool.status, "the verdict stands").toBe("compatible");
+        expect(flow.handshakeRecord, "the proof record stands").toBe(before);
+        expect(flow.compileGate(request("gglab-dx12"), readinessInput("gglab-dx12")).admitted).toBe(true);
+        expect(fake.handshakeCalls, "no re-handshake was forced").toBe(1);
     });
 });

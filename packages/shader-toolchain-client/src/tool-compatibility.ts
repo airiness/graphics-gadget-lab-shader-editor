@@ -11,7 +11,14 @@
  * the operation that establishes or refreshes proof, and it stays legal
  * for any RESOLVED candidate — discovered, unproven, and incompatible
  * alike; refusing it on unproven would make compatible unreachable. Only
- * `unavailable` has no candidate to handshake.
+ * `unavailable` has no candidate to handshake. A re-statement of the
+ * requirement (the judgment input) is tool-side too — the verdicts were
+ * taken under it, so a changed requirement voids them. The candidate
+ * observation is unaffected (the tool did not change; the demand did),
+ * so the tool drops to `discovered` keeping its candidate, and a fresh
+ * handshake re-proves it under the new requirement. The client never
+ * re-judges from stored facts and never compares versions itself:
+ * re-proof is the handshake.
  *
  * Every RESOLVED state carries its candidate — the state owns the
  * current candidate, and the proof owns the proof facts (the contract
@@ -149,11 +156,19 @@ export type HandshakeSettlement =
  * source: the refuted observation stops being a valid candidate FACT,
  * any proof bound to it is void, and the tool returns to `unavailable`
  * until discovery produces a fresh observation.
+ * `requirement-changed` — the judgment input was re-stated: every
+ * verdict taken under the old requirement (proven, unproven, or
+ * incompatible) is void, but the candidate observation remains a FACT
+ * (the tool did not change; the demand did), so the tool is dropped to
+ * `discovered` keeping its candidate, where a fresh handshake re-proves
+ * it under the new requirement. The client never re-judges from stored
+ * facts — re-proof is the handshake.
  */
 export type CompatibilityEvent =
     | { readonly kind: "discovery-failed" }
     | { readonly kind: "candidate-resolved"; readonly candidate: ToolCandidate }
     | { readonly kind: "candidate-lost" }
+    | { readonly kind: "requirement-changed" }
     | {
         readonly kind: "candidate-invalidated";
         readonly candidate: ToolCandidate;
@@ -243,6 +258,20 @@ export function applyCompatibilityEvent(
         // that may supersede the current candidate: a new observation is
         // a new fact.
         return { status: "discovered", candidate: event.candidate };
+    }
+    if (event.kind === "requirement-changed") {
+        // The requirement — the judgment input the verdicts were taken
+        // under — was re-stated: a proven, unproven, or incompatible
+        // verdict is now void, whatever it said. The candidate
+        // observation is unaffected (the tool did not change; the demand
+        // did) and stays a FACT, so it is preserved with its candidate,
+        // and a fresh handshake re-proves it under the new requirement.
+        // No re-judgment from stored facts: the handshake is the only
+        // path into `compatible`.
+        if (state.status === "unavailable") {
+            return state; // nothing held, nothing to void
+        }
+        return { status: "discovered", candidate: state.candidate };
     }
 
     // handshake: legal for any resolved state carrying THIS candidate;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { requirementsEqual } from "../src/contract-facts.js";
 import type { ToolFacts, ToolRequirement } from "../src/contract-facts.js";
 import {
     extractSupportedTargets,
@@ -34,6 +35,15 @@ describe("the identity verdict", () => {
             requiredIdentity: "gglab-shaderc",
             reportedIdentity: "other-tool",
         });
+    });
+});
+
+describe("the requirement value", () => {
+    it("is equal only when every judgment input agrees — a re-statement of the same value is no change", () => {
+        expect(requirementsEqual(REQUIRED, { ...REQUIRED })).toBe(true);
+        expect(requirementsEqual(REQUIRED, { ...REQUIRED, identity: "other-tool" })).toBe(false);
+        expect(requirementsEqual(REQUIRED, { ...REQUIRED, minimumVersion: "1.1.0" })).toBe(false);
+        expect(requirementsEqual(REQUIRED, { ...REQUIRED, versionComparison: "semver-latest" })).toBe(false);
     });
 });
 

@@ -14,11 +14,14 @@
  *   them (a `candidate-invalidated` settlement IS a tool-lifecycle
  *   event, wherever it lands — handshake or compile, both).
  *
- * The product guarantee it enforces: ONLY a `Ready` readiness
- * composition admits a native compile request (its gate). There is no
- * bypass and no alternative path. A handshake, on the other hand, is
- * legal for every resolved candidate — it is the operation that
- * establishes proof; the flow never refuses one on that ground.
+ * The product guarantee it enforces (design section 6): ONLY a `Ready`
+ * readiness composition issues a native compile request. It is structural,
+ * not conventional: the flow's single compile entry (`compile`) is the
+ * only path to an issuer, and the issuer itself (`beginAdmittedCompile`)
+ * is PRIVATE — a `NotReady` composition cannot reach the boundary
+ * through any public call. A handshake, on the other hand, is legal for
+ * every resolved candidate — it is the operation that establishes proof;
+ * the flow never refuses one on that ground.
  *
  * No argv exists anywhere in this module: the boundary takes domain-
  * shaped values and owns the serialization host-internal.
@@ -32,6 +35,7 @@ import {
     initialToolState,
     isWellFormedRequest,
     readHandshakeOutput,
+    requirementsEqual,
     type AttemptOutcome,
     type BuildId,
     type CompatibilityJudgment,
@@ -92,6 +96,15 @@ export interface CompileGate {
     readonly admitted: boolean;
 }
 
+/** The product compile's verdict on a request (design section 6: only a
+ *  `Ready` composition issues): either a structured refusal carrying
+ *  the gate's complete reasons (nothing was issued — a value, never a
+ *  throw), or the admitted attempt: its identity and its settlement
+ *  promise, in flight on the session line from this moment. */
+export type CompileAdmission =
+    | { readonly admitted: false; readonly gate: CompileGate }
+    | { readonly admitted: true; readonly gate: CompileGate; readonly buildId: BuildId; readonly outcome: Promise<AttemptOutcome> };
+
 /** What the inspector reads for the newest compile: the gate's verdict
  *  (complete when refused) and, once the attempt settles, its outcome
  *  and identity — the client's vocabulary, never the raw bytes. */
@@ -128,9 +141,35 @@ export class NativeBuildFlow {
     /** Refreshes the judgment input from the current descriptor (the
      *  composition maps the core's process-contract fact into the
      *  client's plain requirement shape — the client never sees the
-     *  descriptor's own type surface). */
-    updateJudgment(requirement: CompatibilityJudgment["requirement"]): void {
+     *  descriptor's own type surface).
+     *
+     * A re-statement with the SAME value changed nothing — the verdict
+     * stands. A DIFFERENT requirement voids any existing verdict: it was
+     * judged under the old one, and it is no longer valid for this tool.
+     * The candidate observation is still a fact (the tool did not
+     * change; the demand did), so the client drops the tool to
+     * `discovered` keeping its candidate — and a fresh handshake
+     * re-proves it under the new requirement. The editor never compares
+     * versions itself, and never re-judges from stored facts: the
+     * handshake is the path (the client's own state machine decides;
+     * this flow only wires the event).
+     *
+     * Returns whether a proven / unproven / incompatible verdict was
+     * invalidated (the surface can surface that fact).
+     */
+    updateJudgment(requirement: CompatibilityJudgment["requirement"]): boolean {
+        if (requirementsEqual(this.judgment.requirement, requirement)) {
+            return false;
+        }
+        const hadVerdict =
+            this.toolState.status === "unproven" || this.toolState.status === "incompatible" || this.toolState.status === "compatible";
         this.judgment = { requirement };
+        this.toolState = applyCompatibilityEvent(this.toolState, { kind: "requirement-changed" }, this.judgment);
+        // The handshake record stands under the OLD requirement: the
+        // inspector must not show it as a proof attempt against the
+        // current one (the same rule that voids it on a new observation).
+        this.lastHandshake = null;
+        return hadVerdict;
     }
 
     // ---- the inspector's single sources of truth -----------------------
@@ -151,7 +190,11 @@ export class NativeBuildFlow {
         return this.lastHandshake;
     }
 
-    get compile(): CompileAttemptRecord | null {
+    /** The gate record of the newest compile (the inspector's read for
+     *  the gate's verdict and the settled outcome). Named for the
+     *  record — the operation itself is the `compile` method — so that
+     *  the two cannot be confused. */
+    get compileRecord(): CompileAttemptRecord | null {
         return this.lastCompile;
     }
 
@@ -311,35 +354,69 @@ export class NativeBuildFlow {
     }
 
     /**
-     * Issues an ADMITTED compile (the gate passed — this method trusts
-     * its caller's gate, the product path does not bypass it). The
-     * attempt is immediately IN FLIGHT in the session store; its
-     * settlement flows back on the handle's own promise (the client's
-     * OUTCOME vocabulary — the line and the inspector read outcomes,
-     * never raw bytes). Settling is independent of the await: a cancel
-     * (or a slow boundary) resolves the promise, and the session line
-     * records the outcome exactly once.
+     * The product's single compile entry (design section 6: ONLY a
+     * `Ready` composition issues a native compile request — no bypass).
+     * The gate is composed HERE, and only an admitted request reaches
+     * the private admit step: a `NotReady` composition or an ill-formed
+     * request is a structured refusal value with its complete reasons,
+     * and nothing is issued — there is no public method that issues
+     * around it.
      */
-    async beginCompile(request: NativeCompileRequest): Promise<{ buildId: BuildId; outcome: Promise<AttemptOutcome> }> {
-        if (this.toolState.status !== "compatible") {
-            throw new Error("a compile was begun on a tool without a compatible proof; the gate was bypassed");
+    async compile(request: NativeCompileRequest, input: DescriptorAndTargetInput): Promise<CompileAdmission> {
+        const gate = this.compileGate(request, input);
+        if (gate.admitted !== true) {
+            return { admitted: false, gate };
         }
-        const candidate = this.toolState.candidate;
-        const admission = admitCompile(this.toolState, candidate);
+        const attempt = await this.beginAdmittedCompile(request);
+        return { admitted: true, gate, buildId: attempt.buildId, outcome: attempt.outcome };
+    }
+
+    /**
+     * Issues an ADMITTED compile (the gate already passed — this step is
+     * PRIVATE, the only caller above is the gate itself).
+     *
+     * The snapshot rule (the intent binding): the admitted FACTS —
+     * candidate and proven facts — are read ONCE, before the boundary
+     * is asked to admit. This attempt's `BuildIntent` is bound to the
+     * proof that existed AT ADMISSION, and never to whatever the tool
+     * state becomes while the boundary runs or the attempt settles: a
+     * rediscovery, a re-handshake, a late invalidation may all land in
+     * that window, but they are events for the CURRENT state — they do
+     * not backfill a past attempt's identity (a proof binds to the
+     * candidate observation it was taken under, and never travels).
+     *
+     * The attempt is immediately IN FLIGHT in the session store, once
+     * the admission has landed; its settlement flows back on the
+     * handle's own promise (the client's OUTCOME vocabulary — the line
+     * and the inspector read outcomes, never raw bytes). Settling is
+     * independent of the await: a cancel (or a slow boundary) resolves
+     * the promise, and the session line records the outcome exactly
+     * once.
+     */
+    private async beginAdmittedCompile(request: NativeCompileRequest): Promise<{ buildId: BuildId; outcome: Promise<AttemptOutcome> }> {
+        const admitted = this.toolState;
+        if (admitted.status !== "compatible") {
+            throw new Error("an admitted compile was begun on a tool state the gate would not admit; the gate was bypassed");
+        }
+        const candidate = admitted.candidate;
+        const admission = admitCompile(admitted, candidate);
         if (admission.admitted === false) {
-            throw new Error(`a compile was begun the client would not admit: ${admission.reasons.map((r) => r.reason).join(", ")}`);
+            throw new Error(`an admitted compile would not be admitted by the client: ${admission.reasons.map((r) => r.reason).join(", ")}`);
         }
-        const attempt = await this.boundary.compile(candidate, request);
-        const intent = buildIntentOf(request, this.toolState.provenFacts);
-        this.session = sessionIssue(this.session, attempt.buildId, intent);
+        const handle = await this.boundary.compile(candidate, request);
+        // Snapshot, NOT the current state: the world has had the whole
+        // admission window to move on; this attempt's intent does not.
+        const intent = buildIntentOf(request, admitted.provenFacts);
+        this.session = sessionIssue(this.session, handle.buildId, intent);
         const outcome = (async (): Promise<AttemptOutcome> => {
-            const result = await attempt.result;
+            const result = await handle.result;
             if (result.kind === "candidate-invalidated") {
                 // The compile settlement reported the host's provenance
                 // refutation: the SAME lifecycle event as on a handshake
-                // — the observation is no longer a fact, the proof bound
-                // to it is void, until a fresh discovery + handshake
-                // re-enters.
+                // — the observation is no longer a fact for the CURRENT
+                // state (the machine applies it candidate-scoped and
+                // ignores it when it is stale), voiding any proof bound
+                // to it, until a fresh discovery + handshake re-enters.
                 this.toolState = applyCompatibilityEvent(
                     this.toolState,
                     {
@@ -352,16 +429,16 @@ export class NativeBuildFlow {
                 );
             }
             const settled = attemptOutcomeOfCompileResult(result);
-            this.session = sessionSettle(this.session, attempt.buildId, settled);
-            this.recordCompile(attempt.buildId, settled);
+            this.session = sessionSettle(this.session, handle.buildId, settled);
+            this.recordCompile(handle.buildId, settled);
             return settled;
         })();
-        return { buildId: attempt.buildId, outcome };
+        return { buildId: handle.buildId, outcome };
     }
 
     /** `cancel`: an explicit action with a value (canceled now, or
      *  already settled). The attempt's settlement itself flows through
-     *  the awaiting `beginCompile` — a cancel is a fact the boundary
+     *  the awaiting `compile` — a cancel is a fact the boundary
      *  reports (`timedOut`/`canceled` on the output), not a special
      *  settlement the session invents. */
     async cancel(buildId: BuildId): Promise<{ canceled: boolean; alreadySettled: boolean }> {

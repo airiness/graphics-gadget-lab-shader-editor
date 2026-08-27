@@ -31,6 +31,15 @@ export interface ToolRequirement {
     readonly versionComparison: string;
 }
 
+/** Two requirements are the same when their judgment inputs agree
+ *  structurally: the requirement is a value, and identity, minimum
+ *  version, and comparison rule are all of it. A re-statement with the
+ *  same value changed nothing; a requirement that differs is a NEW
+ *  judgment input (the verdicts taken under the old one are void). */
+export function requirementsEqual(a: ToolRequirement, b: ToolRequirement): boolean {
+    return a.identity === b.identity && a.minimumVersion === b.minimumVersion && a.versionComparison === b.versionComparison;
+}
+
 /**
  * A structured toolchain diagnostic carried verbatim from the published
  * envelope. It is a distinct layer from graph-native diagnostics: the

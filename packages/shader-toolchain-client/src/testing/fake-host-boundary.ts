@@ -168,11 +168,14 @@ export class FakeHostBoundary implements HostToolBoundary {
 
     /**
      * Settles one in-flight spawn (its own scripted call) — a specific
-     * BuildId when given, otherwise the earliest waiting one. Returns
-     * false when nothing is in flight — an explicit fact, never a silent
-     * skip. Settling one attempt never touches the others.
+     * BuildId when given, otherwise the earliest waiting one. An explicit
+     * settlement (a structured pre-spawn refusal the world reports about
+     * that attempt) may ride the release: the script is the default, the
+     * explicit value is the world's own fact. Returns false when nothing
+     * is in flight — an explicit fact, never a silent skip. Settling one
+     * attempt never touches the others.
      */
-    releasePending(buildId?: BuildId): boolean {
+    releasePending(buildId?: BuildId, settlement?: BoundaryResult): boolean {
         const sequence = buildId?.sequence ?? [...this.pending.keys()].sort((a, b) => a - b)[0];
         if (sequence === undefined) {
             return false;
@@ -182,7 +185,7 @@ export class FakeHostBoundary implements HostToolBoundary {
             return false;
         }
         this.pending.delete(sequence);
-        pending.resolve({ kind: "spawned", output: this.toOutput(pending.script) });
+        pending.resolve(settlement ?? { kind: "spawned", output: this.toOutput(pending.script) });
         return true;
     }
 

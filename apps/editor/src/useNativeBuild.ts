@@ -7,14 +7,21 @@
  * All the RULES live in the pure modules (tested without React); this
  * hook only: creates the flow once a boundary exists (desktop shell —
  * the web shell reports the absence as the `HostUnavailable` capability
- * fact), wires the descriptor change into the flow's judgment, runs the
- * startup discovery + handshake (the tool's own events, not a UI
- * nicety), and recomposes the readiness on every input change (derived,
- * never remembered).
+ * fact), wires the descriptor change into the flow's judgment (a
+ * re-stated requirement invalidates any verdict taken under the old one),
+ * runs the startup discovery + handshake (the tool's own events, not a
+ * UI nicety), and recomposes the readiness on every input change
+ * (derived, never remembered).
+ *
+ * The compile surface's own invariant: an admitted attempt is IN FLIGHT
+ * on the session line BEFORE its settlement is awaited — the tick that
+ * makes the surface observe it lands after the admission and before the
+ * outcome, so the in-flight row (and its cancel) is visible for the
+ * whole window, not only at settlement.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HlslEmission, SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
-import type { AttemptOutcome, BuildLineReport } from "@gglab/shader-toolchain-client";
+import type { AttemptOutcome, BuildLineReport, NativeCompileRequest } from "@gglab/shader-toolchain-client";
 import { createBuildTargetConfiguration, setBuildTarget, type BuildTargetConfiguration } from "./build-target-config.js";
 import { projectBuildInspector, type BuildInspectorFacts } from "./build-inspector.js";
 import { sessionReport } from "./native-build-session.js";
@@ -62,7 +69,7 @@ export interface NativeBuildSurface {
     readonly lastGateRefusal: readonly string[] | null;
     readonly discoverNow: () => Promise<void>;
     readonly handshakeNow: () => Promise<void>;
-    readonly compileNow: (request: Parameters<NativeBuildFlow["compileGate"]>[0]) => Promise<{ admitted: boolean; buildId?: number; outcome?: AttemptOutcome }>;
+    readonly compileNow: (request: NativeCompileRequest) => Promise<{ admitted: boolean; buildId?: number; outcome?: AttemptOutcome }>;
     readonly cancelNow: (buildId: number) => Promise<void>;
     /** The operation note — structured one-liners (the surface states
      *  what happened and why; never prose-mined from tool output). */
@@ -125,12 +132,15 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
 
     // The descriptor change refreshes the flow's judgment input (the
     // single source of truth for the requirement the verdicts judge
-    // against) — before any handshake that would read it.
+    // against) — before any handshake that would read it. A genuinely
+    // DIFFERENT requirement invalidates any verdict taken under the old
+    // one (the candidate stays a fact; a fresh handshake re-proves it) —
+    // a downgrade, and like every downgrade it is visible in a note.
     useEffect(() => {
         if (flow === null) {
             return;
         }
-        flow.updateJudgment(
+        const invalidated = flow.updateJudgment(
             input.descriptor !== null
                 ? {
                       identity: input.descriptor.processContract.tool.identity,
@@ -139,7 +149,13 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
                   }
                 : EMPTY_REQUIREMENT,
         );
-    }, [flow, input.descriptor]);
+        if (invalidated) {
+            note(
+                "refusal",
+                "The tool requirement changed: the previous verdict was judged under the old requirement and is void — the candidate is kept as a fact; a fresh handshake (re-)proves it and re-admits compiles.",
+            );
+        }
+    }, [flow, input.descriptor, note]);
 
     // Startup: discovery, then the handshake (the proof operation, legal
     // for the resolved candidate). Both are the tool's OWN lifecycle
@@ -192,7 +208,7 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
     const lineReport =
         flow === null || flow.buildSession.lastIssued === null ? null : sessionReport(flow.buildSession, flow.buildSession.lastIssued.intent);
 
-    const lastCompile = flow?.compile ?? null;
+    const lastCompile = flow?.compileRecord ?? null;
     const lastOutcome = lastCompile !== null && lastCompile.outcome !== undefined ? lastCompile.outcome : null;
 
     const inspector = useMemo(() => {
@@ -240,18 +256,21 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
     }, [flow, note]);
 
     const compileNow = useCallback(
-        async (request: Parameters<NativeBuildFlow["compileGate"]>[0]): Promise<{ admitted: boolean; buildId?: number; outcome?: AttemptOutcome }> => {
+        async (request: NativeCompileRequest): Promise<{ admitted: boolean; buildId?: number; outcome?: AttemptOutcome }> => {
             if (flow === null) {
                 note("refusal", "Compile not available: no host boundary in this shell.");
                 return { admitted: false };
             }
-            const gate = flow.compileGate(request, {
+            // The ONE product entry: the gate is composed inside, and
+            // nothing around it issues (design section 6: no bypass).
+            const admission = await flow.compile(request, {
                 descriptorLoaded: input.descriptor !== null,
                 descriptorCompatible: input.descriptorCompatible,
                 descriptorDetail: input.descriptorDetail,
                 configuredTarget: target.target,
             });
-            if (gate.admitted === false) {
+            if (admission.admitted === false) {
+                const gate = admission.gate;
                 if (gate.readiness.status === "NotReady") {
                     note("refusal", `Compile refused by the readiness gate: ${gate.readiness.reasons.map((r) => r.reason).join(", ")}`);
                 } else {
@@ -260,12 +279,16 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
                 }
                 return { admitted: false };
             }
+            // The admission has landed: the attempt is IN FLIGHT on the
+            // session line. The tick lands NOW — before the outcome is
+            // awaited — so the surface sees "in flight" (and its cancel)
+            // for the whole window: it must not learn about the attempt
+            // only when the attempt has already settled.
             bump((n) => n + 1);
-            const attempt = await flow.beginCompile(request);
-            const settledOutcome = await attempt.outcome;
-            note("info", `Attempt #${attempt.buildId.sequence} settled: the line records the outcome.`);
+            const settledOutcome = await admission.outcome;
+            note("info", `Attempt #${admission.buildId.sequence} settled: the line records the outcome.`);
             bump((n) => n + 1);
-            return { admitted: true, buildId: attempt.buildId.sequence, outcome: settledOutcome };
+            return { admitted: true, buildId: admission.buildId.sequence, outcome: settledOutcome };
         },
         [flow, note, input.descriptor, input.descriptorCompatible, input.descriptorDetail, target.target],
     );
