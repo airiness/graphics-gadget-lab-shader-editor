@@ -95,6 +95,11 @@ pub struct DiscoverOutcome {
 /// bytes, the process exit code, and the timeout/cancel state. No parsed
 /// document, no verdict, no diagnostics — those are the client's work on
 /// the bytes, on the other side of this boundary.
+///
+/// Byte representation on the wire: serde serializes a `Vec<u8>` as a
+/// JSON array of byte values (one `number` per byte). The TS adapter is
+/// the one that materializes those arrays into `Uint8Array`; it may not
+/// `as`-cast a plain array into one and pass it to the client readers.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BoundaryOutput {
@@ -126,20 +131,32 @@ pub enum CandidateObservation {
 /// provenance check refused (`candidate-invalidated`), or bounded execution
 /// itself could not launch (`launch-failed`). Never an exception, never an
 /// OS error code promoted to protocol, never a forged output.
+///
+/// Wire names are EXPLICIT, not derived: the client's vocabulary is the
+/// kebab-case `kind` values and camelCase fields it declares
+/// (`host-boundary.ts`), and serde's `rename_all` on an enum only renames
+/// VARIANTS — the tag values and the struct-variant fields each need
+/// their own `rename`. The serialization golden test locks these names;
+/// do not "simplify" them.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind")]
 pub enum BoundaryResult {
+    #[serde(rename = "spawned")]
     Spawned {
         output: BoundaryOutput,
     },
+    #[serde(rename = "candidate-invalidated")]
     CandidateInvalidated {
         candidate: ToolCandidate,
         observation: CandidateObservation,
-        /// The identity the path observes now — present (and meaningful)
-        /// only when `observation` is `Changed`.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// The identity the path observes now — `null` except when
+        /// `observation` is `Changed`, where it is the live identity.
+        /// Always present on the wire (the client declares `string |
+        /// null`, and a missing key is not the same as a null value).
+        #[serde(default, rename = "observedIdentity")]
         observed_identity: Option<String>,
     },
+    #[serde(rename = "launch-failed")]
     LaunchFailed {
         candidate: ToolCandidate,
     },
@@ -181,4 +198,126 @@ pub struct NativeCompileRequest {
     pub entry: String,
     pub defines: Vec<CompileDefine>,
     pub includes: Vec<String>,
+}
+
+#[cfg(test)]
+mod wire_shape_tests {
+    //! Serialization golden tests: these lock the EXACT wire names the
+    //! client package reads — kind values, field names, and which keys
+    //! are present. Any rename in the client vocabulary breaks these,
+    //! which is how a cross-language drift is found at compile-run time
+    //! instead of at runtime.
+
+    use super::*;
+
+    fn sample_candidate() -> ToolCandidate {
+        ToolCandidate {
+            rule: DiscoveryRule::ExplicitConfig,
+            tool_path: "C:/tools/gglab-shaderc.exe".to_string(),
+            observation_identity: "a".repeat(64),
+            resolved_at: 1721000000000,
+        }
+    }
+
+    #[test]
+    fn the_spawned_settlement_serializes_with_the_clients_kind_and_keys() {
+        let result = BoundaryResult::Spawned {
+            output: BoundaryOutput {
+                stdout: vec![1, 2, 3],
+                stderr: vec![],
+                exit_code: 4,
+                timed_out: false,
+                canceled: true,
+            },
+        };
+        let value = serde_json::to_value(&result).unwrap();
+        assert_eq!(value["kind"], "spawned");
+        assert_eq!(value["output"]["stdout"], serde_json::json!([1, 2, 3]));
+        assert_eq!(value["output"]["stderr"], serde_json::json!([]));
+        assert_eq!(value["output"]["exitCode"], 4);
+        assert_eq!(value["output"]["timedOut"], false);
+        assert_eq!(value["output"]["canceled"], true);
+        // No other top-level keys: the client's strict reader sees exactly
+        // the declared shape.
+        let keys: Vec<&str> = value.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        assert_eq!(keys, vec!["kind", "output"]);
+    }
+
+    #[test]
+    fn the_candidate_invalidated_settlement_carries_the_live_identity_as_null_or_value() {
+        let changed = BoundaryResult::CandidateInvalidated {
+            candidate: sample_candidate(),
+            observation: CandidateObservation::Changed,
+            observed_identity: Some("b".repeat(64)),
+        };
+        let value = serde_json::to_value(&changed).unwrap();
+        assert_eq!(value["kind"], "candidate-invalidated");
+        assert_eq!(value["observation"], "changed");
+        assert_eq!(value["observedIdentity"], "b".repeat(64));
+        assert_eq!(value["candidate"]["rule"], "explicit-config");
+        assert_eq!(value["candidate"]["toolPath"], "C:/tools/gglab-shaderc.exe");
+
+        // A missing observation is a NULL identity, and the key is
+        // PRESENT — the client declares `string | null`.
+        let missing = BoundaryResult::CandidateInvalidated {
+            candidate: sample_candidate(),
+            observation: CandidateObservation::Missing,
+            observed_identity: None,
+        };
+        let value = serde_json::to_value(&missing).unwrap();
+        assert_eq!(value["kind"], "candidate-invalidated");
+        assert_eq!(value["observation"], "missing");
+        assert!(value.get("observedIdentity").is_some(), "the key must be present");
+        assert!(value["observedIdentity"].is_null(), "…and null, not missing");
+    }
+
+    #[test]
+    fn the_launch_failed_settlement_is_a_value_with_only_the_candidate() {
+        let result = BoundaryResult::LaunchFailed {
+            candidate: sample_candidate(),
+        };
+        let value = serde_json::to_value(&result).unwrap();
+        assert_eq!(value["kind"], "launch-failed");
+        let mut keys: Vec<&str> = value.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["candidate", "kind"]);
+    }
+
+    #[test]
+    fn the_cancel_outcome_serializes_with_the_clients_key_names() {
+        let outcome = CancelOutcome {
+            build_id: BuildId { sequence: 7 },
+            canceled: true,
+            already_settled: false,
+        };
+        let value = serde_json::to_value(&outcome).unwrap();
+        assert_eq!(value["buildId"]["sequence"], 7);
+        assert_eq!(value["canceled"], true);
+        assert_eq!(value["alreadySettled"], false);
+    }
+
+    #[test]
+    fn the_discover_wire_shape_is_optional_candidate_plus_failures() {
+        let outcome = DiscoverOutcome {
+            candidate: Some(sample_candidate()),
+            failures: vec![DiscoveryRuleFailure {
+                rule: DiscoveryRule::SiblingBuild,
+                reason: "missing".to_string(),
+            }],
+        };
+        let value = serde_json::to_value(&outcome).unwrap();
+        assert_eq!(value["candidate"]["resolvedAt"], 1_721_000_000_000_u64);
+        assert_eq!(value["failures"][0]["rule"], "sibling-build");
+        assert_eq!(value["failures"][0]["reason"], "missing");
+
+        // No candidate: the key is absent (the client declares it
+        // optional).
+        let empty = DiscoverOutcome {
+            candidate: None,
+            failures: Vec::new(),
+        };
+        let value = serde_json::to_value(&empty).unwrap();
+        assert!(value.get("candidate").is_none());
+        assert_eq!(value["failures"], serde_json::json!([]));
+    }
 }

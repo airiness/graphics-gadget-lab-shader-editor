@@ -39,7 +39,7 @@ use std::sync::Arc;
 
 use super::discovery::discover as discover_core;
 use super::error::ServiceError;
-use super::execution::{run_bounded, ExecutionBudget, SpawnError};
+use super::execution::{spawn, ExecutionBudget, SpawnError};
 use super::provenance::{verify_and_hold, GuardRefusal};
 use super::staging::ToolchainRoots;
 use super::types::{
@@ -86,6 +86,15 @@ impl std::fmt::Debug for CompileAttempt {
 }
 
 impl ShaderToolService {
+    /// The host's **allowance** step, on its own: the allowlisted request
+    /// shape, judged exactly as the client package's
+    /// `isWellFormedRequest` declares it (the client is the authority;
+    /// this is its mirror). A value either way — the shape verdict, or
+    /// the structured refusal naming the same field.
+    pub fn validate_request(request: &NativeCompileRequest) -> Result<(), ServiceError> {
+        validate_request(request)
+    }
+
     /// Production configuration: the host data location, the service
     /// budgets (host policy), and the service's own executable location
     /// (the `bundled` discovery rule's expected directory).
@@ -150,50 +159,29 @@ impl ShaderToolService {
     pub fn handshake(&self, candidate: &ToolCandidate) -> BoundaryResult {
         let guard_result = verify_and_hold(&candidate.tool_path, &candidate.observation_identity);
         match guard_result {
-            Err(GuardRefusal::Changed { current_identity }) => {
-                return BoundaryResult::CandidateInvalidated {
-                    candidate: candidate.clone(),
-                    observation: CandidateObservation::Changed,
-                    observed_identity: Some(current_identity),
-                };
-            }
-            Err(GuardRefusal::Missing) => {
-                return BoundaryResult::CandidateInvalidated {
-                    candidate: candidate.clone(),
-                    observation: CandidateObservation::Missing,
-                    observed_identity: None,
-                };
-            }
-            Err(GuardRefusal::Unreadable) => {
-                return BoundaryResult::CandidateInvalidated {
-                    candidate: candidate.clone(),
-                    observation: CandidateObservation::Unreadable,
-                    observed_identity: None,
-                };
-            }
-            Err(GuardRefusal::Unsupported) => {
-                // Not the toolchain's platform: no check possible, no
-                // spawn allowed — the honest structured fact.
-                return BoundaryResult::LaunchFailed {
-                    candidate: candidate.clone(),
-                };
-            }
+            Err(refusal) => guard_refusal(refusal, candidate),
             Ok(guard) => {
                 // `describe` is the tool's zero-argument machine
                 // self-description command — no options, no content, no
                 // policy: the service adds nothing and owns nothing here.
                 let args = vec!["describe".to_string()];
                 let executable = std::path::PathBuf::from(&candidate.tool_path);
-                let outcome =
-                    run_bounded(&executable, &args, self.handshake_budget, None);
-                // The guard is dropped HERE — after the spawn settled.
-                // Until that line, the path was held fixed.
+                let child = match spawn(&executable, &args) {
+                    Ok(child) => child,
+                    Err(SpawnError { source: _ }) => {
+                        // The process-creation itself could not be
+                        // attempted — the guard releases with the scope.
+                        return BoundaryResult::LaunchFailed {
+                            candidate: candidate.clone(),
+                        };
+                    }
+                };
+                // The process EXISTS now — the guard released the path
+                // the instant creation settled. A rebuild may replace
+                // the binary while this spawn runs; that is intended.
                 drop(guard);
-                match outcome {
-                    Ok(output) => BoundaryResult::Spawned { output },
-                    Err(SpawnError { source: _ }) => BoundaryResult::LaunchFailed {
-                        candidate: candidate.clone(),
-                    },
+                BoundaryResult::Spawned {
+                    output: child.bounded_wait(self.handshake_budget, None),
                 }
             }
         }
@@ -276,9 +264,16 @@ impl ShaderToolService {
     }
 }
 
-/// Admission-time validation of the allowlisted shape — the only place
-/// the service may refuse a compile request, and the refusal it gives is
-/// structured (the field, and why).
+/// Admission-time validation of the allowlisted shape — a MIRROR of the
+/// client package's `isWellFormedRequest` (its authority, in the same
+/// order, naming the same field for the same refusal). This host must
+/// not run a second rulebook: a request the client declares well-formed
+/// is admitted here, and a request it rejects is refused here for the
+/// SAME field. (The semantic owner of `sourceIdentity` remains
+/// `shader-graph-core`; the host checks only the shape, not the value
+/// against the bytes.) The conformance fixtures
+/// (`tests/toolchain-boundary-requests.json`) run both sides against the
+/// same cases.
 fn validate_request(request: &NativeCompileRequest) -> Result<(), ServiceError> {
     fn field(field: &str, detail: &str) -> ServiceError {
         ServiceError::RequestShape {
@@ -286,29 +281,45 @@ fn validate_request(request: &NativeCompileRequest) -> Result<(), ServiceError> 
             detail: detail.to_string(),
         }
     }
-    if request.source.is_empty() {
-        return Err(field("source", "the emitted bytes are required"));
-    }
+    // source: the exact emitted bytes — a SHAPE on the wire (always a
+    // byte array by construction here), no content rule: the client's
+    // well-formedness accepts the empty array, and so does this.
     if request.source_identity.len() != 64
         || !request.source_identity.chars().all(|ch| ch.is_ascii_hexdigit())
     {
         return Err(field(
             "sourceIdentity",
-            "the durable source identity is the 64-hex SHA-256 of the exact bytes",
+            "the source identity must be a 64-character hex digest",
         ));
     }
-    if request.target.trim().is_empty() {
-        return Err(field("target", "the target wire name is required"));
-    }
-    if request.stage.trim().is_empty() {
-        return Err(field("stage", "the stage is required"));
-    }
-    if request.entry.trim().is_empty() {
-        return Err(field("entry", "the entry function name is required"));
+    for field_name in ["target", "stage", "entry"] {
+        let value = match field_name {
+            "target" => request.target.as_str(),
+            "stage" => request.stage.as_str(),
+            _ => request.entry.as_str(),
+        };
+        if value.is_empty() {
+            return Err(field(field_name, "must be a non-empty wire name"));
+        }
     }
     for define in &request.defines {
-        if define.name.trim().is_empty() {
-            return Err(field("defines", "each define carries a name"));
+        if define.name.is_empty() {
+            return Err(field(
+                "defines",
+                "a define carries a non-empty name and a string value",
+            ));
+        }
+    }
+    if request
+        .defines
+        .windows(2)
+        .any(|window| window[0].name >= window[1].name)
+    {
+        return Err(field("defines", "defines must be sorted by name with no duplicates"));
+    }
+    for include in &request.includes {
+        if include.is_empty() {
+            return Err(field("includes", "an include must be a non-empty string"));
         }
     }
     Ok(())
@@ -377,41 +388,50 @@ fn settle_compile(
 ) -> BoundaryResult {
     let guard = verify_and_hold(&candidate.tool_path, &candidate.observation_identity);
     let guard = match guard {
-        Err(GuardRefusal::Changed { current_identity }) => {
-            return BoundaryResult::CandidateInvalidated {
-                candidate: candidate.clone(),
-                observation: CandidateObservation::Changed,
-                observed_identity: Some(current_identity),
-            };
-        }
-        Err(GuardRefusal::Missing) => {
-            return BoundaryResult::CandidateInvalidated {
-                candidate: candidate.clone(),
-                observation: CandidateObservation::Missing,
-                observed_identity: None,
-            };
-        }
-        Err(GuardRefusal::Unreadable) => {
-            return BoundaryResult::CandidateInvalidated {
-                candidate: candidate.clone(),
-                observation: CandidateObservation::Unreadable,
-                observed_identity: None,
-            };
-        }
-        Err(GuardRefusal::Unsupported) => {
+        Ok(guard) => guard,
+        Err(refusal) => return guard_refusal(refusal, candidate),
+    };
+    let args = serialize_compile(&roots, sequence, request);
+    let child = match spawn(executable, &args) {
+        Ok(child) => child,
+        Err(SpawnError { source: _ }) => {
             return BoundaryResult::LaunchFailed {
                 candidate: candidate.clone(),
             };
         }
-        Ok(guard) => guard,
     };
-    let args = serialize_compile(&roots, sequence, request);
-    let outcome = run_bounded(executable, &args, compile_budget, Some(Arc::clone(&cancel)));
-    // The guard is dropped here — after the spawn settled.
+    // The process EXISTS now — the guard released the path the instant
+    // creation settled; the candidate's file may be rebuilt while this
+    // run continues.
     drop(guard);
-    match outcome {
-        Ok(output) => BoundaryResult::Spawned { output },
-        Err(SpawnError { source: _ }) => BoundaryResult::LaunchFailed {
+    BoundaryResult::Spawned {
+        output: child.bounded_wait(compile_budget, Some(Arc::clone(&cancel))),
+    }
+}
+
+/// The shared mapping of a pre-spawn guard refusal onto the client's
+/// settlement vocabulary — one place, so the handshake and the compile
+/// paths cannot drift apart.
+fn guard_refusal(refusal: GuardRefusal, candidate: &ToolCandidate) -> BoundaryResult {
+    match refusal {
+        GuardRefusal::Changed { current_identity } => BoundaryResult::CandidateInvalidated {
+            candidate: candidate.clone(),
+            observation: CandidateObservation::Changed,
+            observed_identity: Some(current_identity),
+        },
+        GuardRefusal::Missing => BoundaryResult::CandidateInvalidated {
+            candidate: candidate.clone(),
+            observation: CandidateObservation::Missing,
+            observed_identity: None,
+        },
+        GuardRefusal::Unreadable => BoundaryResult::CandidateInvalidated {
+            candidate: candidate.clone(),
+            observation: CandidateObservation::Unreadable,
+            observed_identity: None,
+        },
+        // Not the toolchain's platform: no check possible, no spawn
+        // allowed — the honest structured fact the client reads.
+        GuardRefusal::Unsupported => BoundaryResult::LaunchFailed {
             candidate: candidate.clone(),
         },
     }

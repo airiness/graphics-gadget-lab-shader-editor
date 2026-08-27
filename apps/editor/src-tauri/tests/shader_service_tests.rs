@@ -371,11 +371,38 @@ fn the_staged_source_is_written_per_attempt_and_cleaned_after_settlement() {
 // ---------------------------------------------------------------- allowance
 
 #[test]
-fn a_malformed_request_shape_is_a_structured_refusal() {
-    let base = temp_base("shape");
+fn unsorted_defines_are_a_structured_refusal() {
+    let base = temp_base("shape-defines");
     let svc = service(&base, 5_000);
     let bad = NativeCompileRequest {
-        source: Vec::new(), // the emitted bytes are missing
+        source: b"emitted bytes".to_vec(),
+        source_identity: "a".repeat(64),
+        target: "gglab-dx12".into(),
+        stage: "vertex".into(),
+        entry: "main".into(),
+        defines: vec![
+            gglab_shader_graph_editor::CompileDefine { name: "B".into(), value: "1".into() },
+            gglab_shader_graph_editor::CompileDefine { name: "A".into(), value: "2".into() },
+        ],
+        includes: vec![],
+    };
+    let tool = base.join("dummy.exe");
+    match svc.compile(&candidate(&tool, b"whatever"), &bad) {
+        Err(ServiceError::RequestShape { field, .. }) => assert_eq!(field, "defines"),
+        other => panic!("expected a request-shape refusal, got {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn an_empty_source_is_well_formed_like_the_client_declares() {
+    // The client's isWellFormedRequest accepts the empty byte array; the
+    // host mirror must not invent a stricter rule (conformance fixture
+    // "empty-source" locks this from both sides).
+    let base = temp_base("shape-empty-source");
+    let svc = service(&base, 5_000);
+    let request = NativeCompileRequest {
+        source: Vec::new(),
         source_identity: "a".repeat(64),
         target: "gglab-dx12".into(),
         stage: "vertex".into(),
@@ -383,11 +410,10 @@ fn a_malformed_request_shape_is_a_structured_refusal() {
         defines: vec![],
         includes: vec![],
     };
-    let tool = base.join("dummy.exe");
-    match svc.compile(&candidate(&tool, b"whatever"), &bad) {
-        Err(ServiceError::RequestShape { field, .. }) => assert_eq!(field, "source"),
-        other => panic!("expected a request-shape refusal, got {other:?}"),
-    }
+    let tool = build_dummy(&base, "dummy.exe");
+    let content = std::fs::read(&tool).unwrap();
+    let attempt = svc.compile(&candidate(&tool, &content), &request).unwrap();
+    let _ = attempt.settle.join().unwrap();
     let _ = std::fs::remove_dir_all(&base);
 }
 

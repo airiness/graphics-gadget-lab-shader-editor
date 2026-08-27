@@ -12,11 +12,17 @@
 //! guard (see `provenance.rs`), and every byte of protocol meaning (the
 //! client's readers, across the boundary).
 //!
+//! The life is split at the process-creation boundary on purpose:
+//! `spawn` is where the provenance guard must still be alive (it closes
+//! the check-to-launch window), and it is DROPPED the instant the
+//! process is created — the guard never holds the path through the
+//! process's working life (a rebuild of the tool must not be impossible
+//! while a compile runs). `bounded_wait` then owns budget, cancel, and
+//! capture on the running child.
+//!
 //! The runtime is plain std (process + threads), not an async scheduler:
-//! a bounded child is a blocking concern, and this boundary owns the
-//! settlement of one process at a time per attempt. Nothing about the
-//! shape of the settlement depends on the runtime; only the plumbing
-//! does.
+//! a bounded child is a blocking concern, and nothing about the shape of
+//! the settlement depends on the runtime; only the plumbing does.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -72,30 +78,19 @@ impl std::convert::From<std::io::Error> for SpawnError {
     }
 }
 
-enum Ended {
-    Done(std::process::ExitStatus),
-    TimedOut,
-    Canceled,
-    WaitFailed(std::io::Error),
+/// A created process with its two streams already being captured —
+/// the state between a successful spawn and the settlement.
+pub struct RunningChild {
+    child: std::process::Child,
+    stdout_reader: std::thread::JoinHandle<Vec<u8>>,
+    stderr_reader: std::thread::JoinHandle<Vec<u8>>,
 }
 
-/// Execute `executable` with `args` (structural arguments — the caller
-/// serialized them; no shell string is ever accepted anywhere in this
-/// crate) under a budget, blocking until the settlement is known, and
-/// returning the ENTIRE output surface.
-///
-/// `cancel` is the service's per-attempt cancel flag (a compile attempt
-/// carries one; a handshake does not — cancel is an explicit per-build
-/// operation, and handshakes have no BuildId). Flag set — or the budget
-/// expiring — ends the attempt: the child is killed, the already-captured
-/// bytes are still reported, and the end state is the fact (`canceled`
-/// or `timed_out`), never an error.
-pub fn run_bounded(
-    executable: &std::path::Path,
-    args: &[String],
-    budget: ExecutionBudget,
-    cancel: Option<Arc<AtomicBool>>,
-) -> Result<BoundaryOutput, SpawnError> {
+/// Create the process with both pipes taken and their reader threads
+/// running. This is the call the provenance guard must span — and the
+/// call after which the guard may go immediately: the launch HAS
+/// happened by the time this returns.
+pub fn spawn(executable: &std::path::Path, args: &[String]) -> Result<RunningChild, SpawnError> {
     let mut child = std::process::Command::new(executable)
         .args(args)
         .stdout(std::process::Stdio::piped())
@@ -108,65 +103,90 @@ pub fn run_bounded(
     // capture.
     let stdout = child.stdout.take().expect("stdout was piped at spawn");
     let stderr = child.stderr.take().expect("stderr was piped at spawn");
-    let stdout_thread = std::thread::spawn(move || read_all_bytes(stdout));
-    let stderr_thread = std::thread::spawn(move || read_all_bytes(stderr));
-    // After the pipes are taken, the child struct owns only the process —
-    // which is all try_wait / kill / wait need.
-
-    let deadline = Instant::now() + budget.timeout;
-    let ended = loop {
-        // The child's own exit settles the attempt; the cancel flag and
-        // the clock are observed, in that order, on every pass.
-        match child.try_wait() {
-            Ok(None) => {}
-            Ok(Some(status)) => break Ended::Done(status),
-            Err(err) => break Ended::WaitFailed(err),
-        }
-        if let Some(flag) = cancel.as_ref() {
-            if flag.load(Ordering::SeqCst) {
-                break Ended::Canceled;
-            }
-        }
-        if Instant::now() >= deadline {
-            break Ended::TimedOut;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-
-    match ended {
-        Ended::Done(status) => Ok(BoundaryOutput {
-            stdout: stdout_thread.join().unwrap_or_default(),
-            stderr: stderr_thread.join().unwrap_or_default(),
-            exit_code: status.code().unwrap_or(-1),
-            timed_out: false,
-            canceled: false,
-        }),
-        Ended::Canceled => Ok(end_forced(&mut child, stdout_thread, stderr_thread, false)),
-        Ended::TimedOut => Ok(end_forced(&mut child, stdout_thread, stderr_thread, true)),
-        Ended::WaitFailed(err) => Err(SpawnError { source: err }),
-    }
+    Ok(RunningChild {
+        child,
+        stdout_reader: std::thread::spawn(move || read_all_bytes(stdout)),
+        stderr_reader: std::thread::spawn(move || read_all_bytes(stderr)),
+    })
 }
 
-/// A forced end (cancel or timeout): kill, reap, and report what was
-/// captured — the end state is the fact the client reads, and the bytes
-/// that landed before the end are still the bytes that happened.
-fn end_forced(
-    child: &mut std::process::Child,
-    stdout_thread: std::thread::JoinHandle<Vec<u8>>,
-    stderr_thread: std::thread::JoinHandle<Vec<u8>>,
-    timed_out: bool,
-) -> BoundaryOutput {
-    let _ = child.kill();
-    let status = child.wait();
-    BoundaryOutput {
-        stdout: stdout_thread.join().unwrap_or_default(),
-        stderr: stderr_thread.join().unwrap_or_default(),
-        // The end was forced — the child never exited on its own, so no
-        // exit code of its own is reported; the end state carries the
-        // meaning.
-        exit_code: status.ok().and_then(|status| status.code()).unwrap_or(-1),
-        timed_out,
-        canceled: !timed_out,
+impl RunningChild {
+    /// Wait for the settlement under a budget, observing the cancel
+    /// flag. The end state is the fact (`canceled` / `timed_out`), never
+    /// an error: a budget or cancel ends the child (kill, reap) and
+    /// reports what was captured; the child's own exit reports its own
+    /// exit code and bytes, verbatim.
+    ///
+    /// A failure of the OS WAIT on a child that IS running is not a
+    /// launch failure — the spawn already happened. It is an execution
+    /// fact: the child is terminated and reaped, and the settlement is
+    /// the captured bytes plus the reaped status, with neither end flag
+    /// set. The client reads that settlement as malformed; the host
+    /// has reported only things that happened.
+    pub fn bounded_wait(mut self, budget: ExecutionBudget, cancel: Option<Arc<AtomicBool>>) -> BoundaryOutput {
+        enum Pass {
+            Exited(std::io::Result<std::process::ExitStatus>),
+            Canceled,
+            TimedOut,
+        }
+        // The child's own exit settles the attempt; the cancel flag and
+        // the clock are observed, in that order, on every pass.
+        let deadline = Instant::now() + budget.timeout;
+        let outcome = loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => break Pass::Exited(Ok(status)),
+                Ok(None) => {}
+                Err(err) => break Pass::Exited(Err(err)),
+            }
+            if let Some(flag) = cancel.as_ref() {
+                if flag.load(Ordering::SeqCst) {
+                    break Pass::Canceled;
+                }
+            }
+            if Instant::now() >= deadline {
+                break Pass::TimedOut;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let timed_out = matches!(outcome, Pass::TimedOut);
+
+        match outcome {
+            Pass::Exited(Ok(status)) => BoundaryOutput {
+                stdout: self.stdout_reader.join().unwrap_or_default(),
+                stderr: self.stderr_reader.join().unwrap_or_default(),
+                exit_code: status.code().unwrap_or(-1),
+                timed_out: false,
+                canceled: false,
+            },
+            Pass::Exited(Err(_wait_error)) => {
+                // Wait failed on a child that IS running: terminate and
+                // reap, and report the reaped facts.
+                let _ = self.child.kill();
+                let status = self.child.wait();
+                BoundaryOutput {
+                    stdout: self.stdout_reader.join().unwrap_or_default(),
+                    stderr: self.stderr_reader.join().unwrap_or_default(),
+                    // The reap may or may not yield an exit code; a
+                    // forced end never fabricates one.
+                    exit_code: status.ok().and_then(|s| s.code()).unwrap_or(-1),
+                    timed_out: false,
+                    canceled: false,
+                }
+            }
+            Pass::Canceled | Pass::TimedOut => {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                // Whatever landed before the end is still the bytes that
+                // happened; the end state is the fact.
+                BoundaryOutput {
+                    stdout: self.stdout_reader.join().unwrap_or_default(),
+                    stderr: self.stderr_reader.join().unwrap_or_default(),
+                    exit_code: -1,
+                    timed_out,
+                    canceled: !timed_out,
+                }
+            }
+        }
     }
 }
 

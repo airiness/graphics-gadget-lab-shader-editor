@@ -7,13 +7,15 @@
 //! the service, and returns the service's values back — the service is
 //! the only place where host internals live.
 //!
-//! The commands are plain (blocking) Tauri commands: the service is a
-//! blocking host boundary by construction, and Tauri schedules command
-//! work outside the window's message loop — so no runtime is smuggled in
-//! here. The one thread this file owns is the settlement forwarder of
-//! an admitted compile (settle on its own thread, deliver to the UI's
-//! channel when it lands); the UI's `compile(..., channel)` call
-//! resolves immediately with the attempt's identity.
+//! The service itself is a blocking host boundary; the commands around
+//! it are async so the blocking work runs ON Tauri's runtime worker
+//! thread, never on the thread that owns the window: a 30-second
+//! handshake must not be able to hold the UI open-mouth. `cancel` stays
+//! a plain command — it is a flag write and a lookup, not work. The one
+//! worker this file owns besides that is the settlement forwarder of an
+//! admitted compile (settle on its own thread, deliver to the UI's
+//! channel when it lands); the compile call resolves immediately with
+//! the attempt's identity.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -35,24 +37,36 @@ impl ServiceShared {
 /// The `rename` carries the command's IPC name in the hyphenated form
 /// the web-facing surface uses: the client's invoke id is
 /// `shader-tool-discover`.
+///
+/// Async so the bookkeeping (a file identity hash over the candidate)
+/// runs on the runtime's worker thread, not the one that owns the
+/// window.
 #[tauri::command(rename = "shader-tool-discover")]
-fn shader_tool_discover(
+async fn shader_tool_discover(
     state: tauri::State<'_, ServiceShared>,
     request: DiscoverRequest,
 ) -> Result<DiscoverOutcome, ServiceError> {
-    Ok(state.service().discover(&request))
+    let service = Arc::clone(&state.0);
+    tauri::async_runtime::spawn_blocking(move || service.discover(&request))
+        .await
+        .map_err(|err| ServiceError::Host { detail: format!("the host task ended: {err}") })
 }
 
 /// `handshake(candidate)` → the raw output surface — or the structured
 /// pre-spawn refusal (`candidate-invalidated` / `launch-failed`). Always
 /// a value; the refusal IS the observation, and the observation is a
 /// fact.
+/// `handshake(candidate)` is the long pole (up to the 30-second budget):
+/// async, so it cannot freeze the window thread.
 #[tauri::command(rename = "shader-tool-handshake")]
-fn shader_tool_handshake(
+async fn shader_tool_handshake(
     state: tauri::State<'_, ServiceShared>,
     candidate: ToolCandidate,
 ) -> Result<BoundaryResult, ServiceError> {
-    Ok(state.service().handshake(&candidate))
+    let service = Arc::clone(&state.0);
+    tauri::async_runtime::spawn_blocking(move || service.handshake(&candidate))
+        .await
+        .map_err(|err| ServiceError::Host { detail: format!("the host task ended: {err}") })
 }
 
 /// `compile(candidate, request)` → the attempt's identity; its
@@ -60,14 +74,22 @@ fn shader_tool_handshake(
 /// refusal) is delivered on the channel — and is cancellable by build id
 /// until it settles. The command itself returns the identity, not the
 /// settlement.
+/// The admission step (validation + staging) is short but touches disk:
+/// keep it on the worker thread too; the long part (the run itself) is
+/// already on its own settlement thread.
 #[tauri::command(rename = "shader-tool-compile")]
-fn shader_tool_compile(
+async fn shader_tool_compile(
     state: tauri::State<'_, ServiceShared>,
     candidate: ToolCandidate,
     request: NativeCompileRequest,
     channel: tauri::ipc::Channel<BoundaryResult>,
 ) -> Result<BuildId, ServiceError> {
-    let attempt = state.service().compile(&candidate, &request)?;
+    let service = Arc::clone(&state.0);
+    // Two layers of Result: the worker task may end (JoinError), and
+    // the admission may refuse (ServiceError) — `?` on each, in order.
+    let attempt = tauri::async_runtime::spawn_blocking(move || service.compile(&candidate, &request))
+        .await
+        .map_err(|err| ServiceError::Host { detail: format!("the host task ended: {err}") })??;
     let build_id = attempt.build_id;
     std::thread::spawn(move || match attempt.settle.join() {
         Ok(settlement) => {
