@@ -176,6 +176,19 @@ incompatible   resolved, and the TOOL's facts contradict the required ones
 compatible     proven machine-readably compatible
 ```
 
+Ownership, and the stale-settlement rule: EVERY resolved state carries the
+candidate it is about — the state owns the current candidate, the proof
+owns the proof facts (the contract axis taken under), so "which candidate"
+has exactly one authority. Handshake and compile are asynchronous:
+settlements may settle out of order, after discovery has moved on.
+Therefore a CANDIDATE-SCOPED event (a handshake settlement, a candidate
+invalidation) applies ONLY to the candidate the state currently carries;
+a settlement that lands over a different candidate is stale and is
+ignored — the tool lifecycle applies the same discipline the build line
+already applies to slow old attempts, and the old candidate cannot loop
+back into proof through a late event. A candidate-resolved event is the
+one that may supersede: a new observation is a new fact.
+
 Tool-side transitions fire only on tool-side events. The handshake is the
 operation that establishes or refreshes proof, and it remains LEGAL for any
 resolved candidate — `discovered`, `unproven`, and `incompatible` alike

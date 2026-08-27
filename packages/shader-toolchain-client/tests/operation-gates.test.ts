@@ -47,8 +47,8 @@ describe("the handshake gate", () => {
     it("is legal for every resolved candidate state", () => {
         const states: readonly ToolCompatibilityState[] = [
             { status: "discovered", candidate: CANDIDATE },
-            { status: "unproven", reasons: [{ reason: "handshake-facts-absent", detail: "x", diagnostics: [] }] },
-            { status: "incompatible", mismatches: [] },
+            { status: "unproven", candidate: CANDIDATE, reasons: [{ reason: "handshake-facts-absent", detail: "x", diagnostics: [] }] },
+            { status: "incompatible", candidate: CANDIDATE, mismatches: [] },
             compatibleState(),
         ];
         for (const state of states) {
@@ -88,17 +88,19 @@ describe("the compile gate", () => {
         }
         expect(refused.reasons).toEqual([
             {
-                reason: "tool-unproven",
-                reasons: [
-                    {
-                        reason: "proof-not-for-this-candidate",
-                        detail:
-                            "the proof was taken under a different candidate observation (path or provenance changed); " +
-                            "re-resolve and re-handshake this candidate",
-                    },
-                ],
+                reason: "proof-not-for-this-candidate",
+                detail:
+                    "the proof was taken under a different candidate observation (path or provenance changed); " +
+                    "re-resolve and re-handshake this candidate",
             },
         ]);
+        // And the state itself keeps owning the candidate the proof
+        // belongs to — one authority for "which candidate".
+        if (state.status !== "compatible") {
+            throw new Error("test setup: the tool must be compatible here");
+        }
+        expect(state.candidate).toEqual(CANDIDATE);
+        expect(state.proof).toEqual({ processContractVersion: 1 });
     });
 
     it("refuses every other resolved state with its own structured reasons", () => {
@@ -121,6 +123,7 @@ describe("the compile gate", () => {
 
         const unproven: ToolCompatibilityState = {
             status: "unproven",
+            candidate: CANDIDATE,
             reasons: [
                 {
                     reason: "contract-not-supported",
@@ -132,6 +135,7 @@ describe("the compile gate", () => {
 
         const incompatible: ToolCompatibilityState = {
             status: "incompatible",
+            candidate: CANDIDATE,
             mismatches: [
                 {
                     kind: "identity",

@@ -40,8 +40,10 @@ import { readCompileOutput } from "./process-output.js";
  *  carrying the host's or the contract's own facts (the Build Inspector
  *  can surface them verbatim): `timed-out` (bounded execution ended
  *  it), `channel-violated` (a channel rule of the process contract
- *  broke — with the violation), `no-machine-document` (nothing
- *  machine-readable on the channel — with the structured rejection),
+ *  broke — with the violation), `machine-document-rejected` (the bytes
+ *  on the channel did not read as the machine document the process
+ *  contract requires — with the structured rejection: not JSON, a
+ *  missing or mistyped field, a wrong command, …),
  *  `candidate-invalidated` (the host's pre-spawn provenance check
  *  refused the launch — with the host's own observation facts: changed /
  *  missing / unreadable + the current identity), or `launch-failed`
@@ -49,7 +51,7 @@ import { readCompileOutput } from "./process-output.js";
 export type AttemptTermination =
     | { readonly kind: "timed-out" }
     | { readonly kind: "channel-violated"; readonly violation: ChannelViolation }
-    | { readonly kind: "no-machine-document"; readonly rejection: CompileRejection }
+    | { readonly kind: "machine-document-rejected"; readonly rejection: CompileRejection }
     | {
         readonly kind: "candidate-invalidated";
         readonly observation: CandidateObservation;
@@ -58,17 +60,16 @@ export type AttemptTermination =
     | { readonly kind: "launch-failed" };
 
 /** The read outcome of one attempt. A success carries the tool's own
- *  evidence envelope; a failure carries the tool's own failure envelope
- *  when one was produced and read, or a structured termination fact
- *  (see `AttemptTermination`) when the attempt ended before a machine
- *  document could be read; a cancellation is explicit on its own. */
+ *  evidence envelope; a failure is EITHER the tool's own failure
+ *  envelope (the document was read and reports the failure) OR a
+ *  structured termination fact (the attempt ended before / without a
+ *  readable machine document) — an attempt that failed can never have
+ *  both, and the type will not allow building that; a cancellation is
+ *  explicit on its own. */
 export type AttemptOutcome =
     | { readonly kind: "succeeded"; readonly envelope: CompileSuccessDocument }
-    | {
-        readonly kind: "failed";
-        readonly envelope?: CompileFailureDocument | undefined;
-        readonly termination?: AttemptTermination | undefined;
-      }
+    | { readonly kind: "failed"; readonly envelope: CompileFailureDocument }
+    | { readonly kind: "failed"; readonly termination: AttemptTermination }
     | { readonly kind: "canceled" };
 
 /**
@@ -84,8 +85,8 @@ export type AttemptOutcome =
  * - a spawned `timed-out` → a failed attempt (timed-out);
  * - a spawned `channel-violated` → a failed attempt (with the
  *   violation);
- * - a spawned `rejected` → a failed attempt (no-machine-document, with
- *   the structured rejection);
+ * - a spawned `rejected` → a failed attempt (machine-document-rejected,
+ *   with the structured rejection);
  * - a spawned failure document → a failed attempt with the tool's own
  *   envelope;
  * - a spawned success document → a successful attempt with the tool's
@@ -118,7 +119,7 @@ export function attemptOutcomeOfCompileResult(result: BoundaryResult): AttemptOu
     if (process.kind === "rejected") {
         return {
             kind: "failed",
-            termination: { kind: "no-machine-document", rejection: process.rejection },
+            termination: { kind: "machine-document-rejected", rejection: process.rejection },
         };
     }
     const document = process.document;

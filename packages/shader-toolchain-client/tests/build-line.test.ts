@@ -8,6 +8,7 @@ import {
     lastGoodAttemptOf,
     recordToLine,
     reportBuildLine,
+    type AttemptOutcome,
     type AttemptRecord,
     type AttemptTermination,
     type BuildLine,
@@ -321,14 +322,40 @@ describe("the compile settlement → attempt outcome mapping (client-owned)", ()
             },
         });
 
-        const garbage = attemptOutcomeOfCompileResult({
+        const garbage: AttemptOutcome = attemptOutcomeOfCompileResult({
             kind: "spawned",
             output: { stdout: utf8Encode("{ nope"), stderr: new Uint8Array(0), exitCode: 0, timedOut: false, canceled: false },
         });
-        if (garbage.kind !== "failed" || garbage.termination?.kind !== "no-machine-document") {
-            throw new Error("test setup: the garbage must map to no-machine-document");
+        if (garbage.kind !== "failed" || "envelope" in garbage) {
+            throw new Error("test setup: the garbage must map to a termination, not an envelope");
+        }
+        if (garbage.termination.kind !== "machine-document-rejected") {
+            throw new Error("test setup: the garbage must map to machine-document-rejected");
         }
         expect(garbage.termination.rejection.reason).toBe("not-json");
+    });
+
+    it("names a readable-but-malformed response correctly — the reader rejected it, no document-ABSENCE is claimed", () => {
+        // Valid JSON that misses the required fields: machine-looking,
+        // yet rejected. That is a MACHINE-DOCUMENT-REJECTED, not a
+        // no-machine-document, and the rejection is carried verbatim.
+        const missingFields: AttemptOutcome = attemptOutcomeOfCompileResult({
+            kind: "spawned",
+            output: {
+                stdout: utf8Encode('{"command":"compile","success":true}'),
+                stderr: new Uint8Array(0),
+                exitCode: 0,
+                timedOut: false,
+                canceled: false,
+            },
+        });
+        if (missingFields.kind !== "failed" || "envelope" in missingFields) {
+            throw new Error("test setup: the malformed response must map to a termination");
+        }
+        if (missingFields.termination.kind !== "machine-document-rejected") {
+            throw new Error("test setup: the malformed response must map to machine-document-rejected");
+        }
+        expect(missingFields.termination.rejection.reason).not.toBe("not-json");
     });
 
     it("keeps the tool's own envelopes when a document was read", () => {

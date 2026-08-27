@@ -105,8 +105,11 @@ describe("the ToolCompatibility state machine", () => {
         expect(state.provenFacts.toolIdentity).toBe("gglab-shaderc");
         expect(state.provenFacts.toolVersion).toBe("1.1.0");
         expect(state.provenFacts.supportedTargets).toEqual(["gglab-dx12", "gglab-vulkan13"]);
-        expect(state.proof.processContractVersion).toBe(1);
-        expect(state.proof.candidate).toEqual(CANDIDATE);
+        // The state owns the current candidate; the proof owns the proof
+        // facts — one authority for "which candidate", one for "what was
+        // proven about it".
+        expect(state.candidate).toEqual(CANDIDATE);
+        expect(state.proof).toEqual({ processContractVersion: 1 });
     });
 
     it("keeps the contract-not-supported path for the null-declaration world — unproven, with the refusal visible", () => {
@@ -212,6 +215,7 @@ describe("the ToolCompatibility state machine", () => {
         };
         expect(applyCompatibilityEvent(discovered, channel, REQUIREMENT)).toEqual({
             status: "unproven",
+            candidate: CANDIDATE,
             reasons: [{ reason: "channel-violated", violation: { reason: "stderr-non-empty", byteLength: 3 } }],
         });
 
@@ -223,6 +227,7 @@ describe("the ToolCompatibility state machine", () => {
         };
         expect(applyCompatibilityEvent(discovered, timedOut, REQUIREMENT)).toEqual({
             status: "unproven",
+            candidate: CANDIDATE,
             reasons: [{ reason: "handshake-timed-out" }],
         });
 
@@ -236,6 +241,7 @@ describe("the ToolCompatibility state machine", () => {
         };
         expect(applyCompatibilityEvent(compatible, launch, REQUIREMENT)).toEqual({
             status: "unproven",
+            candidate: CANDIDATE,
             reasons: [{ reason: "launch-failed" }],
         });
     });
@@ -248,7 +254,7 @@ describe("the ToolCompatibility state machine", () => {
         };
         const states: readonly ToolCompatibilityState[] = [
             { status: "discovered", candidate: CANDIDATE },
-            { status: "unproven", reasons: [{ reason: "handshake-timed-out" }] },
+            { status: "unproven", candidate: CANDIDATE, reasons: [{ reason: "handshake-timed-out" }] },
             applyCompatibilityEvent({ status: "discovered", candidate: CANDIDATE }, handshake(CANDIDATE, DESCRIBE_SUCCESS), REQUIREMENT),
         ];
         for (const state of states) {
@@ -265,7 +271,7 @@ describe("the ToolCompatibility state machine", () => {
         if (compatible.status !== "compatible") {
             throw new Error("test setup: the tool must be compatible");
         }
-        expect(compatible.proof.candidate).toEqual(CANDIDATE);
+        expect(compatible.candidate).toEqual(CANDIDATE);
 
         // Candidate invalidation is a LIFECYCLE event: the host reports it
         // alike on a handshake or on a compile attempt, and the refuted
@@ -370,16 +376,23 @@ describe("the ToolCompatibility state machine", () => {
         if (compatible.status !== "compatible") {
             throw new Error("test setup: the tool must be compatible");
         }
-        expect(compatible.proof.candidate).toEqual(CANDIDATE);
+        expect(compatible.candidate).toEqual(CANDIDATE);
+        expect(compatible.proof).toEqual({ processContractVersion: 1 });
 
-        // A re-handshake under a DIFFERENT observation (same path, new
-        // binary) re-proves for THAT observation — the old binding is
-        // replaced, not extended.
+        // A DIFFERENT observation (same path, new binary) only enters
+        // through discovery: a candidate-resolved event supersedes the
+        // current candidate, and re-proof is a handshake of THAT candidate
+        // — the old binding is replaced, not extended.
         const otherObservation: ToolCandidate = { ...CANDIDATE, observationIdentity: "file-identity:new-binary" };
-        const rebound = applyCompatibilityEvent(compatible, handshake(otherObservation, DESCRIBE_SUCCESS), REQUIREMENT);
+        const superseded = applyCompatibilityEvent(compatible, { kind: "candidate-resolved", candidate: otherObservation }, REQUIREMENT);
+        if (superseded.status !== "discovered" || !superseded.candidate) {
+            throw new Error("test setup: the new observation must replace the proof");
+        }
+        const rebound = applyCompatibilityEvent(superseded, handshake(otherObservation, DESCRIBE_SUCCESS), REQUIREMENT);
         expect(rebound.status).toBe("compatible");
         if (rebound.status === "compatible") {
-            expect(rebound.proof.candidate).toEqual(otherObservation);
+            expect(rebound.candidate).toEqual(otherObservation);
+            expect(rebound.proof).toEqual({ processContractVersion: 1 });
         }
 
         // And a candidate-resolved event for a distinct observation drops
@@ -411,8 +424,8 @@ describe("the ToolCompatibility state machine", () => {
     it("drops to unavailable when the tool is no longer resolvable, from any resolved state", () => {
         for (const state of [
             { status: "discovered", candidate: CANDIDATE },
-            { status: "unproven", reasons: [{ reason: "handshake-facts-absent" as const, detail: "x", diagnostics: [] }] },
-            { status: "incompatible", mismatches: [] },
+            { status: "unproven", candidate: CANDIDATE, reasons: [{ reason: "handshake-facts-absent" as const, detail: "x", diagnostics: [] }] },
+            { status: "incompatible", candidate: CANDIDATE, mismatches: [] },
         ] as readonly ToolCompatibilityState[]) {
             expect(applyCompatibilityEvent(state, { kind: "candidate-lost" }, REQUIREMENT).status).toBe("unavailable");
         }
@@ -424,6 +437,55 @@ describe("the ToolCompatibility state machine", () => {
         if (compatible.status === "compatible") {
             expect(applyCompatibilityEvent(compatible, { kind: "discovery-failed" }, REQUIREMENT).status).toBe("unavailable");
         }
+    });
+
+    it("ignores the stale settlements of a superseded candidate — a slow A never invalidates a fresh B", () => {
+        const A = CANDIDATE;
+        const B: ToolCandidate = { ...CANDIDATE, observationIdentity: "file-identity:fresh-observation" };
+
+        // Group 1: A proved; discovery supersedes to B and B proves;
+        // only NOW does A's in-flight attempt settle with its invalidation.
+        let state = applyCompatibilityEvent(initialToolState, { kind: "candidate-resolved", candidate: A }, REQUIREMENT);
+        state = applyCompatibilityEvent(state, handshake(A, DESCRIBE_SUCCESS), REQUIREMENT);
+        if (state.status !== "compatible") {
+            throw new Error("test setup: A must be proven compatible");
+        }
+        state = applyCompatibilityEvent(state, { kind: "candidate-resolved", candidate: B }, REQUIREMENT);
+        state = applyCompatibilityEvent(state, handshake(B, DESCRIBE_SUCCESS), REQUIREMENT);
+        if (state.status !== "compatible") {
+            throw new Error("test setup: B must be proven compatible");
+        }
+        const lateInvalidationA: CompatibilityEvent = {
+            kind: "candidate-invalidated",
+            candidate: A,
+            observation: "changed",
+            observedIdentity: "file-identity:replaced",
+        };
+        // A's refuted observation is a statement about A — never about B.
+        expect(applyCompatibilityEvent(state, lateInvalidationA, REQUIREMENT)).toEqual(state);
+        if (state.status === "compatible" && !state.candidate) {
+            throw new Error("test setup: B must still be the current candidate");
+        }
+
+        // Group 2: A's handshake is still in flight; discovery supersedes
+        // to B; only now does A's settlement arrive. B is discovered; the
+        // phantom proof must not land on B — and must not resurrect A.
+        const atA: ToolCompatibilityState = { status: "discovered", candidate: A };
+        const atB = applyCompatibilityEvent(atA, { kind: "candidate-resolved", candidate: B }, REQUIREMENT);
+        if (atB.status !== "discovered" || !atB.candidate) {
+            throw new Error("test setup: B must be discovered");
+        }
+        expect(applyCompatibilityEvent(atB, handshake(A, DESCRIBE_SUCCESS), REQUIREMENT)).toEqual(atB);
+
+        // And the mirror: while B is current, B's own invalidation still
+        // fires — the check is ownership, not a blanket ignore.
+        const invalidationB: CompatibilityEvent = {
+            kind: "candidate-invalidated",
+            candidate: B,
+            observation: "missing",
+            observedIdentity: null,
+        };
+        expect(applyCompatibilityEvent(state, invalidationB, REQUIREMENT)).toEqual({ status: "unavailable" });
     });
 
     it("does not judge target coverage: the facts are held, the judgment is the editor's", () => {

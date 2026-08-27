@@ -13,18 +13,21 @@
  * alike; refusing it on unproven would make compatible unreachable. Only
  * `unavailable` has no candidate to handshake.
  *
- * Proof is bound to a candidate OBSERVATION: the handshake event carries
- * the candidate the editor actually handshook, and the proof records it.
- * A candidate whose provenance has failed (the same path now holding
- * another binary, no file at all, or an unreadable one) is refuted by
- * the host — regardless of whether the host reports it on a handshake or
- * on a compile settlement, that is a CANDIDATE LIFECYCLE event, not a
- * handshake settlement: the refuted observation is no longer a valid
- * candidate FACT, so the tool returns to `unavailable` (no currently
- * valid resolved candidate), the proof bound to it is void, and only a
- * fresh discovery + handshake can re-enter. Bounded execution failing to
- * launch at all is equally structured (launch-failed), and equally
- * unproven: a fact, not a crash.
+ * Every RESOLVED state carries its candidate — the state owns the
+ * current candidate, and the proof owns the proof facts (the contract
+ * axis it was taken under). One invariant follows, and it closes the
+ * async race the client explicitly supports (in-flight handshakes and
+ * compiles settling out of order): a CANDIDATE-SCOPED event (a handshake
+ * settlement, a candidate invalidation) applies ONLY to the candidate
+ * the state currently carries; a settlement that lands over a different
+ * candidate is stale — the machine ignores it, exactly as the build line
+ * never lets a slow old attempt become current. A refuted candidate
+ * observation (changed / missing / unreadable, reported alike on a
+ * handshake or a compile attempt) is that lifecycle event: the
+ * observation is no longer a FACT and, if it is the current one, the
+ * tool returns to `unavailable` until a fresh discovery + handshake
+ * re-enters. A candidate-resolved event is the one that may SUPERSEDE
+ * the current candidate — a new observation is a new fact.
  *
  * A handshake CANCELED by the operator is NOT tool evidence: no fact was
  * reported, so the state stays as it was.
@@ -63,11 +66,7 @@ export type UnprovenReason =
         readonly violation: ChannelViolation;
       }
     | { readonly reason: "handshake-timed-out" }
-    | { readonly reason: "launch-failed" }
-    | {
-        readonly reason: "proof-not-for-this-candidate";
-        readonly detail: string;
-      };
+    | { readonly reason: "launch-failed" };
 
 /** One structured incompatibility — a fact the tool itself reports
  *  contradicting the required one, with both sides visible. */
@@ -85,32 +84,39 @@ export type CompatibilityMismatch =
         readonly contract: ContractSupportVerdict;
       };
 
-/** The proof the client holds: the contract axis the facts were proven
- *  under, bound to the exact candidate observation they were proven for. */
+/** The proof the client holds: the proof FACTS — the contract axis the
+ *  facts were proven under. The candidate the proof was taken under is
+ *  NOT stored here: the compatible state itself owns the current
+ *  candidate, and the proof inherently applies to it (one authority for
+ *  "which candidate", one for "what was proven about it"). */
 export interface ToolProof {
     readonly processContractVersion: number;
-    readonly candidate: ToolCandidate;
 }
 
-/** The tool's state as the client judges it. `unavailable` means NO
- *  CURRENTLY VALID resolved candidate: the discovery rules found
- *  nothing, or the resolved observation was refuted (invalidated) by
- *  the host at spawn time. It is the initial state, and the state the
- *  tool returns to until discovery and handshake re-establish a candidate
- *  and its proof. */
+/** The tool's state as the client judges it — and its ownership rules:
+ *  EVERY resolved state carries the candidate it is about; a candidate-
+ *  scoped event applies only to that candidate (see
+ *  `applyCompatibilityEvent`). `unavailable` means NO currently valid
+ *  resolved candidate: the discovery rules found nothing, or the resolved
+ *  observation was refuted (invalidated) by the host at spawn time. It
+ *  is the initial state, and the state the tool returns to until
+ *  discovery and handshake re-establish a candidate and its proof. */
 export type ToolCompatibilityState =
     | { readonly status: "unavailable" }
     | { readonly status: "discovered"; readonly candidate: ToolCandidate }
     | {
         readonly status: "unproven";
+        readonly candidate: ToolCandidate;
         readonly reasons: readonly UnprovenReason[];
       }
     | {
         readonly status: "incompatible";
+        readonly candidate: ToolCandidate;
         readonly mismatches: readonly CompatibilityMismatch[];
       }
     | {
         readonly status: "compatible";
+        readonly candidate: ToolCandidate;
         readonly provenFacts: ToolFacts;
         readonly proof: ToolProof;
       };
@@ -208,7 +214,24 @@ export function applyCompatibilityEvent(
     // so the tool returns to `unavailable` — no currently valid resolved
     // candidate — where its proof is void and there is nothing to
     // handshake. Only a fresh discovery + handshake re-enters.
+    // A candidate-scoped event applies ONLY to the candidate the state
+    // currently carries: a settlement that lands after discovery has
+    // moved on is stale and is ignored — the same class of race the
+    // build line already closes for slow old attempts.
+    if (
+        event.kind === "candidate-invalidated" &&
+        (state.status === "unavailable" || !candidatesEqual(state.candidate, event.candidate))
+    ) {
+        return state;
+    }
     if (event.kind === "candidate-invalidated") {
+        // The host refuted the resolved observation at spawn time
+        // (changed / missing / unreadable — on a handshake or a compile
+        // attempt, both). `discovered` is a FACT; a refuted observation
+        // is no longer a fact, so the tool returns to `unavailable` —
+        // no currently valid resolved candidate — where its proof is
+        // void and there is nothing to handshake. Only a fresh discovery
+        // + handshake re-enters.
         return { status: "unavailable" };
     }
     if (event.kind === "candidate-resolved") {
@@ -216,14 +239,20 @@ export function applyCompatibilityEvent(
         // the handshake, so even a previously compatible tool returns to
         // `discovered` and re-enters through (re-)handshake. A changed
         // observation (same path, new binary) is a different candidate:
-        // the old proof stops applying with it.
+        // the old proof stops applying with it. This is the ONE event
+        // that may supersede the current candidate: a new observation is
+        // a new fact.
         return { status: "discovered", candidate: event.candidate };
     }
 
-    // handshake: legal for any resolved state; with none, a no-op.
-    if (state.status === "unavailable") {
+    // handshake: legal for any resolved state carrying THIS candidate;
+    // over a different candidate (a stale async settlement) or over
+    // `unavailable`, a no-op — exactly as a slow old attempt never
+    // becomes current in the build line.
+    if (state.status === "unavailable" || !candidatesEqual(state.candidate, event.candidate)) {
         return state;
     }
+    const candidate = event.candidate;
 
     // A settled handshake closes every path: the pre-spawn refusals and
     // the launch failure are HOST facts; the spawned settlement is read
@@ -233,7 +262,7 @@ export function applyCompatibilityEvent(
     if (result.kind === "launch-failed") {
         // Bounded execution itself could not launch the candidate: a
         // structured fact, not a crash.
-        return { status: "unproven", reasons: [{ reason: "launch-failed" }] };
+        return { status: "unproven", candidate, reasons: [{ reason: "launch-failed" }] };
     }
 
     const process = result.process;
@@ -243,17 +272,19 @@ export function applyCompatibilityEvent(
         return state;
     }
     if (process.kind === "timed-out") {
-        return { status: "unproven", reasons: [{ reason: "handshake-timed-out" }] };
+        return { status: "unproven", candidate, reasons: [{ reason: "handshake-timed-out" }] };
     }
     if (process.kind === "channel-violated") {
         return {
             status: "unproven",
+            candidate,
             reasons: [{ reason: "channel-violated", violation: process.violation }],
         };
     }
     if (process.kind === "rejected") {
         return {
             status: "unproven",
+            candidate,
             reasons: [{ reason: "handshake-unreadable", rejection: process.rejection }],
         };
     }
@@ -269,6 +300,7 @@ export function applyCompatibilityEvent(
             // could fix.
             return {
                 status: "unproven",
+                candidate,
                 reasons: [{ reason: "contract-not-supported", contract }],
             };
         }
@@ -277,6 +309,7 @@ export function applyCompatibilityEvent(
         // ones — incompatible.
         return {
             status: "incompatible",
+            candidate,
             mismatches: [{ kind: "contract-axis", contract }],
         };
     }
@@ -285,6 +318,7 @@ export function applyCompatibilityEvent(
     if (document.success !== true) {
         return {
             status: "unproven",
+            candidate,
             reasons: [
                 {
                     reason: "handshake-facts-absent",
@@ -306,12 +340,13 @@ export function applyCompatibilityEvent(
         mismatches.push({ kind: "version", version });
     }
     if (mismatches.length > 0) {
-        return { status: "incompatible", mismatches };
+        return { status: "incompatible", candidate, mismatches };
     }
     return {
         status: "compatible",
+        candidate,
         provenFacts: facts,
-        proof: { processContractVersion: document.processContractVersion, candidate: event.candidate },
+        proof: { processContractVersion: document.processContractVersion },
     };
 }
 
@@ -322,7 +357,8 @@ export type AdmissionReason =
     | { readonly reason: "tool-unavailable" }
     | { readonly reason: "tool-discovered"; readonly detail: string }
     | { readonly reason: "tool-unproven"; readonly reasons: readonly UnprovenReason[] }
-    | { readonly reason: "tool-incompatible"; readonly mismatches: readonly CompatibilityMismatch[] };
+    | { readonly reason: "tool-incompatible"; readonly mismatches: readonly CompatibilityMismatch[] }
+    | { readonly reason: "proof-not-for-this-candidate"; readonly detail: string };
 
 export type OperationAdmission =
     | { readonly admitted: true }
@@ -353,22 +389,20 @@ export function admitCompile(
     candidate: ToolCandidate,
 ): OperationAdmission {
     if (state.status === "compatible") {
-        if (candidatesEqual(state.proof.candidate, candidate)) {
+        if (candidatesEqual(state.candidate, candidate)) {
             return { admitted: true };
         }
+        // The compatible state's proof inherently applies to ITS
+        // candidate: a different candidate (path or provenance changed)
+        // is a different observation the proof was not taken under.
         return {
             admitted: false,
             reasons: [
                 {
-                    reason: "tool-unproven",
-                    reasons: [
-                        {
-                            reason: "proof-not-for-this-candidate",
-                            detail:
-                                "the proof was taken under a different candidate observation (path or provenance changed); " +
-                                "re-resolve and re-handshake this candidate",
-                        },
-                    ],
+                    reason: "proof-not-for-this-candidate",
+                    detail:
+                        "the proof was taken under a different candidate observation (path or provenance changed); " +
+                        "re-resolve and re-handshake this candidate",
                 },
             ],
         };
