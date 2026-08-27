@@ -487,6 +487,32 @@ The service owns no graph knowledge, no profile knowledge, and no
 DXC/backend policy. If a service-level test needs protocol content, the test
 has escaped its boundary and is wrong.
 
+Implementation clauses (the Windows platform, the toolchain's platform):
+
+```text
+provenance guard  the pre-spawn check opens the candidate file read-only
+                  with NO share mode (write, delete, rename, and replace
+                  all fail while the handle is held), hashes it on that
+                  handle (the observation identity is a SHA-256 content
+                  hash — a stable "changed" detector), and holds the
+                  handle until process creation settles: the
+                  check-to-launch window is CLOSED by the guard itself,
+                  not by timing. Identity now different → changed (the
+                  current identity is reported, for re-discovery); no
+                  file → missing; no readable handle → unreadable.
+discovery single-flight  at most one in-flight discovery attempt per
+                  service session: a concurrent discover is serialized
+                  behind the running one. Discovery is light bookkeeping
+                  — it gets no second async scheduling system of its own.
+handshake candidate  the candidate a handshake compiles from is the one
+                  the compatibility STATE carries; the UI holds no
+                  private stale copy. The state machine's stale-settlement
+                  rule is the backstop, not the design.
+timeout policy    bounded execution is host policy — a handshake budget
+                  and a compile budget as service constants, internal to
+                  the host, not client configuration.
+```
+
 ---
 
 ## 10. Generated-source staging

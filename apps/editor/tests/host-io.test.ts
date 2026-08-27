@@ -187,15 +187,35 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         );
     });
 
-    it("keeps the host custom-command-free (official plugins only, no arbitrary-path commands)", async () => {
+    it("exposes exactly the four sanctioned host-boundary commands, on top of the official plugins (EXACT set — any extra command fails)", async () => {
+        const libRs = await readFile(resolve(tauriDir, "src/lib.rs"), "utf8");
         const mainRs = await readFile(resolve(tauriDir, "src/main.rs"), "utf8");
-        expect(mainRs).toContain("tauri_plugin_dialog");
-        expect(mainRs).toContain("tauri_plugin_fs");
-        // No hand-written IPC surface, no raw arbitrary-path fs access.
+        // The shell keeps the two official plugins — the access model.
+        expect(libRs).toContain("tauri_plugin_dialog");
+        expect(libRs).toContain("tauri_plugin_fs");
+        // The web-facing command surface is EXACTLY the four host-boundary
+        // capabilities of the toolchain client (design section 9) — a
+        // fifth command is a surface violation.
+        // The attribute is `#[tauri::command(rename = "<id>")]` — the
+        // `[` sits inside a character class here: a bare `[` in a regex
+        // literal would start a class of its own and swallow the rest
+        // of the pattern. The rename value is the web-facing invoke id.
+        const commandPattern = /#[[]tauri::command\(rename = "([^"]+)"\)/g;
+        const commands = [...libRs.matchAll(commandPattern)].map((m) => m[1] as string);
+        expect(commands.sort()).toEqual([
+            "shader-tool-cancel",
+            "shader-tool-compile",
+            "shader-tool-discover",
+            "shader-tool-handshake",
+        ]);
+        // No raw arbitrary-path file access anywhere on the web-facing
+        // host surface itself.
         expect(mainRs).not.toContain("#[tauri::command]");
         expect(mainRs).not.toContain("invoke_handler");
         expect(mainRs).not.toContain("fs::read_to_string");
         expect(mainRs).not.toContain("fs::write");
+        expect(libRs).not.toContain("fs::read_to_string");
+        expect(libRs).not.toContain('std::fs::write');
     });
 
     it("tightens the webview CSP now that the host can move real files", async () => {

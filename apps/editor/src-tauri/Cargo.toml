@@ -1,14 +1,30 @@
 [package]
 name = "gglab-shader-graph-editor"
 version = "0.1.0"
-description = "Thin desktop host for the GGLab Shader Graph Editor web frontend."
+description = "Thin desktop host for the GGLab Shader Graph Editor web frontend, plus the ShaderToolService process boundary."
 edition = "2021"
 
-# This crate is a deliberately thin desktop shell: it hosts the existing
-# React/Vite frontend in a native window and owns nothing else. It knows
-# nothing about ShaderGraph semantics, profileVersion, descriptor
-# compatibility, or HLSL emission — all of that stays in the frontend and
-# in shader-graph-core, exactly as in the browser.
+# Two layers in one crate:
+#
+# - the thin desktop shell (main.rs): it hosts the React/Vite frontend and
+#   owns TWO official plugins (dialog, scoped fs) — the access model;
+# - the ShaderToolService (src/shader_tool/): the host-side implementation
+#   of the toolchain client's declared host boundary — exactly four
+#   allowlisted capabilities (discover / handshake / compile / cancel),
+#   host-internal request validation and invocation serialization (no shell
+#   string, no argv in any TypeScript-facing surface), bounded execution
+#   (timeout / cancel / whole-output capture), the pre-spawn provenance
+#   guard, and private per-attempt staging.
+#
+# Neither layer knows anything about shader-graph semantics, profile
+# versions, or readiness: the client package declares the machine protocol
+# and interprets the raw output; this service executes and reports raw
+# facts. Design authority: docs/GGLab_Shader_Toolchain_Integration_Design.md
+# (sections 9 and 10).
+
+[lib]
+name = "gglab_shader_graph_editor"
+path = "src/lib.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -17,3 +33,6 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
