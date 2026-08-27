@@ -63,11 +63,12 @@ import {
     type ShaderGraphDiagnostic,
     type SurfaceProfileDescriptor,
 } from "@gglab/shader-graph-core";
-import { utf8Encode, type NativeCompileRequest } from "@gglab/shader-toolchain-client";
+import { utf8Encode } from "@gglab/shader-toolchain-client";
 import { DEFAULT_BUILD_TARGET } from "./build-target-config.js";
 import type { BuildInspectorRow } from "./build-inspector.js";
 import { createDesktopFileChannel, isDesktopHost, type FileChannel } from "./host-io.js";
 import { useNativeBuild } from "./useNativeBuild.js";
+import type { CompileRequestFacts } from "./native-build-flow.js";
 import type { NativeBuildReadiness } from "./native-build-readiness.js";
 import { basenameOf, closeAction, createSession, isDirty, provenanceFromImport, provenanceFromFile, saveTarget, sessionSaved, sessionTitle, type CloseChoice, type DocumentProvenance, type DocumentSession } from "./document-session.js";
 import { saveShortcutOf } from "./shortcuts.js";
@@ -909,9 +910,13 @@ export function App() {
         emission,
     });
 
-    /** Compose the compile request (each field one source — section 8)
-     *  and pass it through the product gate. Nothing is issued on a
-     *  refusal: the gate's complete reasons are the note. */
+    /** Compose the compile request FACTS (each field one source —
+     *  section 8) and pass them through the product gate. The TARGET is
+     *  deliberately NOT among the caller's facts: it has exactly one
+     *  authority (the explicit build configuration), and the flow
+     *  injects it into the request value it will judge AND issue.
+     *  Nothing is issued on a refusal: the gate's complete reasons are
+     *  the note. */
     const onNativeCompile = async (): Promise<void> => {
         if (emission === null || emission.ok === false || emission.sourceMap === null) {
             native.addNote("refusal", "Native build needs the core's emission (Generate HLSL first): the request's source bytes and identity are the core's facts.");
@@ -921,16 +926,15 @@ export function App() {
             native.addNote("refusal", "Native build needs the loaded descriptor (stage / entry are its generatedFunction facts).");
             return;
         }
-        const request: NativeCompileRequest = {
+        const facts: CompileRequestFacts = {
             source: utf8Encode(emission.source),
             sourceIdentity: emission.sourceMap.generatedSourceIdentity,
-            target: native.target.target,
             stage: descriptor.generatedFunction.stage,
             entry: descriptor.generatedFunction.name,
             defines: [],
             includes: [...descriptor.requiredIncludes],
         };
-        await native.compileNow(request);
+        await native.compileNow(facts);
     };
 
     const nativeTargetOptions = useMemo(() => {
@@ -1181,8 +1185,8 @@ export function App() {
                         </Badge>
                         {readyReasonList(native.readiness) !== null && <ul className="gglab-native-reasons">{readyReasonList(native.readiness)}</ul>}
                         <ButtonGroup className="mt-2.5" role="toolbar" aria-label="native build tool actions">
-                            <Button variant="ghost" onClick={() => void native.discoverNow()}>
-                                Re-discover
+                            <Button variant="ghost" onClick={() => void native.discoverNow()} disabled={native.discoveryInFlight}>
+                                {native.discoveryInFlight ? "Discovering…" : "Re-discover"}
                             </Button>
                             <Button variant="ghost" onClick={() => void native.handshakeNow()} disabled={native.handshakeInFlight}>
                                 {native.handshakeInFlight ? "Handshaking…" : "Handshake (establish proof)"}

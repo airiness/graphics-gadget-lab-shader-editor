@@ -69,6 +69,13 @@ export interface FakeToolchainSpec {
     /** When true, spawn attempts stay in flight until settled by
      *  `releasePending()` or `cancel(buildId)`. */
     readonly keepCompilePending?: boolean | undefined;
+    /** When true, discoveries stay in flight until settled by
+     *  `releaseDiscovery()` — a controlled window for the flow's
+     *  single-flight tests. */
+    readonly keepDiscoveryPending?: boolean | undefined;
+    /** When true, handshake settlements stay in flight until settled by
+     *  `releaseHandshake()` — refusals (pre-spawn) never queue. */
+    readonly keepHandshakePending?: boolean | undefined;
 }
 
 interface PendingCompile {
@@ -81,6 +88,9 @@ export class FakeHostBoundary implements HostToolBoundary {
     private readonly pending = new Map<number, PendingCompile>();
     private handshakeCallCount = 0;
     private compileCallCount = 0;
+    private discoverCallCount = 0;
+    private pendingDiscovery: { resolve: (outcome: DiscoverOutcome) => void; outcome: DiscoverOutcome } | null = null;
+    private pendingHandshake: { resolve: (result: BoundaryResult) => void } | null = null;
 
     constructor(private readonly spec: FakeToolchainSpec) {}
 
@@ -94,27 +104,73 @@ export class FakeHostBoundary implements HostToolBoundary {
         return this.compileCallCount;
     }
 
+    get discoverCalls(): number {
+        return this.discoverCallCount;
+    }
+
     async discover(request: DiscoverRequest): Promise<DiscoverOutcome> {
+        this.discoverCallCount += 1;
         // The boundary resolves the scripted world for its configuration
         // facts; it owns no readiness judgment of its own.
         void request;
         const discovery = this.spec.discovery;
-        if (discovery.kind === "resolved") {
-            return { candidate: discovery.candidate, failures: [] };
+        const outcome: DiscoverOutcome =
+            discovery.kind === "resolved"
+                ? { candidate: discovery.candidate, failures: [] }
+                : { candidate: undefined, failures: [...discovery.failures] };
+        if (this.spec.keepDiscoveryPending === true) {
+            // The world's discovery stays in flight until the test
+            // settles it: a controlled window, no real time.
+            return new Promise<DiscoverOutcome>((resolve) => {
+                this.pendingDiscovery = { resolve, outcome };
+            });
         }
-        return { candidate: undefined, failures: [...discovery.failures] };
+        return outcome;
     }
 
     async handshake(candidate: ToolCandidate): Promise<BoundaryResult> {
         this.handshakeCallCount += 1;
         const refusal = this.preSpawnRefusal(candidate);
         if (refusal !== undefined) {
+            // The provenance refusal settles at the guard, not in flight:
+            // it never queues.
             return refusal;
         }
-        return {
-            kind: "spawned",
-            output: this.toOutput(this.spec.handshake),
-        };
+        const settlement: BoundaryResult = { kind: "spawned", output: this.toOutput(this.spec.handshake) };
+        if (this.spec.keepHandshakePending === true) {
+            // The world's handshake stays in flight until the test
+            // settles it: a controlled window, no real time.
+            return new Promise<BoundaryResult>((resolve) => {
+                this.pendingHandshake = { resolve };
+            });
+        }
+        return settlement;
+    }
+
+    /** Settles the in-flight discovery with its own scripted outcome.
+     *  Returns false when nothing is pending — an explicit fact, never a
+     *  silent skip. */
+    releaseDiscovery(): boolean {
+        const pending = this.pendingDiscovery;
+        if (pending === null) {
+            return false;
+        }
+        this.pendingDiscovery = null;
+        pending.resolve(pending.outcome);
+        return true;
+    }
+
+    /** Settles the in-flight handshake with its own scripted settlement.
+     *  Returns false when nothing is pending — an explicit fact, never a
+     *  silent skip. */
+    releaseHandshake(): boolean {
+        const pending = this.pendingHandshake;
+        if (pending === null) {
+            return false;
+        }
+        this.pendingHandshake = null;
+        pending.resolve({ kind: "spawned", output: this.toOutput(this.spec.handshake) });
+        return true;
     }
 
     async compile(candidate: ToolCandidate, request: NativeCompileRequest): Promise<CompileAttemptHandle> {

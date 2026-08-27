@@ -386,6 +386,13 @@ source   ← the staged generated HLSL: bytes = core's emission; identity = SHA-
 roots    ← service-owned locations (its private staging/cache/artifact areas)
 ```
 
+The API shape keeps the target rule structural: the caller of the compile
+entry supplies the request FACTS — a shape with NO target field — and the
+composition point itself injects the configured target into the request
+value. That same value is what the well-formed gate judges AND what the
+boundary issues: configuration → request → BuildIntent is a one-way fact
+stream, and no call shape can judge one target and issue another.
+
 The flow, in order — each stage has one job and never does the next stage's
 job, and **no argv exists anywhere on the TypeScript side**:
 
@@ -516,10 +523,21 @@ provenance guard  the pre-spawn check opens the candidate file read-only
                   not by timing. Identity now different → changed (the
                   current identity is reported, for re-discovery); no
                   file → missing; no readable handle → unreadable.
-discovery single-flight  at most one in-flight discovery attempt per
-                  service session: a concurrent discover is serialized
-                  behind the running one. Discovery is light bookkeeping
-                  — it gets no second async scheduling system of its own.
+discovery single-flight  two levels, same direction: the SERVICE
+                  serializes its own implementation (at most one
+                  in-flight discovery per service session — a concurrent
+                  discover is serialized behind the running one); the FLOW
+                  decides which invocation is current — a call made while
+                  a discovery is in flight JOINS that execution, not a
+                  competing one, so a late settlement of an older call can
+                  never supersede a newer observation. The service's lock
+                  serializes the implementation; it cannot, and need not,
+                  decide product intent. Discovery is light bookkeeping —
+                  it gets no second async scheduling system of its own.
+                  Handshake runs the same single-flight discipline in the
+                  flow: never two concurrent handshakes for one
+                  candidate — every entry point (startup bring-up, the
+                  button) shares the one lane.
 handshake candidate  the candidate a handshake compiles from is the one
                   the compatibility STATE carries; the UI holds no
                   private stale copy. The state machine's stale-settlement
@@ -772,7 +790,23 @@ anywhere.
      verdict taken under the old requirement: the candidate observation
      stays a fact (→ `discovered`, NotReady until re-proof), a fresh
      handshake re-proves under the new requirement, and a re-statement
-     of the SAME value changes nothing.
+     of the SAME value changes nothing;
+  15. the newest gate invocation's record stays GATE FACTS ONLY: with #1
+     and #2 issued, #2 settled, and #1 settling LATE, no record mixes a
+     gate with another attempt's outcome (the "gate #N + outcome of
+     attempt #M" attempt does not exist), and the surface's "newest
+     issued attempt outcome" is the NEWEST ISSUED attempt's own line
+     record — never the late older one;
+  16. the TARGET the gate judges is the target that gets issued: the
+     caller's input carries no target, the composition injects the
+     configured one, and the issued BuildIntent's target is exactly that
+     value (one-way: configuration → request → BuildIntent);
+  17. discovery is SINGLE-FLIGHT: a discover made while one is in flight
+     shares that exact execution (one boundary call), the lane closes on
+     settlement, and the next call is a fresh discovery;
+  18. handshake is SINGLE-FLIGHT too: a handshake made while one is in
+     flight (say, the startup bring-up) joins that execution — never two
+     concurrent handshakes for one candidate.
 
 **Non-normative test invariants:** no test asserts against a human-facing
 tool surface (`--version` text, `targets` listing, help output) — such a

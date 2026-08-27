@@ -65,14 +65,39 @@ describe("the reference fake host boundary", () => {
                 "constructor",
                 "cancel",
                 "discover",
+                "discoverCalls",
                 "handshake",
                 "handshakeCalls",
                 "preSpawnRefusal",
+                "releaseDiscovery",
+                "releaseHandshake",
                 "releasePending",
                 "toOutput",
             ].sort(),
         );
         void fake;
+    });
+
+    it("keeps a discovery in flight until released — with its own call count", async () => {
+        const fake = new FakeHostBoundary(spec({ keepDiscoveryPending: true }));
+        const pending = fake.discover({ bundled: false });
+        expect(fake.discoverCalls, "the discovery call is counted").toBe(1);
+        expect(fake.releaseDiscovery(), "one discovery is pending").toBe(true);
+        await expect(pending).resolves.toEqual({ candidate: CANDIDATE, failures: [] });
+        expect(fake.releaseDiscovery(), "nothing left pending").toBe(false);
+    });
+
+    it("keeps a handshake settlement in flight until released — refusals never queue", async () => {
+        const fake = new FakeHostBoundary(spec({ keepHandshakePending: true }));
+        const pending = fake.handshake(CANDIDATE);
+        expect(fake.handshakeCalls, "the handshake call is counted").toBe(1);
+        expect(fake.releaseHandshake(), "one handshake is pending").toBe(true);
+        await expect(pending).resolves.toMatchObject({ kind: "spawned" });
+        expect(fake.releaseHandshake(), "nothing left pending").toBe(false);
+        // A scripted refusal still settles at the guard, not in flight:
+        const refused = new FakeHostBoundary(spec({ keepHandshakePending: true, preSpawn: { refusal: "launch-failed" } }));
+        await expect(refused.handshake(CANDIDATE)).resolves.toEqual({ kind: "launch-failed", candidate: CANDIDATE });
+        expect(refused.releaseHandshake()).toBe(false);
     });
 
     it("returns the scripted discovery world, resolved or per-rule failed", async () => {

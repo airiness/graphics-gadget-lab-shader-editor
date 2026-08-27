@@ -128,8 +128,10 @@ export function projectHostAndTargetFacts(
 
 /** Project the build side: the composed request identity (BuildIntent's
  *  components, the `current`-ness anchor), the session's line report
- *  (the client's rules over the session store), and the most recent
- *  attempt's outcome facts. */
+ *  (the client's rules over the session store), and the NEWEST ISSUED
+ *  attempt's outcome facts — the caller passes the anchor's own record
+ *  (the session line is that outcome's single authority; null is the
+ *  honest "not yet" while the anchor is still in flight). */
 export function projectBuildFacts(
     flow: NativeBuildFlow,
     emission: { readonly sourceIdentity: string } | null,
@@ -159,7 +161,7 @@ export function projectBuildFacts(
     const outcomeRows =
         lastOutcome === null
             ? []
-            : [row("latest attempt outcome", describeOutcome(lastOutcome), "client's outcome vocabulary (never raw bytes)")];
+            : [row("newest issued attempt — outcome", describeOutcome(lastOutcome), "the session line's record for the anchor's BuildId (client's outcome vocabulary, never raw bytes)")];
     return [...generatedRow, ...intentRows, ...lineRows, ...outcomeRows];
 }
 

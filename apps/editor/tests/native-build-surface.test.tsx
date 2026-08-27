@@ -13,9 +13,10 @@
  */
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { FakeHostBoundary, type NativeCompileRequest, utf8Encode } from "@gglab/shader-toolchain-client";
+import { FakeHostBoundary, utf8Encode } from "@gglab/shader-toolchain-client";
 import { parseSurfaceProfileDescriptor, type SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
 import { useNativeBuild } from "../src/useNativeBuild.js";
+import type { CompileRequestFacts } from "../src/native-build-flow.js";
 
 /** The fake boundary the (mocked) host module creates — reachable from
  *  the test side for its settlement controls (releasePending). */
@@ -120,10 +121,12 @@ const descriptor: SurfaceProfileDescriptor = (() => {
     return parsed.value;
 })();
 
-const REQUEST: NativeCompileRequest = {
+/** The caller's request FACTS — no target field: the composition's
+ *  configuration (its default "gglab-dx12") is the target's one
+ *  authority, and the flow composes it into the request value. */
+const REQUEST_FACTS: CompileRequestFacts = {
     source: utf8Encode("/* generated */\nvoid EvaluateSurface() { }"),
     sourceIdentity: "cd".repeat(32),
-    target: "gglab-dx12",
     stage: "pixel",
     entry: "EvaluateSurface",
     defines: [],
@@ -159,6 +162,8 @@ describe("the native-build surface (hook over the fake world)", () => {
         expect(hook.result.current.readiness).toEqual({ status: "Ready" });
         expect(hook.result.current.ready).toBe(true);
         expect(hook.result.current.compileInFlight).toBe(false);
+        expect(hook.result.current.handshakeInFlight, "the startup handshake has closed its lane").toBe(false);
+        expect(hook.result.current.discoveryInFlight, "the startup discovery has closed its lane").toBe(false);
     });
 
     it("shows an admitted attempt IN FLIGHT before it settles — the cancel target is visible for the whole window", async () => {
@@ -173,7 +178,7 @@ describe("the native-build surface (hook over the fake world)", () => {
         // settlement (the fake keeps it pending) — nothing settles.
         let compilePromise: Promise<{ admitted: boolean; buildId?: number }> | undefined;
         await act(async () => {
-            compilePromise = hook.result.current.compileNow(REQUEST);
+            compilePromise = hook.result.current.compileNow(REQUEST_FACTS);
         });
         expect(compilePromise, "the compile call was issued").toBeDefined();
 
@@ -189,6 +194,10 @@ describe("the native-build surface (hook over the fake world)", () => {
         // The line still has no settled attempt — the window is not over:
         // no current, no last-good yet.
         expect(hook.result.current.lineReport?.current).toBeUndefined();
+        // The anchor's own outcome is not settled either — the surface's
+        // "newest issued attempt outcome" is the honest "not yet" (and it
+        // can never be a different attempt's outcome in its place).
+        expect(hook.result.current.lastOutcome, "the anchor is in flight: no outcome yet, and no other attempt's in its place").toBeNull();
         // And readiness has not changed in the meantime — the window is
         // an in-flight fact, not a readiness change.
         expect(hook.result.current.ready).toBe(true);
@@ -206,5 +215,9 @@ describe("the native-build surface (hook over the fake world)", () => {
         expect(hook.result.current.compileInFlight).toBe(false);
         expect(hook.result.current.lineReport?.current?.buildId.sequence).toBe(1);
         expect(hook.result.current.lineReport?.states.find((entry) => entry.buildId.sequence === 1)?.state).toBe("current");
+        // The surface's "newest issued attempt outcome" is now the
+        // ANCHOR's own record from the session line — its single
+        // authority (not a second copy stamped anywhere else).
+        expect(hook.result.current.lastOutcome?.kind, "the anchor's settled outcome, read from the line").toBe("succeeded");
     });
 });

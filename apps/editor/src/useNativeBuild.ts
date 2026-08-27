@@ -13,19 +13,24 @@
  * UI nicety), and recomposes the readiness on every input change
  * (derived, never remembered).
  *
- * The compile surface's own invariant: an admitted attempt is IN FLIGHT
+ * The compile surface's own invariants: an admitted attempt is IN FLIGHT
  * on the session line BEFORE its settlement is awaited — the tick that
  * makes the surface observe it lands after the admission and before the
  * outcome, so the in-flight row (and its cancel) is visible for the
- * whole window, not only at settlement.
+ * whole window, not only at settlement. The session line is the SINGLE
+ * authority for "BuildId → intent → outcome": the surface's "newest
+ * attempt outcome" reads the anchor's own record (or, while the anchor
+ * is still in flight, the honest "not yet") — never a second copy.
+ * Discovery and handshake are single-flight in the flow itself: the
+ * surface's in-flight facts are that same lane, observed, not re-counted.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HlslEmission, SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
-import type { AttemptOutcome, BuildLineReport, NativeCompileRequest } from "@gglab/shader-toolchain-client";
+import type { AttemptOutcome, BuildLineReport } from "@gglab/shader-toolchain-client";
 import { createBuildTargetConfiguration, setBuildTarget, type BuildTargetConfiguration } from "./build-target-config.js";
 import { projectBuildInspector, type BuildInspectorFacts } from "./build-inspector.js";
 import { sessionReport } from "./native-build-session.js";
-import { NativeBuildFlow } from "./native-build-flow.js";
+import { NativeBuildFlow, type CompileRequestFacts } from "./native-build-flow.js";
 import { type NativeBuildReadiness } from "./native-build-readiness.js";
 import { createTauriToolBoundary, toolBoundaryAvailable } from "./toolchain-host.js";
 
@@ -58,18 +63,30 @@ export interface NativeBuildSurface {
     readonly setTarget: (target: string) => void;
     /** The session's line projection against the current intent. */
     readonly lineReport: BuildLineReport | null;
-    /** The latest attempt's outcome (the client's vocabulary). */
+    /** The NEWEST ISSUED attempt's outcome (the client's vocabulary) —
+     *  read from the session line, its single authority: the anchor's
+     *  own record once settled; null (an honest "not yet") while the
+     *  anchor is still in flight. Under out-of-order settlements this
+     *  can never be a different attempt's outcome. */
     readonly lastOutcome: AttemptOutcome | null;
     /** The inspector projection (one source of truth per field). */
     readonly inspector: BuildInspectorFacts | null;
-    /** Whether a handshake is in progress (a fact, for the surface). */
+    /** Whether a handshake is in flight — the flow's single-flight lane,
+     *  observed (shared by the startup bring-up and this surface). */
     readonly handshakeInFlight: boolean;
+    /** Whether a discovery is in flight — the flow's single-flight lane
+     *  (Re-discover joins it; the button is disabled for the window). */
+    readonly discoveryInFlight: boolean;
     /** Whether a compile was issued and not yet settled. */
     readonly compileInFlight: boolean;
     readonly lastGateRefusal: readonly string[] | null;
     readonly discoverNow: () => Promise<void>;
     readonly handshakeNow: () => Promise<void>;
-    readonly compileNow: (request: NativeCompileRequest) => Promise<{ admitted: boolean; buildId?: number; outcome?: AttemptOutcome }>;
+    /** The caller's request FACTS (NO target — the configuration is
+     *  the target's one authority and the flow injects it): returns the
+     *  structured refusal (with the complete gate reasons) or the
+     *  settled outcome of the admitted attempt. */
+    readonly compileNow: (requestFacts: CompileRequestFacts) => Promise<{ admitted: boolean; buildId?: number; outcome?: AttemptOutcome }>;
     readonly cancelNow: (buildId: number) => Promise<void>;
     /** The operation note — structured one-liners (the surface states
      *  what happened and why; never prose-mined from tool output). */
@@ -84,7 +101,6 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
     // hook adds (no second copy of any fact the flow owns).
     const [target, setTargetConfig] = useState<BuildTargetConfiguration>(() => createBuildTargetConfiguration());
     const [, bump] = useState(0);
-    const [handshakeInFlight, setHandshakeInFlight] = useState(false);
     const [notes, setNotes] = useState<{ level: "ok" | "info" | "refusal"; text: string }[]>([]);
     const flowRef = useRef<NativeBuildFlow | null>(null);
     const startedRef = useRef(false);
@@ -208,8 +224,28 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
     const lineReport =
         flow === null || flow.buildSession.lastIssued === null ? null : sessionReport(flow.buildSession, flow.buildSession.lastIssued.intent);
 
-    const lastCompile = flow?.compileRecord ?? null;
-    const lastOutcome = lastCompile !== null && lastCompile.outcome !== undefined ? lastCompile.outcome : null;
+    // The newest GATE invocation's record (gate facts only — the flow
+    // stores no outcome in it: a settle stamping the newest gate would
+    // forge attempts under out-of-order settlements).
+    const lastGate = flow?.lastGate ?? null;
+
+    // The attempt outcome is read from the session line — its single
+    // authority ("BuildId → intent → outcome", one record per attempt).
+    // The NEWEST ISSUED attempt is the anchor; read THAT record: settled
+    // means its outcome, still in flight means the honest "not yet".
+    // Under out-of-order settlements a late older settlement can never
+    // masquerade as the newest one here.
+    const lastOutcome: AttemptOutcome | null = (() => {
+        if (flow === null) {
+            return null;
+        }
+        const anchor = flow.buildSession.lastIssued;
+        if (anchor === null) {
+            return null;
+        }
+        const record = flow.buildSession.line.attempts.find((entry) => entry.buildId.sequence === anchor.buildId.sequence);
+        return record?.outcome ?? null;
+    })();
 
     const inspector = useMemo(() => {
         if (flow === null) {
@@ -238,32 +274,32 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
             note("refusal", "Handshake not available: no host boundary in this shell.");
             return;
         }
-        setHandshakeInFlight(true);
-        try {
-            const record = await flow.handshake();
-            const tool = flow.tool;
-            if (record.admission.admitted === false) {
-                note("refusal", `Handshake refused by the client gate: ${record.admission.reasons.map((reason) => reason.reason).join(", ")}`);
-            } else if (record.candidateInvalidated) {
-                note("refusal", "The host refuted the candidate's observation at spawn time; the state re-enters via discovery + handshake.");
-            } else {
-                note("info", `Handshake settled; tool state is now: ${tool.status}`);
-            }
-        } finally {
-            setHandshakeInFlight(false);
-            bump((n) => n + 1);
+        // The flow's single-flight lane: if one is already in flight
+        // (the startup bring-up, say), this call JOINS it — there is no
+        // second concurrent handshake for the same candidate.
+        const record = await flow.handshake();
+        const tool = flow.tool;
+        if (record.admission.admitted === false) {
+            note("refusal", `Handshake refused by the client gate: ${record.admission.reasons.map((reason) => reason.reason).join(", ")}`);
+        } else if (record.candidateInvalidated) {
+            note("refusal", "The host refuted the candidate's observation at spawn time; the state re-enters via discovery + handshake.");
+        } else {
+            note("info", `Handshake settled; tool state is now: ${tool.status}`);
         }
+        bump((n) => n + 1);
     }, [flow, note]);
 
     const compileNow = useCallback(
-        async (request: NativeCompileRequest): Promise<{ admitted: boolean; buildId?: number; outcome?: AttemptOutcome }> => {
+        async (requestFacts: CompileRequestFacts): Promise<{ admitted: boolean; buildId?: number; outcome?: AttemptOutcome }> => {
             if (flow === null) {
                 note("refusal", "Compile not available: no host boundary in this shell.");
                 return { admitted: false };
             }
-            // The ONE product entry: the gate is composed inside, and
-            // nothing around it issues (design section 6: no bypass).
-            const admission = await flow.compile(request, {
+            // The ONE product entry: the gate is composed inside (the
+            // configured target INJECTED there — one request value both
+            // judged and issued), and nothing around it issues (design
+            // section 6: no bypass).
+            const admission = await flow.compile(requestFacts, {
                 descriptorLoaded: input.descriptor !== null,
                 descriptorCompatible: input.descriptorCompatible,
                 descriptorDetail: input.descriptorDetail,
@@ -307,7 +343,14 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
 
     const hostAvailable = flow !== null && toolBoundaryAvailable(globalThis);
     const compileInFlight = flow !== null && flow.buildSession.inFlight.length > 0;
-    const lastGateRefusal = lastCompile !== null && lastCompile.admitted === false ? (lastCompile.readiness.status === "NotReady" ? lastCompile.readiness.reasons.map((reason) => reason.reason) : ["request-not-well-formed"]) : null;
+    const handshakeInFlight = flow?.handshakeInFlight ?? false;
+    const discoveryInFlight = flow?.discoveryInFlight ?? false;
+    const lastGateRefusal =
+        lastGate !== null && lastGate.admitted === false
+            ? lastGate.readiness.status === "NotReady"
+                ? lastGate.readiness.reasons.map((reason) => reason.reason)
+                : ["request-not-well-formed"]
+            : null;
 
     const setTarget = useCallback((next: string) => {
         setTargetConfig((previous) => setBuildTarget(previous, next));
@@ -325,6 +368,7 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
         lastOutcome,
         inspector,
         handshakeInFlight,
+        discoveryInFlight,
         compileInFlight,
         lastGateRefusal,
         discoverNow,

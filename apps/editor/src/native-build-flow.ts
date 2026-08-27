@@ -14,14 +14,29 @@
  *   them (a `candidate-invalidated` settlement IS a tool-lifecycle
  *   event, wherever it lands — handshake or compile, both).
  *
- * The product guarantee it enforces (design section 6): ONLY a `Ready`
- * readiness composition issues a native compile request. It is structural,
- * not conventional: the flow's single compile entry (`compile`) is the
- * only path to an issuer, and the issuer itself (`beginAdmittedCompile`)
- * is PRIVATE — a `NotReady` composition cannot reach the boundary
- * through any public call. A handshake, on the other hand, is legal for
- * every resolved candidate — it is the operation that establishes proof;
- * the flow never refuses one on that ground.
+ * The product guarantees it enforces (design section 6):
+ *
+ * - ONLY a `Ready` readiness composition issues a native compile
+ *   request. Structural, not conventional: the flow's single compile
+ *   entry (`compile`) is the only path to an issuer, and the issuer
+ *   itself (`beginAdmittedCompile`) is PRIVATE — a `NotReady`
+ *   composition cannot reach the boundary through any public call.
+ * - The TARGET has exactly one authority (the design's target rule):
+ *   the explicit build configuration. `compile` takes the caller's
+ *   request FACTS (no target field) and injects the configured target
+ *   itself, before the well-formed gate — one request value is both
+ *   judged and issued. No call shape can judge one target and issue
+ *   another.
+ * - DISCOVERY and HANDSHAKE are single-flight: a call made while one is
+ *   in flight JOINS that execution (the same promise), so the newest
+ *   boundary call is the only one in flight by construction — no late
+ *   settlement of an older call can supersede a newer one, and no two
+ *   concurrent handshakes for one candidate can even arise. Every
+ *   entry point (startup bring-up, the buttons) shares the lane.
+ *
+ * A handshake, on the other hand, is legal for every resolved
+ * candidate — it is the operation that establishes proof; the flow
+ * never refuses one on that ground.
  *
  * No argv exists anywhere in this module: the boundary takes domain-
  * shaped values and owns the serialization host-internal.
@@ -38,6 +53,7 @@ import {
     requirementsEqual,
     type AttemptOutcome,
     type BuildId,
+    type CompileDefine,
     type CompatibilityJudgment,
     type DiscoverOutcome,
     type DiscoverRequest,
@@ -77,6 +93,24 @@ export interface HostCapabilityReport {
     readonly detail: string;
 }
 
+/** The single one-way target stream: the target's authority is the
+ *  explicit build configuration; the request value issued is the caller's
+ *  facts plus THAT target — and no other source may provide one. An
+ *  unset target composes to an empty value, so the well-formed gate's
+ *  own report names it (the readiness side already reported
+ *  `TargetNotConfigured`; the gate's reasons stay complete either way). */
+function compileRequestFor(facts: CompileRequestFacts, configuredTarget: string | null): NativeCompileRequest {
+    return {
+        source: facts.source,
+        sourceIdentity: facts.sourceIdentity,
+        target: configuredTarget ?? "",
+        stage: facts.stage,
+        entry: facts.entry,
+        defines: [...facts.defines],
+        includes: [...facts.includes],
+    };
+}
+
 /** What the inspector reads after a handshake attempt — the admission
  *  gate's verdict and the settlement the flow applied (the state
  *  machine's own transition input). */
@@ -105,15 +139,35 @@ export type CompileAdmission =
     | { readonly admitted: false; readonly gate: CompileGate }
     | { readonly admitted: true; readonly gate: CompileGate; readonly buildId: BuildId; readonly outcome: Promise<AttemptOutcome> };
 
-/** What the inspector reads for the newest compile: the gate's verdict
- *  (complete when refused) and, once the attempt settles, its outcome
- *  and identity — the client's vocabulary, never the raw bytes. */
-export interface CompileAttemptRecord {
+/** The CALLER's input to a compile: every request fact EXCEPT the
+ *  target. The target has exactly one authority — the explicit build
+ *  configuration (its own input) — and `compile` itself injects it into
+ *  the request value and well-formedness-checks the result. The caller
+ *  cannot feed one target to the gate to be judged and another to the
+ *  boundary to be issued: the fact stream is single-directional —
+ *  configuration → request → BuildIntent. */
+export interface CompileRequestFacts {
+    readonly source: Uint8Array;
+    readonly sourceIdentity: string;
+    readonly stage: string;
+    readonly entry: string;
+    readonly defines: readonly CompileDefine[];
+    readonly includes: readonly string[];
+}
+
+/** What the inspector reads for the newest compile GATE: the gate's
+ *  verdict and, when refused, its complete reasons — and nothing about
+ *  any attempt's outcome. That record must stay gate-only: a settle
+ *  event arrives for a specific attempt, and stamping that attempt's
+ *  outcome onto the newest gate would, under out-of-order settlements,
+ *  forge an attempt that never existed (gate N's verdict with attempt
+ *  M's outcome). The outcomes have exactly one authority: the build
+ *  session's line records (BuildId → intent → outcome), read through
+ *  the session anchor. */
+export interface CompileGateRecord {
     readonly readiness: NativeBuildReadiness;
     readonly requestWellFormed: { readonly ok: true } | { readonly ok: false; readonly reason: string; readonly detail: string };
     readonly admitted: boolean;
-    readonly buildId?: BuildId | undefined;
-    readonly outcome?: AttemptOutcome | undefined;
 }
 
 export class NativeBuildFlow {
@@ -123,7 +177,12 @@ export class NativeBuildFlow {
     private session: NativeBuildSession = createNativeBuildSession();
     private lastDiscovery: DiscoverOutcome | null = null;
     private lastHandshake: HandshakeAttemptRecord | null = null;
-    private lastCompile: CompileAttemptRecord | null = null;
+    /** The newest gate invocation's RECORD — gate verdict and refusal
+     *  facts only. It NEVER carries an attempt's buildId or outcome:
+     *  the session line is the single authority for those (a settle
+     *  stamping the newest gate would forge attempts under out-of-order
+     *  settlements). */
+    private gateRecord: CompileGateRecord | null = null;
     /** The judgment input over which a handshake proves facts: the
      *  descriptor's process contract, mapped by the composition point —
      *  a CURRENT fact, not a snapshot: a descriptor change refreshes it,
@@ -190,12 +249,13 @@ export class NativeBuildFlow {
         return this.lastHandshake;
     }
 
-    /** The gate record of the newest compile (the inspector's read for
-     *  the gate's verdict and the settled outcome). Named for the
-     *  record — the operation itself is the `compile` method — so that
-     *  the two cannot be confused. */
-    get compileRecord(): CompileAttemptRecord | null {
-        return this.lastCompile;
+    /** The GATE record of the newest compile invocation (the
+     *  inspector's read for the gate's verdict and, when refused, the
+     *  complete reasons) — gate facts only; the attempt outcomes are
+     *  read from the build session's line, never from this record.
+     *  Named for what it is: the last gate, not the last attempt. */
+    get lastGate(): CompileGateRecord | null {
+        return this.gateRecord;
     }
 
     /** The tool's published supported targets as a FACT extracted by the
@@ -222,11 +282,48 @@ export class NativeBuildFlow {
 
     // ---- the tool lifecycle ---------------------------------------------
 
-    /** `discover`: the boundary resolves over its configuration facts;
+    private discoveryLane: Promise<DiscoverOutcome> | null = null;
+
+    /** Whether a discovery is in flight — the surface disables
+     *  Re-discover for the whole window (a fact, not a UI state). */
+    get discoveryInFlight(): boolean {
+        return this.discoveryLane !== null;
+    }
+
+    private handshakeLane: Promise<HandshakeAttemptRecord> | null = null;
+
+    /** Whether a handshake is in flight — the surface disables the
+     *  Handshake button for the whole window (a fact, not a UI state). */
+    get handshakeInFlight(): boolean {
+        return this.handshakeLane !== null;
+    }
+
+    /**
+     * `discover`: the boundary resolves over its configuration facts;
      *  the result is a LIFECYCLE EVENT for the tool state (a new
      *  observation is a new fact — the one event that may supersede;
-     *  a full failure returns the tool to `unavailable`). */
-    async discover(request: DiscoverRequest): Promise<DiscoverOutcome> {
+     *  a full failure returns the tool to `unavailable`).
+     *
+     * Single-flight: while a discovery is IN FLIGHT, a further
+     * `discover` call JOINS that exact execution instead of starting a
+     * competing one. The newest boundary call is then the only one in
+     * flight by construction, so a late settlement can never supersede a
+     * newer observation — the same discipline the build line applies to
+     * slow old attempts. The service's own lock serializes the
+     * implementation; it cannot (and need not) decide which invocation
+     * is current — that decision is the flow's, and it is this. The lane
+     * closes on settlement, so the next call is a fresh discovery.
+     */
+    discover(request: DiscoverRequest): Promise<DiscoverOutcome> {
+        if (this.discoveryLane === null) {
+            this.discoveryLane = this.runDiscovery(request).finally(() => {
+                this.discoveryLane = null;
+            });
+        }
+        return this.discoveryLane;
+    }
+
+    private async runDiscovery(request: DiscoverRequest): Promise<DiscoverOutcome> {
         const outcome = await this.boundary.discover(request);
         this.lastDiscovery = outcome;
         this.toolState =
@@ -247,11 +344,29 @@ export class NativeBuildFlow {
         return admitHandshake(this.toolState);
     }
 
-    /** `handshake`: the operation that establishes or refreshes proof.
+    /**
+     * `handshake`: the operation that establishes or refreshes proof.
      *  The flow never refuses a resolved candidate — re-handshaking
      *  `unproven` and `incompatible` is exactly how they enter
-     *  `compatible` (and re-enter it after an update at the same path). */
-    async handshake(): Promise<HandshakeAttemptRecord> {
+     *  `compatible` (and re-enter it after an update at the same path).
+     *
+     * Single-flight, like discovery: while a handshake is IN FLIGHT, a
+     * further `handshake()` call JOINS that exact execution — there is no
+     * second concurrent handshake for the same candidate, so no
+     * two-attempt "last one settles" question can even arise. Every entry
+     * point shares this lane: the startup bring-up and the button. The
+     * lane closes on settlement.
+     */
+    handshake(): Promise<HandshakeAttemptRecord> {
+        if (this.handshakeLane === null) {
+            this.handshakeLane = this.runHandshake().finally(() => {
+                this.handshakeLane = null;
+            });
+        }
+        return this.handshakeLane;
+    }
+
+    private async runHandshake(): Promise<HandshakeAttemptRecord> {
         const admission = this.handshakeGate();
         if (admission.admitted === false) {
             const record: HandshakeAttemptRecord = { admission, candidateInvalidated: false };
@@ -330,27 +445,27 @@ export class NativeBuildFlow {
      * `readiness.reasons` names every non-Ready input,
      * `requestWellFormed` names the ill-formed side — and the gate
      * never invents an additional verdict of its own.
+     *
+     * The target the gate JUDGES is composed HERE from the configuration
+     * — the caller cannot judge one target and issue another: the very
+     * request value the gate checks is the one `compile` hands the
+     * boundary.
      */
-    compileGate(request: NativeCompileRequest, input: DescriptorAndTargetInput) {
+    compileGate(requestFacts: CompileRequestFacts, input: DescriptorAndTargetInput) {
+        const request = compileRequestFor(requestFacts, input.configuredTarget);
         const readiness = this.readiness(input);
         const requestWellFormed = isWellFormedRequest(request);
         const admitted = readinessAdmitsCompile(readiness) && requestWellFormed.ok === true;
         const gate: CompileGate = { readiness, requestWellFormed, admitted };
-        this.lastCompile = {
-            readiness,
-            requestWellFormed,
-            admitted,
+        // The newest gate invocation's record: gate facts only. Attempt
+        // outcomes are NOT stamped here (the session line owns them) —
+        // see the CompileGateRecord rationale.
+        this.gateRecord = {
+            readiness: gate.readiness,
+            requestWellFormed: gate.requestWellFormed,
+            admitted: gate.admitted,
         };
         return gate;
-    }
-
-    /** Records the outcome of an ADMITTED attempt on the gate record
-     *  (the inspector's compile side, one record per attempt). */
-    private recordCompile(buildId: BuildId, outcome: AttemptOutcome): void {
-        const gate = this.lastCompile;
-        if (gate !== null) {
-            this.lastCompile = { ...gate, buildId, outcome };
-        }
     }
 
     /**
@@ -362,11 +477,15 @@ export class NativeBuildFlow {
      * and nothing is issued — there is no public method that issues
      * around it.
      */
-    async compile(request: NativeCompileRequest, input: DescriptorAndTargetInput): Promise<CompileAdmission> {
-        const gate = this.compileGate(request, input);
+    async compile(requestFacts: CompileRequestFacts, input: DescriptorAndTargetInput): Promise<CompileAdmission> {
+        const gate = this.compileGate(requestFacts, input);
         if (gate.admitted !== true) {
             return { admitted: false, gate };
         }
+        // THE request the gate judged — re-composed identically, so the
+        // admitted value and the issued value are one and the same
+        // target stream (configuration → request → BuildIntent).
+        const request = compileRequestFor(requestFacts, input.configuredTarget);
         const attempt = await this.beginAdmittedCompile(request);
         return { admitted: true, gate, buildId: attempt.buildId, outcome: attempt.outcome };
     }
@@ -430,7 +549,11 @@ export class NativeBuildFlow {
             }
             const settled = attemptOutcomeOfCompileResult(result);
             this.session = sessionSettle(this.session, handle.buildId, settled);
-            this.recordCompile(handle.buildId, settled);
+            // The outcome lives in the session line (its OWN record,
+            // keyed by this attempt's BuildId) — the single authority for
+            // "BuildId → intent → outcome". The gate record does NOT get
+            // it: stamping a settle onto the newest gate would forge
+            // attempts under out-of-order settlements.
             return settled;
         })();
         return { buildId: handle.buildId, outcome };
