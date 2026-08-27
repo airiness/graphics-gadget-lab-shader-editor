@@ -7,7 +7,7 @@
  * defined here: validation, port-level types, conformance, compatibility,
  * and emission all come from @gglab/shader-graph-core.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import {
     addConnection,
     removeConnection,
@@ -63,7 +63,12 @@ import {
     type ShaderGraphDiagnostic,
     type SurfaceProfileDescriptor,
 } from "@gglab/shader-graph-core";
+import { utf8Encode, type NativeCompileRequest } from "@gglab/shader-toolchain-client";
+import { DEFAULT_BUILD_TARGET } from "./build-target-config.js";
+import type { BuildInspectorRow } from "./build-inspector.js";
 import { createDesktopFileChannel, isDesktopHost, type FileChannel } from "./host-io.js";
+import { useNativeBuild } from "./useNativeBuild.js";
+import type { NativeBuildReadiness } from "./native-build-readiness.js";
 import { basenameOf, closeAction, createSession, isDirty, provenanceFromImport, provenanceFromFile, saveTarget, sessionSaved, sessionTitle, type CloseChoice, type DocumentProvenance, type DocumentSession } from "./document-session.js";
 import { saveShortcutOf } from "./shortcuts.js";
 // Type-only (erased at compile time): the official dialog option shapes,
@@ -503,22 +508,45 @@ export function App() {
         ];
     }, [document]);
 
-    const contractSets = useMemo<readonly DiagnosticSet[]>(() => {
+    // The core's profile × descriptor compatibility — one memo, two
+    // consumers (the diagnostics panel AND the native-build readiness
+    // composition): the verdict has exactly one source here.
+    const profileCompatibility = useMemo(() => {
         if (descriptor === null) {
+            return null;
+        }
+        return {
+            verdict: checkProfileDescriptorCompatibility(document, descriptor),
+            conformance: checkProfileConformance(document, descriptor),
+        };
+    }, [document, descriptor]);
+
+    const contractSets = useMemo<readonly DiagnosticSet[]>(() => {
+        if (profileCompatibility === null) {
             return [];
         }
-        const conformance = checkProfileConformance(document, descriptor);
-        const compatibility = checkProfileDescriptorCompatibility(document, descriptor);
+        const { conformance, verdict } = profileCompatibility;
         return [
             { title: "Parameter conformance", ok: conformance.ok, diagnostics: conformance.diagnostics, passedText: "Parameters conform to the loaded descriptor." },
             {
                 title: "Profile × descriptor compatibility",
-                ok: compatibility.ok,
-                diagnostics: compatibility.diagnostics,
+                ok: verdict.ok,
+                diagnostics: verdict.diagnostics,
                 passedText: "The document's profile line and this descriptor instance agree on capabilities.",
             },
         ];
-    }, [document, descriptor]);
+    }, [profileCompatibility]);
+
+    // The core's own explanation of a failed verdict (its structured
+    // diagnostics, one line — the readiness reason carries the core's
+    // detail verbatim, never a paraphrase).
+    const descriptorDetail = useMemo(() => {
+        if (profileCompatibility === null) {
+            return "no descriptor instance is loaded";
+        }
+        const first = profileCompatibility.verdict.diagnostics.find((diagnostic) => diagnostic.severity === "error");
+        return first !== undefined ? `${first.code}: ${first.message}` : "the profile and the descriptor instance disagree on capabilities";
+    }, [profileCompatibility]);
 
     function applyAuthoring(result: AuthoringResult, label: string): void {
         if (result.applied) {
@@ -869,6 +897,51 @@ export function App() {
     const contractProblemCount = contractSets.reduce((sum, set) => sum + set.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length, 0);
     const emissionIdentity = emission !== null && emission.ok && emission.sourceMap?.generatedSourceIdentity !== undefined ? emission.sourceMap.generatedSourceIdentity.slice(0, 12) + "…" : undefined;
 
+    // ---- native build (Step 4 surface) — the composition and gate ----
+    // Every RULE lives in the client (verdicts, the state machine, the
+    // build-line) and the pure editor modules (readiness composition,
+    // the session store, the inspector projection); the app owns only
+    // which facts feed them and the actions the user can take.
+    const native = useNativeBuild({
+        descriptor,
+        descriptorCompatible: profileCompatibility !== null && profileCompatibility.verdict.ok,
+        descriptorDetail,
+        emission,
+    });
+
+    /** Compose the compile request (each field one source — section 8)
+     *  and pass it through the product gate. Nothing is issued on a
+     *  refusal: the gate's complete reasons are the note. */
+    const onNativeCompile = async (): Promise<void> => {
+        if (emission === null || emission.ok === false || emission.sourceMap === null) {
+            native.addNote("refusal", "Native build needs the core's emission (Generate HLSL first): the request's source bytes and identity are the core's facts.");
+            return;
+        }
+        if (descriptor === null) {
+            native.addNote("refusal", "Native build needs the loaded descriptor (stage / entry are its generatedFunction facts).");
+            return;
+        }
+        const request: NativeCompileRequest = {
+            source: utf8Encode(emission.source),
+            sourceIdentity: emission.sourceMap.generatedSourceIdentity,
+            target: native.target.target,
+            stage: descriptor.generatedFunction.stage,
+            entry: descriptor.generatedFunction.name,
+            defines: [],
+            includes: [...descriptor.requiredIncludes],
+        };
+        await native.compileNow(request);
+    };
+
+    const nativeTargetOptions = useMemo(() => {
+        const supported = native.flow?.supportedTargets ?? null;
+        return Array.from(new Set<string>([native.target.target, DEFAULT_BUILD_TARGET, ...(supported ?? [])]));
+    }, [native.flow, native.target.target]);
+
+    const nativeInFlightAttempts = native.flow !== null ? native.flow.buildSession.inFlight : [];
+    const lastInFlight = nativeInFlightAttempts.length > 0 ? nativeInFlightAttempts[nativeInFlightAttempts.length - 1] : undefined;
+    const nativeInFlightSequence = lastInFlight === undefined ? null : lastInFlight.buildId.sequence;
+
     return (
         <div className="gglab-app">
             <header className="gglab-header">
@@ -1094,6 +1167,79 @@ export function App() {
                         </ButtonGroup>
                         {emission !== null && <EmissionPreview emission={emission} />}
                         </section>
+                    {/* Native build — readiness, gate, build line, and the
+                        Build Inspector projection (one source of truth
+                        per field; the inspector never computes facts). */}
+                    <section className="gglab-panel gglab-panel-native-build" aria-label="Native build">
+                        <h2 className="gglab-panel-title">Native build</h2>
+                        <p className="gglab-panel-hint">
+                            The product gate: only a Ready composition issues a native compile request (gate → request value → service; no path around it).
+                        </p>
+                        <Badge variant={native.ready ? "ok" : "error"}>
+                            <BadgeDot />
+                            {native.ready ? "Ready" : "NotReady"}
+                        </Badge>
+                        {readyReasonList(native.readiness) !== null && <ul className="gglab-native-reasons">{readyReasonList(native.readiness)}</ul>}
+                        <ButtonGroup className="mt-2.5" role="toolbar" aria-label="native build tool actions">
+                            <Button variant="ghost" onClick={() => void native.discoverNow()}>
+                                Re-discover
+                            </Button>
+                            <Button variant="ghost" onClick={() => void native.handshakeNow()} disabled={native.handshakeInFlight}>
+                                {native.handshakeInFlight ? "Handshaking…" : "Handshake (establish proof)"}
+                            </Button>
+                        </ButtonGroup>
+                        <div className="gglab-native-target">
+                            <label className="gglab-native-target-label" htmlFor="native-build-target">
+                                Build target (explicit configuration; default {DEFAULT_BUILD_TARGET})
+                            </label>
+                            <select id="native-build-target" className="gglab-native-select" value={native.target.target} onChange={(event) => native.setTarget(event.currentTarget.value)}>
+                                {nativeTargetOptions.map((option) => (
+                                    <option key={option} value={option}>
+                                        {option}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <ButtonGroup className="mt-2.5" role="toolbar" aria-label="native build actions">
+                            <Button variant="secondary" onClick={() => void onNativeCompile()} disabled={!native.ready}>
+                                {native.ready ? `Compile (target ${native.target.target})` : "Compile refused — NotReady (reasons above)"}
+                            </Button>
+                            {nativeInFlightSequence !== null && (
+                                <Button variant="ghost" onClick={() => void native.cancelNow(nativeInFlightSequence)}>
+                                    Cancel in-flight
+                                </Button>
+                            )}
+                        </ButtonGroup>
+                        {native.lineReport !== null && (
+                            <>
+                                <h2 className="gglab-panel-title" style={{ marginTop: 14 }}>
+                                    Build line (session)
+                                </h2>
+                                <dl className="gglab-facts">
+                                    {native.lineReport.states.map((entry, index) => (
+                                        <div key={`${entry.buildId.sequence}-${index}`} className="gglab-fact">
+                                            <dt>
+                                                #{entry.buildId.sequence} · {entry.intent.target}
+                                            </dt>
+                                            <dd className={`gglab-native-state gglab-native-state-${entry.state}`}>{entry.state}</dd>
+                                        </div>
+                                    ))}
+                                </dl>
+                            </>
+                        )}
+                        {native.inspector !== null && (
+                            <>
+                                <h2 className="gglab-panel-title" style={{ marginTop: 14 }}>
+                                    Build inspector (replayable evidence)
+                                </h2>
+                                <InspectorRows title="Tool" rows={native.inspector.tool} />
+                                <InspectorRows title="Descriptor" rows={native.inspector.descriptor} />
+                                <InspectorRows title="Host · target · readiness" rows={native.inspector.hostAndTarget} />
+                                <InspectorRows title="Build" rows={native.inspector.build} />
+                            </>
+                        )}
+                        {native.notes.length > 0 && <ul className="gglab-native-notes">{renderNativeNotes(native.notes)}</ul>}
+                    </section>
                         </>
                     ) : (
                         <div className="gglab-side-rail" aria-label="Inspector (collapsed)">
@@ -1150,6 +1296,68 @@ export function App() {
             </footer>
         </div>
     );
+}
+
+/** The readiness reason list (every non-Ready input's reason, complete
+ *  and structured — the inspector's explanation, not a failure). */
+function readyReasonList(readiness: NativeBuildReadiness): readonly ReactElement[] | null {
+    if (readiness.status === "Ready") {
+        return null;
+    }
+    const reasons = readiness.reasons;
+    return reasons.map((reason, index) => {
+        const extra =
+            reason.reason === "ToolUnproven"
+                ? ` [${reason.unprovenDetails.map((d) => d.code).join(", ")}]`
+                : reason.reason === "ToolIncompatible"
+                  ? ` [${reason.mismatchCodes.join(", ")}]`
+                  : "";
+        return (
+            <li key={`${reason.reason}-${index}`}>
+                <code className="gglab-panel-code">{reason.reason}</code> — {reason.detail}
+                {extra}
+            </li>
+        );
+    });
+}
+
+/** One inspector section: its owner's domain, and each fact row with
+ *  its VALUE (as the owner holds it) and the named SOURCE OF TRUTH —
+ *  the "one source of truth per field" guarantee, rendered. */
+function InspectorRows(props: { title: string; rows: readonly BuildInspectorRow[] }) {
+    const { title, rows } = props;
+    if (rows.length === 0) {
+        return null;
+    }
+    return (
+        <div>
+            <h3 className="gglab-panel-title" style={{ marginTop: 10 }}>
+                {title}
+            </h3>
+            <dl className="gglab-facts">
+                {rows.map((row, index) => (
+                    <div key={`${row.field}-${index}`} className="gglab-fact gglab-native-inspector-row">
+                        <dt>{row.field}</dt>
+                        <dd>
+                            {row.value}
+                            <div className="gglab-native-fact-source">
+                                source: {row.source}
+                            </div>
+                        </dd>
+                    </div>
+                ))}
+            </dl>
+        </div>
+    );
+}
+
+/** The native-build operation notes (structured one-liners). */
+function renderNativeNotes(notes: readonly { readonly level: "ok" | "info" | "refusal"; readonly text: string }[]): readonly ReactElement[] {
+    return notes.map((note, index) => (
+        <li key={`${note.text}-${index}`} className={`gglab-note-${note.level}`}>
+            {note.text}
+        </li>
+    ));
 }
 
 function EmissionPreview(props: { emission: HlslEmission }) {

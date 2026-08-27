@@ -1398,3 +1398,80 @@ button.gglab-diagnostics-item:hover {
     color: var(--warn);
     font-size: var(--type-body);
 }
+
+
+/* ---- native build (compositions and surface) ----------------------------- */
+
+.gglab-native-reasons {
+    margin: 8px 0 0;
+    padding-left: 18px;
+    color: var(--warn);
+    font-size: var(--type-body);
+    line-height: var(--lh-body);
+}
+
+.gglab-native-reasons li {
+    margin: 2px 0;
+}
+
+.gglab-native-notes {
+    margin: 8px 0 0;
+    padding-left: 18px;
+    font-size: var(--type-meta);
+    line-height: var(--lh-body);
+}
+
+.gglab-native-notes li {
+    margin: 3px 0;
+    color: var(--muted);
+}
+
+.gglab-native-notes li.gglab-note-refusal {
+    color: var(--warn);
+}
+
+.gglab-native-notes li.gglab-note-ok {
+    color: var(--text);
+}
+
+.gglab-native-fact-source {
+    margin: 0;
+    color: var(--faint);
+    font-size: var(--type-meta);
+}
+
+.gglab-native-select {
+    max-width: 220px;
+}
+
+.gglab-native-target {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 10px 0 0;
+}
+
+.gglab-native-target-label {
+    margin: 0;
+    color: var(--faint);
+    font-size: var(--type-meta);
+}
+
+.gglab-native-state {
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+}
+
+.gglab-native-state-current,
+.gglab-native-state-last-good {
+    color: var(--ok, var(--text));
+}
+
+.gglab-native-state-stale {
+    color: var(--muted);
+}
+
+.gglab-native-state-failed,
+.gglab-native-state-canceled {
+    color: var(--warn);
+}
