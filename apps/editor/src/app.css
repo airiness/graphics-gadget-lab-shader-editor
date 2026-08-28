@@ -659,6 +659,75 @@ body {
     transform: rotate(180deg);
 }
 
+/* ---- inspector zones (right side) ------------------------------------------ */
+/* One responsibility per tab (design section 13, surface note). The tab
+   carries the zone's LIVE STATE badge — the strip organizes, it never
+   hides; a zoned-out zone still states itself on its label. */
+
+/* Two columns of state CARDS instead of one row of squeezed tabs: the
+   inspector is 336px wide, and a 4-across row leaves ~73px per zone —
+   not enough for a zone name plus its live state badge. Two cards per
+   row give each zone the full state at its natural size; nothing is
+   abbreviated, nothing is clipped. */
+.gglab-inspector-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.gglab-inspector-tab {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 7px 4px;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid transparent;
+    border-radius: var(--r-1);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-heading);
+    text-align: center;
+}
+
+.gglab-inspector-tab:hover {
+    color: var(--text);
+    background: var(--panel-hi);
+    border-color: var(--border-soft);
+}
+
+.gglab-inspector-tab.active {
+    color: var(--text);
+    background: var(--panel-hi);
+    border-color: var(--border-soft);
+    font-weight: 700;
+}
+
+/* ---- path fields (input + native browse) ---------------------------------- */
+/* The path value stays typeable (it is configuration), and the browse
+   button is the convenience: the native dialog picks, the configured
+   value is what the next discovery resolves over. */
+
+.gglab-native-path-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.gglab-native-path-input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.gglab-native-path-browse {
+    flex: 0 0 auto;
+}
+
 .gglab-section-body {
     padding: 2px 0 10px;
 }

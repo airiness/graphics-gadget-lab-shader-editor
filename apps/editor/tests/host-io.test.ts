@@ -133,6 +133,34 @@ describe("host/file abstraction (native document I/O)", () => {
         }
     });
 
+    it("picks the tool executable as a FILE with the exe-first filter; cancel is null", async () => {
+        const { host, opens } = fakeHost({
+            openDialog: async () => "C:\\tools\\gglab-shaderc.exe",
+        });
+        const channel = createDesktopFileChannel(host);
+        expect(await channel.pickToolExecutablePath()).toBe("C:\\tools\\gglab-shaderc.exe");
+        expect(opens).toHaveLength(1);
+        const opts = opens[0] as { directory?: boolean; multiple?: boolean; filters?: Array<{ name?: string; extensions?: readonly string[] }> };
+        expect(opts.directory).toBe(false);
+        expect(opts.multiple).toBe(false);
+        expect(opts.filters?.[0]?.extensions).toEqual(["exe"]);
+        expect(opts.filters?.[1]?.extensions).toEqual([]); // the honest "all files" escape
+    });
+
+    it("picks the sibling build-output location as a DIRECTORY (single pick); cancel is null", async () => {
+        const { host, opens } = fakeHost({
+            openDialog: async () => "C:\\Projects\\GGLab\\Build\\Output",
+        });
+        const channel = createDesktopFileChannel(host);
+        expect(await channel.pickSiblingBuildOutputDirectory()).toBe("C:\\Projects\\GGLab\\Build\\Output");
+        const opts = opens[0] as { directory?: boolean; multiple?: boolean };
+        expect(opts.directory).toBe(true);
+        expect(opts.multiple).toBe(false);
+
+        const { host: cancelHost } = fakeHost({ openDialog: async () => null });
+        expect(await createDesktopFileChannel(cancelHost).pickSiblingBuildOutputDirectory()).toBeNull();
+    });
+
     it("picks save destinations through the save dialog, passing a default name", async () => {
         const { host, saves } = fakeHost();
         const channel = createDesktopFileChannel(host);

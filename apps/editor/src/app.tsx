@@ -72,6 +72,7 @@ import type { CompileRequestFacts } from "./native-build-flow.js";
 import type { NativeBuildReadiness } from "./native-build-readiness.js";
 import { basenameOf, closeAction, createSession, isDirty, provenanceFromImport, provenanceFromFile, saveTarget, sessionSaved, sessionTitle, type CloseChoice, type DocumentProvenance, type DocumentSession } from "./document-session.js";
 import { saveShortcutOf } from "./shortcuts.js";
+import { INSPECTOR_ZONES, INSPECTOR_ZONE_LABELS, inspectorZoneBadge, type InspectorZone, type InspectorZoneFacts } from "./inspector-tabs.js";
 // Type-only (erased at compile time): the official dialog option shapes,
 // used for the single documented boundary cast below. Runtime functions
 // are dynamically imported inside the desktop effect only.
@@ -139,6 +140,10 @@ export function App() {
     // Right inspector rail: layout session state, same model as the
     // library rail (the app owns which column is collapsed).
     const [inspectorOpen, setInspectorOpen] = useState(true);
+    /** The visible inspector zone — pure surface organization (inspector-tabs.ts):
+     *  the zoned-out zones keep their state on their TAB (a projection of
+     *  existing facts; the switch itself owns no state). */
+    const [inspectorZone, setInspectorZone] = useState<InspectorZone>("contract");
     // Connection selection — SESSION state (canvas interaction), never
     // document data: selecting or deselecting an edge must not dirty the
     // document. The projection (documentToFlow) receives it and renders
@@ -946,6 +951,60 @@ export function App() {
     const lastInFlight = nativeInFlightAttempts.length > 0 ? nativeInFlightAttempts[nativeInFlightAttempts.length - 1] : undefined;
     const nativeInFlightSequence = lastInFlight === undefined ? null : lastInFlight.buildId.sequence;
 
+    // Discovery-config picks (design section 5, rules 1 and 2): the
+    // native dialog seam belongs to the file channel (desktop host only —
+    // nothing chooses a path on its own in a web shell); the picked value
+    // lands in the CONFIG SETTER, its single write path — nothing else
+    // moves (the next Re-discover resolves over it).
+    const browseToolPath = async (): Promise<void> => {
+        const channel = fileChannel;
+        if (channel === null) {
+            return;
+        }
+        try {
+            const path = await channel.pickToolExecutablePath();
+            if (path !== null) {
+                native.setToolPath(path);
+            }
+        } catch (error) {
+            native.addNote("refusal", `Tool path pick failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    };
+
+    const browseSiblingBuildOutput = async (): Promise<void> => {
+        const channel = fileChannel;
+        if (channel === null) {
+            return;
+        }
+        try {
+            const path = await channel.pickSiblingBuildOutputDirectory();
+            if (path !== null) {
+                native.setSiblingBuildOutput(path);
+            }
+        } catch (error) {
+            native.addNote("refusal", `Build-output pick failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    };
+
+    // The zone badges: each zone's live STATE projected from the facts
+    // above (design section 13, surface note) — the badges render, they
+    // own nothing: one source of truth per fact stands.
+    const inspectorZoneFacts: InspectorZoneFacts = {
+        checks: {
+            ok: graphOk && contractOk && (loadResult === null || loadResult.ok),
+            problemCount:
+                graphProblemCount +
+                contractProblemCount +
+                (loadResult !== null ? loadResult.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length : 0),
+        },
+        document: { dirty },
+        emission: {
+            state: emission === null ? "none" : emission.ok === false ? "failed" : "ok",
+            problemCount: emission !== null && emission.ok === false ? emission.diagnostics.length : 0,
+        },
+        build: { ready: native.ready },
+    };
+
     return (
         <div className="gglab-app">
             <header className="gglab-header">
@@ -1110,7 +1169,34 @@ export function App() {
                                 </Button>
                             </div>
                         </div>
-                        <DescriptorPanel state={descriptorState} onStateChange={onDescriptorStateChange} openDescriptorFile={openDescriptorFile} />
+                        {/* Inspector zones (design section 13, surface note): one
+                            responsibility per tab; each tab carries its zone's
+                            LIVE STATE badge — the grouping organizes, it never
+                            hides: a zoned-out zone still states itself here. */}
+                        <div className="gglab-inspector-tabs" role="tablist" aria-label="Inspector zones">
+                            {INSPECTOR_ZONES.map((zone) => {
+                                const badge = inspectorZoneBadge(zone, inspectorZoneFacts);
+                                return (
+                                    <button
+                                        key={zone}
+                                        type="button"
+                                        role="tab"
+                                        aria-selected={inspectorZone === zone}
+                                        className={inspectorZone === zone ? "gglab-inspector-tab active" : "gglab-inspector-tab"}
+                                        onClick={() => setInspectorZone(zone)}
+                                    >
+                                        <span>{INSPECTOR_ZONE_LABELS[zone]}</span>
+                                        <Badge variant={badge.variant}>
+                                            <BadgeDot />
+                                            {badge.label}
+                                        </Badge>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        {inspectorZone === "contract" && (
+                            <>
+                            <DescriptorPanel state={descriptorState} onStateChange={onDescriptorStateChange} openDescriptorFile={openDescriptorFile} />
                     {graphSets.map((set) => (
                         <DiagnosticsPanel key={set.title} title={set.title} diagnostics={set.diagnostics} ok={set.ok} passedText={set.passedText} onSelect={selectDiagnostic} />
                     ))}
@@ -1120,6 +1206,10 @@ export function App() {
                     {loadResult !== null && (
                         <DiagnosticsPanel title={loadResult.title} diagnostics={loadResult.diagnostics} ok={loadResult.ok} passedText={loadResult.passedText} onSelect={selectDiagnostic} />
                     )}
+                            </>
+                        )}
+                        {inspectorZone === "document" && (
+                            <>
                     {/* Desktop slice 1: native document I/O. The host owns
                         path + UTF-8 bytes only; the core owns parse/
                         serialize; this app owns which text moves where. */}
@@ -1162,6 +1252,10 @@ export function App() {
                             </Button>
                         </ButtonGroup>
                     </section>
+                            </>
+                        )}
+                        {inspectorZone === "emission" && (
+                            <>
                     <section className="gglab-panel gglab-emission-block">
                         <h2 className="gglab-panel-title">Emission preview</h2>
                         <ButtonGroup className="mb-2.5">
@@ -1171,6 +1265,10 @@ export function App() {
                         </ButtonGroup>
                         {emission !== null && <EmissionPreview emission={emission} />}
                         </section>
+                            </>
+                        )}
+                        {inspectorZone === "build" && (
+                            <>
                     {/* Native build — readiness, gate, build line, and the
                         Build Inspector projection (one source of truth
                         per field; the inspector never computes facts). */}
@@ -1196,25 +1294,43 @@ export function App() {
                             <label className="gglab-native-target-label" htmlFor="native-tool-path">
                                 Tool path (explicit configuration; empty = that rule records its failure)
                             </label>
-                            <Input
-                                id="native-tool-path"
-                                placeholder="C:\…\gglab-shaderc.exe"
-                                value={native.discoveryConfig.explicitConfig}
-                                onChange={(event) => native.setToolPath(event.currentTarget.value)}
-                                aria-label="Explicit tool path (discovery rule 1)"
-                            />
+                            <div className="gglab-native-path-row">
+                                <Input
+                                    id="native-tool-path"
+                                    className="gglab-native-path-input"
+                                    placeholder="C:\…\gglab-shaderc.exe"
+                                    value={native.discoveryConfig.explicitConfig}
+                                    onChange={(event) => native.setToolPath(event.currentTarget.value)}
+                                    aria-label="Explicit tool path (discovery rule 1)"
+                                />
+                                {fileChannel !== null && (
+                                    <Button variant="ghost" className="gglab-native-path-browse" onClick={() => void browseToolPath()}>
+                                        <FileIcon />
+                                        Browse…
+                                    </Button>
+                                )}
+                            </div>
                         </div>
                         <div className="gglab-native-target">
                             <label className="gglab-native-target-label" htmlFor="native-sibling-build">
                                 Sibling GGLab build output (optional location)
                             </label>
-                            <Input
-                                id="native-sibling-build"
-                                placeholder="…\Build\Output\x64"
-                                value={native.discoveryConfig.siblingBuildOutput}
-                                onChange={(event) => native.setSiblingBuildOutput(event.currentTarget.value)}
-                                aria-label="Configured sibling build-output location (discovery rule 2)"
-                            />
+                            <div className="gglab-native-path-row">
+                                <Input
+                                    id="native-sibling-build"
+                                    className="gglab-native-path-input"
+                                    placeholder="…\Build\Output\x64"
+                                    value={native.discoveryConfig.siblingBuildOutput}
+                                    onChange={(event) => native.setSiblingBuildOutput(event.currentTarget.value)}
+                                    aria-label="Configured sibling build-output location (discovery rule 2)"
+                                />
+                                {fileChannel !== null && (
+                                    <Button variant="ghost" className="gglab-native-path-browse" onClick={() => void browseSiblingBuildOutput()}>
+                                        <FileIcon />
+                                        Browse…
+                                    </Button>
+                                )}
+                            </div>
                         </div>
                         <div className="gglab-native-target">
                             <label className="gglab-native-target-label" htmlFor="native-build-target">
@@ -1269,6 +1385,8 @@ export function App() {
                         {native.notes.length > 0 && <ul className="gglab-native-notes">{renderNativeNotes(native.notes)}</ul>}
                     </section>
                         </>
+                    )}
+                    </>
                     ) : (
                         <div className="gglab-side-rail" aria-label="Inspector (collapsed)">
                             <button type="button" className="gglab-rail-btn" onClick={() => setInspectorOpen(true)} title="Expand the inspector">

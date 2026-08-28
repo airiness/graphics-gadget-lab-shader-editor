@@ -691,6 +691,15 @@ failed*" surface: a reviewer must be able to determine, from it alone, which
 tool, under which contract facts, compiled which exact bytes, to what
 evidence, and why the state is what it is.
 
+**Surface grouping.** The right inspector groups its distinct
+responsibilities into zones (contract & checks · document · emission ·
+native build), one tab per zone. A zone's STATE stays visible while its
+content is zoned out — the tab label carries its live badge, projected from
+facts the editor already holds (the badge renders the fact; it owns
+nothing). Switching zones is surface organization only: it concedes no
+state authority and no fact changes. The guarantees above bind the zone's
+CONTENT (complete, one source of truth per field), not its position.
+
 ---
 
 ## 14. Testing
