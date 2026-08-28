@@ -1193,6 +1193,30 @@ export function App() {
                             </Button>
                         </ButtonGroup>
                         <div className="gglab-native-target">
+                            <label className="gglab-native-target-label" htmlFor="native-tool-path">
+                                Tool path (explicit configuration; empty = that rule records its failure)
+                            </label>
+                            <Input
+                                id="native-tool-path"
+                                placeholder="C:\…\gglab-shaderc.exe"
+                                value={native.discoveryConfig.explicitConfig}
+                                onChange={(event) => native.setToolPath(event.currentTarget.value)}
+                                aria-label="Explicit tool path (discovery rule 1)"
+                            />
+                        </div>
+                        <div className="gglab-native-target">
+                            <label className="gglab-native-target-label" htmlFor="native-sibling-build">
+                                Sibling GGLab build output (optional location)
+                            </label>
+                            <Input
+                                id="native-sibling-build"
+                                placeholder="…\Build\Output\x64"
+                                value={native.discoveryConfig.siblingBuildOutput}
+                                onChange={(event) => native.setSiblingBuildOutput(event.currentTarget.value)}
+                                aria-label="Configured sibling build-output location (discovery rule 2)"
+                            />
+                        </div>
+                        <div className="gglab-native-target">
                             <label className="gglab-native-target-label" htmlFor="native-build-target">
                                 Build target (explicit configuration; default {DEFAULT_BUILD_TARGET})
                             </label>

@@ -306,4 +306,48 @@ describe("the native-build surface (hook over the fake world)", () => {
         expect(hook.result.current.handshakeInFlight, "closed on its settlement").toBe(false);
         expect(fake.handshakeCalls, "one boundary handshake per lane").toBe(2);
     });
+
+    // THE CONFIGURATION PASS-THROUGH: the discovery configuration (rule
+    // 1 / rule 2 values, design section 5) reaches the boundary EXACTLY
+    // as configured — absent when unset (an honest failure of that rule,
+    // never a smuggled default), verbatim when set — and the `bundled`
+    // world fact is stated explicitly, not hidden.
+
+    it("passes the discovery configuration to the boundary — absent when unset, verbatim when set", async () => {
+        const { hook, fake } = bringUpSurface();
+        await waitFor(async () => {
+            expect(hook.result.current.flow?.tool.status).toBe("compatible");
+        });
+        // The startup discovery was configured by NOBODY yet: the
+        // request is honest about it.
+        expect(fake.lastDiscoveryRequest, "the startup's request: nothing set, nothing smuggled").toEqual({
+            bundled: false,
+            explicitConfig: undefined,
+            siblingBuildOutput: undefined,
+        });
+
+        await act(async () => {
+            hook.result.current.setToolPath("C:\\tools\\gglab-shaderc.exe");
+        });
+        await act(async () => {
+            await hook.result.current.discoverNow();
+        });
+        expect(fake.lastDiscoveryRequest, "the explicit tool path arrives verbatim; the other rule stays absent").toEqual({
+            bundled: false,
+            explicitConfig: "C:\\tools\\gglab-shaderc.exe",
+            siblingBuildOutput: undefined,
+        });
+
+        await act(async () => {
+            hook.result.current.setSiblingBuildOutput("C:\\GGLab\\Build\\Output");
+        });
+        await act(async () => {
+            await hook.result.current.discoverNow();
+        });
+        expect(fake.lastDiscoveryRequest, "both configured values arrive together").toEqual({
+            bundled: false,
+            explicitConfig: "C:\\tools\\gglab-shaderc.exe",
+            siblingBuildOutput: "C:\\GGLab\\Build\\Output",
+        });
+    });
 });

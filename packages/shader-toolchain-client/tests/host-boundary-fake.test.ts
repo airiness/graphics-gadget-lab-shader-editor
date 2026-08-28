@@ -66,6 +66,7 @@ describe("the reference fake host boundary", () => {
                 "cancel",
                 "discover",
                 "discoverCalls",
+                "lastDiscoveryRequest",
                 "handshake",
                 "handshakeCalls",
                 "preSpawnRefusal",

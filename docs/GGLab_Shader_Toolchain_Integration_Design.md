@@ -918,7 +918,12 @@ handshake contract exists (contract authority: normative design in the GGLab
 docs repository; implementation and self-tests in the main GGLab
 repository) and the client declares it supported: the real tool proves, and
 the stage-acceptance smoke runs through the real editor product path (first
-target `gglab-dx12`).
+target `gglab-dx12`). The repository-side half of this step is the
+discovery configuration surface: the rule 1/2 values of section 5 become
+explicit, visible, changeable configuration — passed to the discovery
+request verbatim; an empty value is the honest "not configured" (that
+rule records its own failure), and `bundled` is a world FACT stated in
+the request, not a setting to be hidden.
 *Exit:* the baseline's acceptance — compatible toolchain + compatible
 selected profile → `Ready` → generated HLSL → `gglab-shaderc` → artifact /
 build identity visible — holds in the desktop application, with the smoke

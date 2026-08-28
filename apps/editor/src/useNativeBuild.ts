@@ -31,6 +31,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HlslEmission, SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
 import type { AttemptOutcome, BuildLineReport } from "@gglab/shader-toolchain-client";
 import { createBuildTargetConfiguration, setBuildTarget, type BuildTargetConfiguration } from "./build-target-config.js";
+import {
+    createDiscoveryConfiguration,
+    discoveryRequestFor,
+    setExplicitToolPath,
+    setSiblingBuildOutput as applySiblingBuildOutput,
+    type DiscoveryConfiguration,
+} from "./discovery-config.js";
 import { projectBuildInspector, type BuildInspectorFacts } from "./build-inspector.js";
 import { sessionReport } from "./native-build-session.js";
 import { NativeBuildFlow, type CompileRequestFacts } from "./native-build-flow.js";
@@ -64,6 +71,12 @@ export interface NativeBuildSurface {
     readonly hostAvailable: boolean;
     readonly target: BuildTargetConfiguration;
     readonly setTarget: (target: string) => void;
+    /** The discovery configuration (rule 1: an explicit tool path;
+     *  rule 2: a sibling build-output location — empty means "not
+     *  configured", and that rule records its own failure). */
+    readonly discoveryConfig: DiscoveryConfiguration;
+    readonly setToolPath: (path: string) => void;
+    readonly setSiblingBuildOutput: (path: string) => void;
     /** The session's line projection against the current intent. */
     readonly lineReport: BuildLineReport | null;
     /** The NEWEST ISSUED attempt's outcome (the client's vocabulary) —
@@ -103,6 +116,7 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
     // makes the surface observe them, and it is the only state this
     // hook adds (no second copy of any fact the flow owns).
     const [target, setTargetConfig] = useState<BuildTargetConfiguration>(() => createBuildTargetConfiguration());
+    const [discoveryConfig, setDiscoveryConfig] = useState<DiscoveryConfiguration>(() => createDiscoveryConfiguration());
     const [, bump] = useState(0);
     const [notes, setNotes] = useState<{ level: "ok" | "info" | "refusal"; text: string }[]>([]);
     const flowRef = useRef<NativeBuildFlow | null>(null);
@@ -192,7 +206,10 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
         }
         startedRef.current = true;
         void (async () => {
-            const discoveryPending = flow.discover({ bundled: false });
+            // The discovery request is the configuration itself (rules 1
+            // and 2, pass-through verbatim; `bundled` states the
+            // development fact — no bundled deployment here).
+            const discoveryPending = flow.discover(discoveryRequestFor(discoveryConfig));
             bump((n) => n + 1); // lane OPEN — the surface must observe "discovering"
             const discovery = await discoveryPending;
             bump((n) => n + 1); // lane CLOSED — the surface re-reads the tool state
@@ -209,7 +226,7 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
             }
             bump((n) => n + 1);
         })();
-    }, [flow, note]);
+    }, [flow, note, discoveryConfig]);
 
     // The readiness — recomposed from CURRENT facts on every render
     // (derived, never remembered; a downgrade reads like an upgrade).
@@ -277,8 +294,9 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
         // Open/join the flow's discovery lane, then make the surface
         // observe the OPEN lane before the window closes (the lane is the
         // authority; the tick only re-reads it — the Re-discover button's
-        // disabled state and label render from this observation).
-        const pending = flow.discover({ bundled: false });
+        // disabled state and label render from this observation). The
+        // request is the discovery configuration itself (pass-through).
+        const pending = flow.discover(discoveryRequestFor(discoveryConfig));
         bump((n) => n + 1);
         const discovery = await pending;
         if (discovery.candidate !== undefined) {
@@ -288,7 +306,7 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
             note("refusal", `Tool unavailable — no candidate resolved (${failures})`);
         }
         bump((n) => n + 1);
-    }, [flow, note]);
+    }, [flow, note, discoveryConfig]);
 
     const handshakeNow = useCallback(async (): Promise<void> => {
         if (flow === null) {
@@ -382,6 +400,22 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
         note("info", `Build target set to: ${next} (explicit configuration — the next BuildIntent carries it).`);
     }, [note]);
 
+    // The discovery configuration (design section 5, rules 1 and 2):
+    // explicit, visible, changeable session values — an empty value is
+    // the honest "not configured", and that rule records its own
+    // failure. Changing them changes the NEXT discovery (the operations
+    // are explicit: the Re-discover button, never an automatic
+    // re-resolution).
+    const setToolPath = useCallback((path: string) => {
+        setDiscoveryConfig((previous) => setExplicitToolPath(previous, path));
+        note("info", `Tool path (explicit configuration) ${path === "" ? "cleared" : `set to: ${path}`} — the next discovery resolves over it.`);
+    }, [note]);
+
+    const setSiblingBuildOutput = useCallback((path: string) => {
+        setDiscoveryConfig((previous) => applySiblingBuildOutput(previous, path));
+        note("info", `Sibling build-output location ${path === "" ? "cleared" : `set to: ${path}`} — the next discovery resolves over it.`);
+    }, [note]);
+
     return {
         readiness,
         ready,
@@ -389,6 +423,9 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
         hostAvailable,
         target,
         setTarget,
+        discoveryConfig,
+        setToolPath,
+        setSiblingBuildOutput,
         lineReport,
         lastOutcome,
         inspector,

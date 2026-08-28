@@ -924,3 +924,28 @@ describe("18 · handshake is single-flight — one lane for every entry point", 
         expect(flow.tool.status, "the single execution's proof landed").toBe("compatible");
     });
 });
+
+/* Scenario 19 — the discovery request travels VERBATIM: the flow
+ *  passes the caller's request configuration to the boundary unchanged
+ *  (no copy, no mutation, no stripping of the configured fields) — what
+ *  was configured is what the service is asked to resolve (design
+ *  section 5: the rule walk belongs to the service; the value only
+ *  supplies its input). */
+describe("19 · the discovery request reaches the boundary unchanged", () => {
+    it("the request the flow was given is the request the boundary received — same reference, same values", () => {
+        const fake = new FakeHostBoundary({
+            discovery: { kind: "resolved", candidate: CANDIDATE },
+            handshake: { stdout: describeDocument(FACTS_OK), exitCode: 0 },
+            compile: [{ stdout: compileOk("gglab-dx12"), exitCode: 0 }],
+        });
+        const flow = makeFlow(fake);
+        const request = { bundled: false, explicitConfig: "C:\\tools\\gglab-shaderc.exe", siblingBuildOutput: "C:\\GGLab\\Build\\Output" };
+        flow.discover(request);
+        expect(fake.lastDiscoveryRequest, "the boundary received exactly the request it was given (same reference — no clone, no mutation)").toBe(request);
+        expect(fake.lastDiscoveryRequest).toEqual({
+            bundled: false,
+            explicitConfig: "C:\\tools\\gglab-shaderc.exe",
+            siblingBuildOutput: "C:\\GGLab\\Build\\Output",
+        });
+    });
+});

@@ -89,6 +89,7 @@ export class FakeHostBoundary implements HostToolBoundary {
     private handshakeCallCount = 0;
     private compileCallCount = 0;
     private discoverCallCount = 0;
+    private discoveryRequestRecord: DiscoverRequest | null = null;
     private pendingDiscovery: { resolve: (outcome: DiscoverOutcome) => void; outcome: DiscoverOutcome } | null = null;
     private pendingHandshake: { resolve: (result: BoundaryResult) => void } | null = null;
 
@@ -108,8 +109,16 @@ export class FakeHostBoundary implements HostToolBoundary {
         return this.discoverCallCount;
     }
 
+    /** The LAST request a discovery call carried — the test's evidence of
+     *  what the boundary received verbatim (a caller that passed one
+     *  world and asked about another is caught here). */
+    get lastDiscoveryRequest(): DiscoverRequest | null {
+        return this.discoveryRequestRecord;
+    }
+
     async discover(request: DiscoverRequest): Promise<DiscoverOutcome> {
         this.discoverCallCount += 1;
+        this.discoveryRequestRecord = request;
         // The boundary resolves the scripted world for its configuration
         // facts; it owns no readiness judgment of its own.
         void request;
