@@ -12,16 +12,21 @@
  * not exist in the window it is for.
  */
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeHostBoundary, utf8Encode } from "@gglab/shader-toolchain-client";
 import { parseSurfaceProfileDescriptor, type SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
 import { useNativeBuild } from "../src/useNativeBuild.js";
 import type { CompileRequestFacts } from "../src/native-build-flow.js";
 
 /** The fake boundary the (mocked) host module creates — reachable from
- *  the test side for its settlement controls (releasePending). */
+ *  the test side for its settlement controls (releasePending,
+ *  releaseDiscovery, releaseHandshake). The pending knobs are read when
+ *  the hook CREATES its boundary (i.e. per test), so each test gets its
+ *  own world shape and its own counts. */
 const surfaceWorld = vi.hoisted(() => ({
     boundary: null as unknown,
+    holdDiscovered: false,
+    holdHandshake: false,
 }));
 
 vi.mock("../src/toolchain-host.js", async () => {
@@ -60,16 +65,21 @@ vi.mock("../src/toolchain-host.js", async () => {
         fromCache: false,
         diagnostics: [],
     });
-    const fake = new Boundary({
-        discovery: { kind: "resolved", candidate },
-        handshake: { stdout: describeDocument, exitCode: 0 },
-        compile: [{ stdout: compileOk, exitCode: 0 }],
-        keepCompilePending: true,
-    });
-    surfaceWorld.boundary = fake;
+    const createBoundary = () => {
+        const fake = new Boundary({
+            discovery: { kind: "resolved", candidate },
+            handshake: { stdout: describeDocument, exitCode: 0 },
+            compile: [{ stdout: compileOk, exitCode: 0 }],
+            keepCompilePending: true,
+            keepDiscoveryPending: surfaceWorld.holdDiscovered,
+            keepHandshakePending: surfaceWorld.holdHandshake,
+        });
+        surfaceWorld.boundary = fake;
+        return fake;
+    };
     return {
         toolBoundaryAvailable: () => true,
-        createTauriToolBoundary: async () => fake,
+        createTauriToolBoundary: async () => createBoundary(),
     };
 });
 
@@ -120,6 +130,13 @@ const descriptor: SurfaceProfileDescriptor = (() => {
     }
     return parsed.value;
 })();
+
+// The world's pending knobs are per-test: reset before every test so
+// the suite's shape is order-independent.
+beforeEach(() => {
+    surfaceWorld.holdDiscovered = false;
+    surfaceWorld.holdHandshake = false;
+});
 
 /** The caller's request FACTS — no target field: the composition's
  *  configuration (its default "gglab-dx12") is the target's one
@@ -219,5 +236,74 @@ describe("the native-build surface (hook over the fake world)", () => {
         // ANCHOR's own record from the session line — its single
         // authority (not a second copy stamped anywhere else).
         expect(hook.result.current.lastOutcome?.kind, "the anchor's settled outcome, read from the line").toBe("succeeded");
+    });
+
+    // THE IN-FLIGHT WINDOW TESTS: the flow's lanes are the authority;
+    // the surface's in-flight flags must OBSERVE a lane the moment it
+    // opens (the Re-discover / Handshake buttons render their disabled
+    // state from that observation). Stale flags through the window are
+    // the same class of bug as the cancel being invisible.
+
+    it("shows the STARTUP discovery in flight in its window — true before release, false after (and the click's window too)", async () => {
+        surfaceWorld.holdDiscovered = true;
+        const { hook, fake } = bringUpSurface();
+        // The startup lane opens (the world holds it): the surface must
+        // already observe "in flight" — this is the assertion a stale-
+        // flag surface fails on.
+        await waitFor(async () => {
+            expect(hook.result.current.discoveryInFlight, "startup's discovery lane is observed by the surface").toBe(true);
+            expect(hook.result.current.handshakeInFlight).toBe(false);
+        });
+
+        await act(async () => {
+            fake.releaseDiscovery();
+        });
+        await waitFor(async () => {
+            expect(hook.result.current.flow?.tool.status, "startup continues: the handshake settles").toBe("compatible");
+        });
+        expect(hook.result.current.discoveryInFlight, "closed on settlement").toBe(false);
+        expect(hook.result.current.handshakeInFlight, "closed on settlement").toBe(false);
+
+        // The Re-discover CLICK opens its own lane: observed open, then
+        // closed by its own settlement.
+        await act(async () => {
+            void hook.result.current.discoverNow();
+        });
+        expect(hook.result.current.discoveryInFlight, "the click's discovery is in flight, observed").toBe(true);
+        await act(async () => {
+            fake.releaseDiscovery();
+        });
+        expect(hook.result.current.discoveryInFlight, "closed on its settlement").toBe(false);
+    });
+
+    it("shows the STARTUP handshake in flight in its window — true before release, false after (and the click's window too)", async () => {
+        surfaceWorld.holdHandshake = true;
+        const { hook, fake } = bringUpSurface();
+        // Startup: the discovery resolves; the handshake lane opens
+        // (the world holds it) — observed open by the surface.
+        await waitFor(async () => {
+            expect(hook.result.current.handshakeInFlight, "startup's handshake lane is observed by the surface").toBe(true);
+        });
+        expect(hook.result.current.discoveryInFlight).toBe(false);
+
+        await act(async () => {
+            fake.releaseHandshake();
+        });
+        await waitFor(async () => {
+            expect(hook.result.current.flow?.tool.status, "the handshake's proof settles at release").toBe("compatible");
+        });
+        expect(hook.result.current.handshakeInFlight, "closed on settlement").toBe(false);
+
+        // The button CLICK opens its own lane: observed open, then
+        // closed by its own settlement — one handshake per lane.
+        await act(async () => {
+            void hook.result.current.handshakeNow();
+        });
+        expect(hook.result.current.handshakeInFlight, "the click's handshake is in flight, observed").toBe(true);
+        await act(async () => {
+            fake.releaseHandshake();
+        });
+        expect(hook.result.current.handshakeInFlight, "closed on its settlement").toBe(false);
+        expect(fake.handshakeCalls, "one boundary handshake per lane").toBe(2);
     });
 });

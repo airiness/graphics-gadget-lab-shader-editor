@@ -22,7 +22,10 @@
  * attempt outcome" reads the anchor's own record (or, while the anchor
  * is still in flight, the honest "not yet") — never a second copy.
  * Discovery and handshake are single-flight in the flow itself: the
- * surface's in-flight facts are that same lane, observed, not re-counted.
+ * surface's in-flight facts are that same lane, observed — a tick
+ * re-reads the flow the moment a lane opens or closes (no second state),
+ * so a button's disabled state reflects the whole window, not only what
+ * stood before or after it.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HlslEmission, SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
@@ -176,16 +179,28 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
     // Startup: discovery, then the handshake (the proof operation, legal
     // for the resolved candidate). Both are the tool's OWN lifecycle
     // events — not UI state — and run once when the boundary exists.
+    //
+    // Each lane's open and close is a SURFACE FACT (the in-flight flags a
+    // button renders against): the lane in the flow is the authority, and
+    // a tick only makes the surface RE-READ the flow — before AND after
+    // the await. Without the pre-await tick the flags would sit at their
+    // stale value for the whole window (the flow moves false → true →
+    // false while the surface only ever observes false).
     useEffect(() => {
         if (flow === null || startedRef.current) {
             return;
         }
         startedRef.current = true;
         void (async () => {
-            const discovery = await flow.discover({ bundled: false });
+            const discoveryPending = flow.discover({ bundled: false });
+            bump((n) => n + 1); // lane OPEN — the surface must observe "discovering"
+            const discovery = await discoveryPending;
+            bump((n) => n + 1); // lane CLOSED — the surface re-reads the tool state
             if (discovery.candidate !== undefined) {
                 note("info", `Tool discovered (${discovery.candidate.rule}): ${discovery.candidate.toolPath}`);
-                await flow.handshake();
+                const handshakePending = flow.handshake();
+                bump((n) => n + 1); // lane OPEN — the surface must observe "handshaking"
+                await handshakePending;
                 const tool = flow.tool;
                 note("info", `Tool state after handshake: ${tool.status}`);
             } else {
@@ -259,7 +274,13 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
             note("refusal", "Discover not available: no host boundary in this shell.");
             return;
         }
-        const discovery = await flow.discover({ bundled: false });
+        // Open/join the flow's discovery lane, then make the surface
+        // observe the OPEN lane before the window closes (the lane is the
+        // authority; the tick only re-reads it — the Re-discover button's
+        // disabled state and label render from this observation).
+        const pending = flow.discover({ bundled: false });
+        bump((n) => n + 1);
+        const discovery = await pending;
         if (discovery.candidate !== undefined) {
             note("ok", `Tool resolved (${discovery.candidate.rule}): ${discovery.candidate.toolPath}`);
         } else {
@@ -276,8 +297,12 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
         }
         // The flow's single-flight lane: if one is already in flight
         // (the startup bring-up, say), this call JOINS it — there is no
-        // second concurrent handshake for the same candidate.
-        const record = await flow.handshake();
+        // second concurrent handshake for the same candidate. Open/join,
+        // then make the surface observe the OPEN lane before the window
+        // closes (the button's disabled state renders from this).
+        const pending = flow.handshake();
+        bump((n) => n + 1);
+        const record = await pending;
         const tool = flow.tool;
         if (record.admission.admitted === false) {
             note("refusal", `Handshake refused by the client gate: ${record.admission.reasons.map((reason) => reason.reason).join(", ")}`);
