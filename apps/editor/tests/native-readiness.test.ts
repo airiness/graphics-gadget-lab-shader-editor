@@ -26,12 +26,13 @@ function compatibleTool(): CompatibleState {
         provenFacts: {
             toolIdentity: "gglab-shaderc",
             toolVersion: "1.2.0",
-            processContractVersion: 1,
+            processContractVersion: 2,
+            compilePolicyRevision: 1,
             producerKind: "dxc",
             producerIdentity: "Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)",
             supportedTargets: ["gglab-dx12", "gglab-vulkan13"],
         },
-        proof: { processContractVersion: 1 },
+        proof: { processContractVersion: 2, compilePolicyRevision: 1 },
     } as unknown as CompatibleState;
 }
 

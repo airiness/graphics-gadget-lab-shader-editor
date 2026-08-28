@@ -23,16 +23,23 @@
 import type { CompileFailureStatus } from "../../src/result-envelope.js";
 
 export const DESCRIBE_SUCCESS =
+    '{"command":"describe","success":true,"status":"ok","exitCode":0,"processContractVersion":2,"compilePolicyRevision":1,"toolIdentity":"gglab-shaderc","toolVersion":"1.1.0","producerKind":"dxc","producerIdentity":"Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)","supportedTargets":["gglab-dx12","gglab-vulkan13"],"diagnostics":[]}';
+
+/** The legacy v1 success document (axis 1, no `compilePolicyRevision`) —
+ *  kept for the unsupported-axis tests: this client declares 2..2, so a
+ *  v1 document is a VALID machine document this client does not
+ *  consume (explicit unsupported, never reinterpreted). */
+export const DESCRIBE_SUCCESS_LEGACY_V1 =
     '{"command":"describe","success":true,"status":"ok","exitCode":0,"processContractVersion":1,"toolIdentity":"gglab-shaderc","toolVersion":"1.1.0","producerKind":"dxc","producerIdentity":"Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)","supportedTargets":["gglab-dx12","gglab-vulkan13"],"diagnostics":[]}';
 
 export const DESCRIBE_USAGE_ERROR =
-    '{"command":"describe","success":false,"status":"usage-error","exitCode":2,"processContractVersion":1,"diagnostics":[{"message":"describe accepts no arguments"}]}';
+    '{"command":"describe","success":false,"status":"usage-error","exitCode":2,"processContractVersion":2,"diagnostics":[{"message":"describe accepts no arguments"}]}';
 
 export const DESCRIBE_COMPILER_UNAVAILABLE =
-    '{"command":"describe","success":false,"status":"compiler-unavailable","exitCode":4,"processContractVersion":1,"diagnostics":[{"message":"DXC producer runtime could not be resolved"}]}';
+    '{"command":"describe","success":false,"status":"compiler-unavailable","exitCode":4,"processContractVersion":2,"diagnostics":[{"message":"DXC producer runtime could not be resolved"}]}';
 
 export const DESCRIBE_INTERNAL_ERROR =
-    '{"command":"describe","success":false,"status":"internal-error","exitCode":7,"processContractVersion":1,"diagnostics":[{"message":"describe internal failure"}]}';
+    '{"command":"describe","success":false,"status":"internal-error","exitCode":7,"processContractVersion":2,"diagnostics":[{"message":"describe internal failure"}]}';
 
 const RECIPE_ID = "3f".repeat(32);
 const BUILD_KEY = "5e".repeat(32);

@@ -36,7 +36,8 @@ const CANDIDATE: ToolCandidate = {
 const FACTS_OK: ToolFacts = {
     toolIdentity: "gglab-shaderc",
     toolVersion: "1.2.0",
-    processContractVersion: 1,
+    processContractVersion: 2,
+    compilePolicyRevision: 1,
     producerKind: "dxc",
     producerIdentity: "Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)",
     supportedTargets: ["gglab-dx12", "gglab-vulkan13"],
@@ -45,7 +46,9 @@ const FACTS_OK: ToolFacts = {
 const PRODUCEA = "Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)";
 const PRODUCERB = "Microsoft Direct3D 12 Shader Compiler 10.0.26100.99 (dxc)";
 
-/** The handshake (describe) machine document — the published v1 shape. */
+/** The handshake (describe) machine document — the published v2 shape
+ *  (the currently consumed contract: axis 2 + the required
+ *  compilePolicyRevision). */
 function describeDocument(facts: ToolFacts): string {
     return JSON.stringify({
         command: "describe",
@@ -53,6 +56,7 @@ function describeDocument(facts: ToolFacts): string {
         status: "ok",
         exitCode: 0,
         processContractVersion: facts.processContractVersion,
+        compilePolicyRevision: facts.compilePolicyRevision,
         toolIdentity: facts.toolIdentity,
         toolVersion: facts.toolVersion,
         producerKind: facts.producerKind,

@@ -8,8 +8,15 @@
  * - BuildIntent — the semantic identity of the compile request:
  *   sourceIdentity + target + stage/entry + the descriptor-contract
  *   inputs (defines/includes) + the relevant proven tool facts
- *   (identity, version, process-contract axis, producer identity) —
- *   everything that actually affects what the tool compiles;
+ *   (identity, version, process-contract axis, compile-policy axis,
+ *   producer identity) — everything that actually affects what the
+ *   tool compiles;
+ *
+ *   The compile-policy axis is in the intent because the contract (docs
+ *   §22.1.1) says a policy revision can change the produced binary even
+ *   with the same recipe and the same producer: two attempts that
+ *   differed ONLY in the proven policy revision are different intents,
+ *   and a result can never pass as `current` across that difference.
  * - BuildId — the identity of ONE concrete asynchronous attempt
  *   (session-local, ordered); who came later, when two attempts share
  *   an intent.
@@ -194,6 +201,7 @@ export interface ProvenToolFacts {
     readonly identity: string;
     readonly version: string;
     readonly processContractVersion: number;
+    readonly compilePolicyRevision: number;
     readonly producerIdentity: string;
 }
 
@@ -202,6 +210,7 @@ export function provenToolFactsOf(facts: ToolFacts): ProvenToolFacts {
         identity: facts.toolIdentity,
         version: facts.toolVersion,
         processContractVersion: facts.processContractVersion,
+        compilePolicyRevision: facts.compilePolicyRevision,
         producerIdentity: facts.producerIdentity,
     };
 }
@@ -231,7 +240,8 @@ export function buildIntentOf(request: NativeCompileRequest, facts: ToolFacts): 
 }
 
 /** Intents are compared structurally — a changed proven producer
- *  identity under the same tool version is a DIFFERENT intent. */
+ *  identity (or a changed proven compile-policy revision) under the
+ *  same tool version is a DIFFERENT intent. */
 export function buildIntentsEqual(a: BuildIntent, b: BuildIntent): boolean {
     if (
         a.sourceIdentity !== b.sourceIdentity ||
@@ -263,6 +273,7 @@ export function buildIntentsEqual(a: BuildIntent, b: BuildIntent): boolean {
         toolA.identity === toolB.identity &&
         toolA.version === toolB.version &&
         toolA.processContractVersion === toolB.processContractVersion &&
+        toolA.compilePolicyRevision === toolB.compilePolicyRevision &&
         toolA.producerIdentity === toolB.producerIdentity
     );
 }

@@ -343,7 +343,7 @@ Reader discipline:
   handled is the contract's business, not ours to pre-declare).
 - The supported set is exactly one declared fact, declared exactly once in
   the client (its declaration module). The published machine process
-  contract v1 is in that set — the client's reader for that published form
+  contract v2 is in that set — the client's reader for that published form
   is complete and tested. Any axis OUTSIDE the declaration is explicitly
   unsupported, and the state ladder shows it verbatim (unproven when the
   client declares no range at all; incompatible when a declared range does
@@ -351,6 +351,21 @@ Reader discipline:
   hidden guess. The declaration is a state of the world, visible and
   explainable, and it moves only when the toolchain publishes or extends
   the contract through its own review.
+- The declaration policy is "the currently published axis, exactly": the
+  client declares process contract 2..2 and the compile-policy value {1}
+  (the currently published value, docs GGLab_Shader_Toochain_Extraction.md
+  §22.1, v2 approved 2026-08 via main-repo commit 993b2c2). It does NOT
+  declare 1..2: the contract defines no legacy mapping for a v1 document's
+  absent `compilePolicyRevision`, and no consumer may invent one — when a
+  real old-tool need appears, the contract authority publishes the mapping
+  first, and the declaration gains it. A legacy v1 document is therefore
+  an explicit unsupported axis for this client, never a reinterpretation.
+- The compile-policy revision (v2+, a required success-only field) is a
+  consumer-must-participate compatibility fact (contract rule R5): the
+  verdicts judge it against the client's declared value, and — because a
+  policy revision can change the produced binary even with the same recipe
+  and the same producer — it is also part of the BuildIntent identity, so
+  a result can never pass as `current` across a policy-revision change.
 - When the toolchain publishes (or extends) the contract through its own
   review, the client gains a strict reader for that published form —
   consumption of an external contract, never a definition of one.
@@ -434,8 +449,11 @@ BuildIntent               the semantic identity of the compile request:
                           sourceIdentity + target + stage/entry +
                           descriptor-contract inputs (defines/includes) +
                           the relevant proven tool/process facts
-                          (identity, version, process-contract axis) —
-                          everything that actually affects what the tool compiles
+                          (identity, version, process-contract axis,
+                          compile-policy axis, producer identity) —
+                          everything that actually affects what the tool
+                          compiles (a policy revision can change the
+                          binary even with the same recipe and DXC)
 BuildId                   the identity of ONE concrete asynchronous attempt
                           (session-local, ordered) — who came later, when two
                           attempts share an intent
@@ -672,13 +690,14 @@ truth for one field is a review failure.
 | tool identity | client verdict over the tool's facts | checked against the descriptor's requirement |
 | tool version | tool's proven fact (via the client's reader) | judged under the descriptor's own rule |
 | process-contract axis (+ client-supported range) | tool's proven fact / client declaration | explicit rejection shown when out of range |
+| compile-policy axis (+ client-supported value) | tool's proven fact / client declaration | explicit rejection shown when unsupported; part of the build intent identity |
 | producer/compiler identity | tool's proven fact | displayed, not parsed by hand |
 | descriptor instance (id/profile/descriptorVersion) | core's reader over the loaded document | the descriptor is a fact, not a guess |
 | profile×descriptor compatibility | core's capability verdict | the core owns this judgment |
 | build target | explicit configuration | never the descriptor, never the tool |
 | configured target supported by the tool? | the editor composition, from the client-extracted `supportedTargets` fact and the configuration | target READINESS — one build's compatibility, judged where the configuration lives; the tool's compatibility verdict never changes when the target changes |
 | stage / entry | descriptor generatedFunction facts | the descriptor's legit facts in the request |
-| build intent (target / stage / entry / source identity / tool identity / tool version / process-contract axis / producer identity) | the composed NativeCompileRequest (editor, from the client's vocabulary) | the `current`-ness anchor: the semantic identity of the compile request |
+| build intent (target / stage / entry / source identity / tool identity / tool version / process-contract axis / compile-policy axis / producer identity) | the composed NativeCompileRequest (editor, from the client's vocabulary) | the `current`-ness anchor: the semantic identity of the compile request |
 | generated-source identity | core's emission (SHA-256) | the core's durable CONTENT identity; a component of the build intent |
 | staging evidence | service (local name) + core identity | name for evidence, not a usable path |
 | build-line states (current/stale/last-good/failed/canceled) | session store over the client's rules | the ordered line, newest visible |
@@ -893,9 +912,12 @@ vocabulary (contract facts, envelopes, the `NativeCompileRequest` shape,
 build intents, result states); the host-boundary contract (allowlisted
 operations + request/result shapes) and reference host-boundary fakes; the
 strict reader for the published result envelope; the handshake facts
-interface + the supported-range declaration (the published v1 axis) and
-its explicit "contract not supported" result for axes outside the
-declaration; the version/identity/target verdicts; the
+interface + the supported-range declaration (the published v2 axis —
+process contract 2..2 + compile-policy value {1}, "currently published
+axis, exactly", never 1..2) and its explicit "contract not supported"
+result for axes outside the declaration, and the compile-policy verdict
+(a consumer-must-participate compatibility fact, contract R5); the
+version/identity/target verdicts; the
 ToolCompatibility state machine; the build-intent and build-line rules
 (stale/current/last-good, ordered by buildId); the full §14 pure suite.
 *Exit:* package tests green; `shader-graph-core` unmodified and

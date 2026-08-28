@@ -46,8 +46,10 @@ import type { CandidateObservation, ToolCandidate } from "./host-boundary.js";
 import { candidatesEqual } from "./host-boundary.js";
 import type { ChannelViolation, HandshakeProcessOutcome } from "./process-output.js";
 import {
+    judgeCompilePolicyRevision,
     judgeToolIdentity,
     judgeToolVersion,
+    type CompilePolicyVerdict,
     type IdentityVerdict,
     type VersionVerdict,
 } from "./verdicts.js";
@@ -89,6 +91,10 @@ export type CompatibilityMismatch =
     | {
         readonly kind: "contract-axis";
         readonly contract: ContractSupportVerdict;
+      }
+    | {
+        readonly kind: "compile-policy";
+        readonly policy: CompilePolicyVerdict;
       };
 
 /** The proof the client holds: the proof FACTS — the contract axis the
@@ -98,6 +104,7 @@ export type CompatibilityMismatch =
  *  "which candidate", one for "what was proven about it"). */
 export interface ToolProof {
     readonly processContractVersion: number;
+    readonly compilePolicyRevision: number;
 }
 
 /** The tool's state as the client judges it — and its ownership rules:
@@ -195,6 +202,7 @@ function factsFromHandshake(document: {
     readonly toolIdentity: string;
     readonly toolVersion: string;
     readonly processContractVersion: number;
+    readonly compilePolicyRevision: number;
     readonly producerKind: string;
     readonly producerIdentity: string;
     readonly supportedTargets: readonly string[];
@@ -203,6 +211,7 @@ function factsFromHandshake(document: {
         toolIdentity: document.toolIdentity,
         toolVersion: document.toolVersion,
         processContractVersion: document.processContractVersion,
+        compilePolicyRevision: document.compilePolicyRevision,
         producerKind: document.producerKind,
         producerIdentity: document.producerIdentity,
         supportedTargets: [...document.supportedTargets],
@@ -361,12 +370,19 @@ export function applyCompatibilityEvent(
     const facts = factsFromHandshake(document);
     const identity = judgeToolIdentity(judgment.requirement, facts);
     const version = judgeToolVersion(judgment.requirement, facts);
+    const policy = judgeCompilePolicyRevision(facts);
     const mismatches: CompatibilityMismatch[] = [];
     if (identity.status !== "match") {
         mismatches.push({ kind: "identity", identity });
     }
     if (version.status !== "meets-minimum") {
         mismatches.push({ kind: "version", version });
+    }
+    if (policy.status !== "supported") {
+        // The compile-policy axis is a consumer-must-participate
+        // compatibility fact (contract R5): an unsupported revision is a
+        // mismatch in its own right, never informational.
+        mismatches.push({ kind: "compile-policy", policy });
     }
     if (mismatches.length > 0) {
         return { status: "incompatible", candidate, mismatches };
@@ -375,7 +391,10 @@ export function applyCompatibilityEvent(
         status: "compatible",
         candidate,
         provenFacts: facts,
-        proof: { processContractVersion: document.processContractVersion },
+        proof: {
+            processContractVersion: document.processContractVersion,
+            compilePolicyRevision: document.compilePolicyRevision,
+        },
     };
 }
 

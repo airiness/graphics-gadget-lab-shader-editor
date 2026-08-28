@@ -12,6 +12,8 @@
  * when the target changes.
  */
 import type { ToolFacts, ToolRequirement } from "./contract-facts.js";
+import { clientSupportedCompilePolicyRange } from "./contract-range-declaration.js";
+import type { SupportedContractRange } from "./contract-range-declaration.js";
 import { compareSemver, parseSemver } from "./semver.js";
 
 export type IdentityVerdict =
@@ -97,6 +99,42 @@ export function judgeToolVersion(
     return below
         ? { status: "below-minimum", ...shared }
         : { status: "meets-minimum", ...shared };
+}
+
+export type CompilePolicyVerdict =
+    | {
+        readonly status: "supported";
+        readonly observedRevision: number;
+        readonly range: SupportedContractRange;
+      }
+    | {
+        readonly status: "unsupported";
+        readonly observedRevision: number;
+        readonly range: SupportedContractRange;
+      };
+
+/**
+ * Judges the tool's reported compile-policy revision against the
+ * client's declared support range (the declaration module — the value
+ * set is the toolchain's own axis, consumed here, never defined here).
+ * The contract (R5) makes this field a consumer-must-participate
+ * compatibility fact: a revision outside the declared range is an
+ * explicit mismatch — never silently accepted, never reinterpreted.
+ * This axis is independent of the tool version, the process-contract
+ * axis, and the producer identity: the same recipe and the same
+ * producer can produce different binaries under a different policy
+ * revision, which is exactly why the value also enters the BuildIntent
+ * identity.
+ */
+export function judgeCompilePolicyRevision(
+    reported: ToolFacts,
+    range: SupportedContractRange = clientSupportedCompilePolicyRange,
+): CompilePolicyVerdict {
+    const observed = reported.compilePolicyRevision;
+    const shared = { observedRevision: observed, range };
+    return observed >= range.minimum && observed <= range.maximum
+        ? { status: "supported", ...shared }
+        : { status: "unsupported", ...shared };
 }
 
 /**

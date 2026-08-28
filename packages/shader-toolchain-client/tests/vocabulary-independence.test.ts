@@ -65,7 +65,7 @@ describe("the client's vocabulary independence", () => {
         expect(manifest.dependencies ?? {}).toEqual({});
     });
 
-    it("declares the published v1 axis exactly — nothing more, nothing less", () => {
-        expect(clientSupportedContractRange).toEqual({ minimum: 1, maximum: 1 });
+    it("declares the published v2 axis exactly — nothing more, nothing less (no 1..2: the v1→policy mapping is undefined and never guessed)", () => {
+        expect(clientSupportedContractRange).toEqual({ minimum: 2, maximum: 2 });
     });
 });

@@ -29,11 +29,15 @@ function request(
     return change(base) as unknown as NativeCompileRequest;
 }
 
-function facts(producerIdentity: string = "Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)"): ToolFacts {
+function facts(
+    producerIdentity: string = "Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)",
+    compilePolicyRevision: number = 1,
+): ToolFacts {
     return {
         toolIdentity: "gglab-shaderc",
         toolVersion: "1.1.0",
-        processContractVersion: 1,
+        processContractVersion: 2,
+        compilePolicyRevision,
         producerKind: "dxc",
         producerIdentity,
         supportedTargets: ["gglab-dx12", "gglab-vulkan13"],
@@ -115,7 +119,8 @@ describe("the build intent — three identity concepts, not one", () => {
         expect(intent.target).toBe("gglab-dx12");
         expect(intent.tool.identity).toBe("gglab-shaderc");
         expect(intent.tool.version).toBe("1.1.0");
-        expect(intent.tool.processContractVersion).toBe(1);
+        expect(intent.tool.processContractVersion).toBe(2);
+        expect(intent.tool.compilePolicyRevision).toBe(1);
         expect(intent.tool.producerIdentity).toBe("Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)");
     });
 
@@ -128,6 +133,16 @@ describe("the build intent — three identity concepts, not one", () => {
     it("is a DIFFERENT intent when the proven producer identity changes (a different DXC, same tool version)", () => {
         const a = buildIntentOf(request(), facts("dxc 1.7.1"));
         const b = buildIntentOf(request(), facts("dxc 1.7.9"));
+        expect(buildIntentsEqual(a, b)).toBe(false);
+    });
+
+    it("is a DIFFERENT intent when the proven compile-policy revision changes (same recipe, same tool, same producer — the policy can still change the binary)", () => {
+        // Docs §22.1.1: the compile-policy axis is a compiler-owned
+        // behavior axis — a revision change can alter the produced
+        // binary even with the same normalized recipe and DXC. A result
+        // must never pass as `current` across that difference.
+        const a = buildIntentOf(request(), facts());
+        const b = buildIntentOf(request(), facts("Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)", 2));
         expect(buildIntentsEqual(a, b)).toBe(false);
     });
 

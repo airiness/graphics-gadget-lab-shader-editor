@@ -3,6 +3,7 @@ import { requirementsEqual } from "../src/contract-facts.js";
 import type { ToolFacts, ToolRequirement } from "../src/contract-facts.js";
 import {
     extractSupportedTargets,
+    judgeCompilePolicyRevision,
     judgeToolIdentity,
     judgeToolVersion,
 } from "../src/verdicts.js";
@@ -13,11 +14,17 @@ const REQUIRED: ToolRequirement = {
     versionComparison: "semver",
 };
 
-function facts(version: string, identity = "gglab-shaderc", targets: readonly string[] = ["gglab-dx12", "gglab-vulkan13"]): ToolFacts {
+function facts(
+    version: string,
+    identity: string = "gglab-shaderc",
+    targets: readonly string[] = ["gglab-dx12", "gglab-vulkan13"],
+    compilePolicyRevision: number = 1,
+): ToolFacts {
     return {
         toolIdentity: identity,
         toolVersion: version,
-        processContractVersion: 1,
+        processContractVersion: 2,
+        compilePolicyRevision,
         producerKind: "dxc",
         producerIdentity: "Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)",
         supportedTargets: targets,
@@ -80,6 +87,37 @@ describe("the version verdict", () => {
             status: "comparison-rule-unsupported",
             rule: "semver-latest",
         });
+    });
+});
+
+describe("the compile-policy revision verdict", () => {
+    it("supports exactly the declared value, with both sides visible", () => {
+        expect(judgeCompilePolicyRevision(facts("1.1.0"))).toEqual({
+            status: "supported",
+            observedRevision: 1,
+            range: { minimum: 1, maximum: 1 },
+        });
+    });
+
+    it("refuses an undeclared revision explicitly — never informational, never reinterpreted (S-16 semantics)", () => {
+        expect(judgeCompilePolicyRevision(facts("1.1.0", "gglab-shaderc", [], 2))).toEqual({
+            status: "unsupported",
+            observedRevision: 2,
+            range: { minimum: 1, maximum: 1 },
+        });
+        expect(judgeCompilePolicyRevision(facts("1.1.0", "gglab-shaderc", [], 0)).status).toBe("unsupported");
+    });
+
+    it("is independent of the other axes: the same tool version and producer can carry a different policy verdict", () => {
+        const sameTool = facts("1.1.0");
+        expect(judgeToolVersion(REQUIRED, sameTool).status).toBe("meets-minimum");
+        expect(judgeToolIdentity(REQUIRED, sameTool).status).toBe("match");
+        expect(judgeCompilePolicyRevision(sameTool).status).toBe("supported");
+        // …and a wrong policy under an otherwise perfect tool:
+        const wrongPolicy = facts("1.1.0", "gglab-shaderc", [], 2);
+        expect(judgeToolVersion(REQUIRED, wrongPolicy).status).toBe("meets-minimum");
+        expect(judgeToolIdentity(REQUIRED, wrongPolicy).status).toBe("match");
+        expect(judgeCompilePolicyRevision(wrongPolicy).status).toBe("unsupported");
     });
 });
 

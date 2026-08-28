@@ -54,12 +54,15 @@ export interface ToolDiagnostic {
 }
 
 /**
- * The verdict facts a handshake must establish (the seven required facts
- * of the published contract, held as plain values):
+ * The verdict facts a handshake must establish (the required facts of
+ * the published contract, held as plain values):
  *
  * - the tool's identity,
  * - the tool's version,
  * - the process-contract version axis,
+ * - the compile-policy revision axis (v2+, required on the success
+ *   document — a consumer-must-participate compatibility fact: it
+ *   enters the verdict AND the BuildIntent identity),
  * - the producer/compiler identity,
  * - the tool's published supported targets (a tool FACT — whether a
  *   CONFIGURED target is among them is judged by the editor composition,
@@ -74,6 +77,7 @@ export interface ToolFacts {
     readonly toolIdentity: string;
     readonly toolVersion: string;
     readonly processContractVersion: number;
+    readonly compilePolicyRevision: number;
     readonly producerKind: string;
     readonly producerIdentity: string;
     readonly supportedTargets: readonly string[];

@@ -17,11 +17,14 @@
  *   unsupported axis is a valid machine document whose contract the
  *   client does not consume: an explicit "unsupported-contract" result,
  *   never a malformed-document refusal.
- * - Phase B — the payload of the one supported contract (v1): the
- *   required fields, their types, the closed status vocabulary, and the
- *   known-but-forbidden fields (a failure document carrying the
- *   success-only business facts) are strict; fields outside the v1 shape
- *   are ignored.
+ * - Phase B — the payload of the one supported contract (v2, the
+ *   published form this client consumes): the required fields, their
+ *   types, the closed status vocabulary, and the known-but-forbidden
+ *   fields (a failure document carrying the success-only business
+ *   facts) are strict; fields outside the v2 shape are ignored. The
+ *   `compilePolicyRevision` field (v2+, required on success, integer)
+ *   is read here and carried verbatim into the proven facts — the
+ *   verdicts judge it, and the BuildIntent identity includes it.
  *
  * Whether the proven facts meet the requirement is the verdicts'; both
  * layers stay visible, neither papered over.
@@ -51,6 +54,11 @@ export interface HandshakeSuccessDocument {
     readonly exitCode: number;
     /** The process-contract version axis — carried here, and only here. */
     readonly processContractVersion: number;
+    /** The compile-policy revision axis (v2+, required on the success
+     *  document): the toolchain's lowering / argument-generation policy
+     *  version. Carried verbatim into the proven facts — a
+     *  consumer-must-participate compatibility fact, never informational. */
+    readonly compilePolicyRevision: number;
     readonly toolIdentity: string;
     readonly toolVersion: string;
     readonly producerKind: string;
@@ -120,6 +128,7 @@ const FAILURE_STATUSES: readonly HandshakeFailureStatus[] = [
 const SUCCESS_ONLY_FIELDS = [
     "toolIdentity",
     "toolVersion",
+    "compilePolicyRevision",
     "producerKind",
     "producerIdentity",
     "supportedTargets",
@@ -208,10 +217,19 @@ export function readHandshakeDocument(
         return { status: "unsupported-contract", contract };
     }
 
-    // Phase B — the supported contract's payload (v1).
+    // Phase B — the supported contract's payload (v2).
     if (raw.success === true) {
         const missing = missingField(
-            ["status", "toolIdentity", "toolVersion", "producerKind", "producerIdentity", "supportedTargets", "diagnostics"],
+            [
+                "status",
+                "toolIdentity",
+                "toolVersion",
+                "compilePolicyRevision",
+                "producerKind",
+                "producerIdentity",
+                "supportedTargets",
+                "diagnostics",
+            ],
             raw,
         );
         if (missing !== null) {
@@ -227,6 +245,12 @@ export function readHandshakeDocument(
             if (!isString(raw[field])) {
                 return rejection("field-type-mismatch", `the ${field} field must be a string, found ${JSON.stringify(raw[field])}`);
             }
+        }
+        if (!isIntegralNumber(raw.compilePolicyRevision)) {
+            return rejection(
+                "field-type-mismatch",
+                `the compilePolicyRevision field must be an integer, found ${JSON.stringify(raw.compilePolicyRevision)}`,
+            );
         }
         if (!Array.isArray(raw.supportedTargets) || raw.supportedTargets.some((entry) => !isString(entry))) {
             return rejection(
@@ -246,6 +270,7 @@ export function readHandshakeDocument(
                 status: "ok",
                 exitCode: raw.exitCode as number,
                 processContractVersion: raw.processContractVersion as number,
+                compilePolicyRevision: raw.compilePolicyRevision as number,
                 toolIdentity: raw.toolIdentity as string,
                 toolVersion: raw.toolVersion as string,
                 producerKind: raw.producerKind as string,

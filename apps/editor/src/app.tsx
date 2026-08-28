@@ -1282,23 +1282,27 @@ export function App() {
                             {native.ready ? "Ready" : "NotReady"}
                         </Badge>
                         {readyReasonList(native.readiness) !== null && <ul className="gglab-native-reasons">{readyReasonList(native.readiness)}</ul>}
-                        <ButtonGroup className="mt-2.5" role="toolbar" aria-label="native build tool actions">
-                            <Button variant="ghost" onClick={() => void native.discoverNow()} disabled={native.discoveryInFlight}>
-                                {native.discoveryInFlight ? "Discovering…" : "Re-discover"}
-                            </Button>
-                            <Button variant="ghost" onClick={() => void native.handshakeNow()} disabled={native.handshakeInFlight}>
-                                {native.handshakeInFlight ? "Handshaking…" : "Handshake (establish proof)"}
-                            </Button>
-                        </ButtonGroup>
-                        <div className="gglab-native-target">
-                            <label className="gglab-native-target-label" htmlFor="native-tool-path">
-                                Tool path (explicit configuration; empty = that rule records its failure)
+                        {/* Configuration (sections 5 and 8) — each field is a
+                            stacked block: a short label, the explanation in
+                            the hint, and the control on its own full-width
+                            row. A long label never shares the value's row
+                            again (the path display is never crushed). */}
+                        <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
+                            Configuration
+                        </h3>
+                        <div className="gglab-native-field">
+                            <label className="gglab-native-field-label" htmlFor="native-tool-path">
+                                Tool path
                             </label>
+                            <p className="gglab-native-field-hint">
+                                Explicit configuration — discovery rule 1. Empty means not configured: that rule records its own failure.
+                            </p>
                             <div className="gglab-native-path-row">
                                 <Input
                                     id="native-tool-path"
                                     className="gglab-native-path-input"
                                     placeholder="C:\…\gglab-shaderc.exe"
+                                    title={native.discoveryConfig.explicitConfig === "" ? undefined : native.discoveryConfig.explicitConfig}
                                     value={native.discoveryConfig.explicitConfig}
                                     onChange={(event) => native.setToolPath(event.currentTarget.value)}
                                     aria-label="Explicit tool path (discovery rule 1)"
@@ -1311,15 +1315,19 @@ export function App() {
                                 )}
                             </div>
                         </div>
-                        <div className="gglab-native-target">
-                            <label className="gglab-native-target-label" htmlFor="native-sibling-build">
-                                Sibling GGLab build output (optional location)
+                        <div className="gglab-native-field">
+                            <label className="gglab-native-field-label" htmlFor="native-sibling-build">
+                                Build-output location
                             </label>
+                            <p className="gglab-native-field-hint">
+                                Sibling GGLab build output — discovery rule 2; optional.
+                            </p>
                             <div className="gglab-native-path-row">
                                 <Input
                                     id="native-sibling-build"
                                     className="gglab-native-path-input"
                                     placeholder="…\Build\Output\x64"
+                                    title={native.discoveryConfig.siblingBuildOutput === "" ? undefined : native.discoveryConfig.siblingBuildOutput}
                                     value={native.discoveryConfig.siblingBuildOutput}
                                     onChange={(event) => native.setSiblingBuildOutput(event.currentTarget.value)}
                                     aria-label="Configured sibling build-output location (discovery rule 2)"
@@ -1332,10 +1340,13 @@ export function App() {
                                 )}
                             </div>
                         </div>
-                        <div className="gglab-native-target">
-                            <label className="gglab-native-target-label" htmlFor="native-build-target">
-                                Build target (explicit configuration; default {DEFAULT_BUILD_TARGET})
+                        <div className="gglab-native-field">
+                            <label className="gglab-native-field-label" htmlFor="native-build-target">
+                                Build target
                             </label>
+                            <p className="gglab-native-field-hint">
+                                Explicit configuration (development default {DEFAULT_BUILD_TARGET}); the next BuildIntent carries it.
+                            </p>
                             <select id="native-build-target" className="gglab-native-select" value={native.target.target} onChange={(event) => native.setTarget(event.currentTarget.value)}>
                                 {nativeTargetOptions.map((option) => (
                                     <option key={option} value={option}>
@@ -1344,7 +1355,20 @@ export function App() {
                                 ))}
                             </select>
                         </div>
-                        <ButtonGroup className="mt-2.5" role="toolbar" aria-label="native build actions">
+                        {/* Actions, in lifecycle order: resolve the tool
+                            (the rule walk), establish proof (the handshake),
+                            and only then may the Ready gate issue a compile.
+                            Cancel lives with the attempt it stops. */}
+                        <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
+                            Actions
+                        </h3>
+                        <ButtonGroup role="toolbar" aria-label="native build actions">
+                            <Button variant="ghost" onClick={() => void native.discoverNow()} disabled={native.discoveryInFlight}>
+                                {native.discoveryInFlight ? "Discovering…" : "Re-discover"}
+                            </Button>
+                            <Button variant="ghost" onClick={() => void native.handshakeNow()} disabled={native.handshakeInFlight}>
+                                {native.handshakeInFlight ? "Handshaking…" : "Handshake (establish proof)"}
+                            </Button>
                             <Button variant="secondary" onClick={() => void onNativeCompile()} disabled={!native.ready}>
                                 {native.ready ? `Compile (target ${native.target.target})` : "Compile refused — NotReady (reasons above)"}
                             </Button>
@@ -1356,9 +1380,12 @@ export function App() {
                         </ButtonGroup>
                         {native.lineReport !== null && (
                             <>
-                                <h2 className="gglab-panel-title" style={{ marginTop: 14 }}>
-                                    Build line (session)
-                                </h2>
+                                <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
+                                    Build line
+                                </h3>
+                                <p className="gglab-native-field-hint">
+                                    This session's attempts, in issue order (the newest issued anchors `current`).
+                                </p>
                                 <dl className="gglab-facts">
                                     {native.lineReport.states.map((entry, index) => (
                                         <div key={`${entry.buildId.sequence}-${index}`} className="gglab-fact">
@@ -1373,9 +1400,12 @@ export function App() {
                         )}
                         {native.inspector !== null && (
                             <>
-                                <h2 className="gglab-panel-title" style={{ marginTop: 14 }}>
-                                    Build inspector (replayable evidence)
-                                </h2>
+                                <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
+                                    Replayable evidence
+                                </h3>
+                                <p className="gglab-native-field-hint">
+                                    One source of truth per field: which tool, under which facts, compiled which exact bytes — and where each fact is true.
+                                </p>
                                 <InspectorRows title="Tool" rows={native.inspector.tool} />
                                 <InspectorRows title="Descriptor" rows={native.inspector.descriptor} />
                                 <InspectorRows title="Host · target · readiness" rows={native.inspector.hostAndTarget} />
@@ -1482,14 +1512,18 @@ function InspectorRows(props: { title: string; rows: readonly BuildInspectorRow[
             </h3>
             <dl className="gglab-facts">
                 {rows.map((row, index) => (
-                    <div key={`${row.field}-${index}`} className="gglab-fact gglab-native-inspector-row">
-                        <dt>{row.field}</dt>
-                        <dd>
-                            {row.value}
-                            <div className="gglab-native-fact-source">
-                                source: {row.source}
-                            </div>
-                        </dd>
+                    <div key={`${row.field}-${index}`} className="gglab-fact gglab-native-fact-detail">
+                        {/* Two-line fact: name + value share the top line
+                            (the value owns the right half and wraps as long
+                            as it needs — a full path stays readable); the
+                            source of truth sits below, full width, quiet. */}
+                        <div className="gglab-native-fact-row">
+                            <dt>{row.field}</dt>
+                            <dd className="gglab-native-fact-value">{row.value}</dd>
+                        </div>
+                        <div className="gglab-native-fact-source">
+                            source: {row.source}
+                        </div>
                     </div>
                 ))}
             </dl>

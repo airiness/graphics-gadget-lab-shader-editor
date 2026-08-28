@@ -19,7 +19,7 @@ const REASONABLE = {
 } as const;
 
 const HANDSHAKE_TEXT =
-    '{"command":"describe","success":true,"status":"ok","exitCode":0,"processContractVersion":1,"toolIdentity":"gglab-shaderc","toolVersion":"1.1.0","producerKind":"dxc","producerIdentity":"Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)","supportedTargets":["gglab-dx12","gglab-vulkan13"],"diagnostics":[]}';
+    '{"command":"describe","success":true,"status":"ok","exitCode":0,"processContractVersion":2,"compilePolicyRevision":1,"toolIdentity":"gglab-shaderc","toolVersion":"1.1.0","producerKind":"dxc","producerIdentity":"Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)","supportedTargets":["gglab-dx12","gglab-vulkan13"],"diagnostics":[]}';
 
 function outputOf(text: string): BoundaryOutput {
     return {
@@ -100,7 +100,7 @@ describe("the compile gate", () => {
             throw new Error("test setup: the tool must be compatible here");
         }
         expect(state.candidate).toEqual(CANDIDATE);
-        expect(state.proof).toEqual({ processContractVersion: 1 });
+        expect(state.proof).toEqual({ processContractVersion: 2, compilePolicyRevision: 1 });
     });
 
     it("refuses every other resolved state with its own structured reasons", () => {

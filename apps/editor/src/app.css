@@ -722,6 +722,10 @@ body {
 .gglab-native-path-input {
     flex: 1 1 auto;
     min-width: 0;
+    /* A path is a data string: read as a string (mono). The full value
+       stays reachable via the input's title attribute. */
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
 }
 
 .gglab-native-path-browse {
@@ -1503,8 +1507,39 @@ button.gglab-diagnostics-item:hover {
     color: var(--text);
 }
 
-.gglab-native-fact-source {
+/* Evidence rows (the replayable Build Inspector facts) — two-line
+   structure: name + value share the top line (the value owns the right
+   half, wraps as long as it needs, mono — a full path stays readable),
+   the source of truth sits below, full width, in the quiet voice. */
+
+.gglab-native-fact-detail {
+    display: block;
+    padding: 6px 0;
+}
+
+.gglab-native-fact-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.gglab-native-fact-row dt {
+    max-width: 45%;
+    white-space: normal;
+}
+
+.gglab-native-fact-value {
     margin: 0;
+    text-align: right;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+}
+
+.gglab-native-fact-source {
+    margin: 3px 0 0;
     color: var(--faint);
     font-size: var(--type-meta);
 }
@@ -1513,17 +1548,27 @@ button.gglab-diagnostics-item:hover {
     max-width: 220px;
 }
 
-.gglab-native-target {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin: 10px 0 0;
+/* Configuration fields — stacked blocks: short label, the explanation in
+   the hint, the control on its own full-width row. (The old single-row
+   label+control flex row is gone: it crushed the path display.) */
+
+.gglab-native-field {
+    margin: 4px 0 0;
 }
 
-.gglab-native-target-label {
-    margin: 0;
+.gglab-native-field-label {
+    display: block;
+    margin: 0 0 2px;
+    color: var(--muted);
+    font-size: var(--type-body);
+    font-weight: var(--weight-heading);
+}
+
+.gglab-native-field-hint {
+    margin: 0 0 6px;
     color: var(--faint);
     font-size: var(--type-meta);
+    line-height: var(--lh-body);
 }
 
 .gglab-native-state {

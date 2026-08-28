@@ -92,7 +92,7 @@ describe("the ToolCompatibility state machine", () => {
         expect(state.candidate).toEqual(CANDIDATE);
     });
 
-    it("proves the published v1 tool compatible under the declaration — the gate opens at the client level", () => {
+    it("proves the published v2 tool compatible under the declaration — the gate opens at the client level", () => {
         const state = applyCompatibilityEvent(
             { status: "discovered", candidate: CANDIDATE },
             handshake(CANDIDATE, DESCRIBE_SUCCESS),
@@ -100,16 +100,17 @@ describe("the ToolCompatibility state machine", () => {
         );
         expect(state.status).toBe("compatible");
         if (state.status !== "compatible") {
-            throw new Error("test setup: the v1 handshake must prove the tool under the declaration");
+            throw new Error("test setup: the v2 handshake must prove the tool under the declaration");
         }
         expect(state.provenFacts.toolIdentity).toBe("gglab-shaderc");
         expect(state.provenFacts.toolVersion).toBe("1.1.0");
         expect(state.provenFacts.supportedTargets).toEqual(["gglab-dx12", "gglab-vulkan13"]);
+        expect(state.provenFacts.compilePolicyRevision).toBe(1);
         // The state owns the current candidate; the proof owns the proof
         // facts — one authority for "which candidate", one for "what was
         // proven about it".
         expect(state.candidate).toEqual(CANDIDATE);
-        expect(state.proof).toEqual({ processContractVersion: 1 });
+        expect(state.proof).toEqual({ processContractVersion: 2, compilePolicyRevision: 1 });
     });
 
     it("keeps the contract-not-supported path for the null-declaration world — unproven, with the refusal visible", () => {
@@ -129,7 +130,7 @@ describe("the ToolCompatibility state machine", () => {
                     contract: {
                         supported: false,
                         reason: "no-supported-contract-declared",
-                        observedVersion: 1,
+                        observedVersion: 2,
                     },
                 },
             ]);
@@ -138,10 +139,10 @@ describe("the ToolCompatibility state machine", () => {
 
     it("keeps the out-of-range path: a declared range that misses the axis is an incompatibility", () => {
         // …reached the same way: an explicitly supplied range that does
-        // not cover the observed v1 axis.
+        // not cover the observed v2 axis.
         const state = applyCompatibilityEvent(
             { status: "discovered", candidate: CANDIDATE },
-            handshake(CANDIDATE, DESCRIBE_SUCCESS, { minimum: 2, maximum: 3 }),
+            handshake(CANDIDATE, DESCRIBE_SUCCESS, { minimum: 3, maximum: 4 }),
             REQUIREMENT,
         );
         expect(state.status).toBe("incompatible");
@@ -153,10 +154,41 @@ describe("the ToolCompatibility state machine", () => {
             expect(mismatch.contract).toEqual({
                 supported: false,
                 reason: "observed-version-outside-range",
-                observedVersion: 1,
-                range: { minimum: 2, maximum: 3 },
+                observedVersion: 2,
+                range: { minimum: 3, maximum: 4 },
             });
         }
+    });
+
+    it("a wrong compile-policy revision is an incompatibility in its own right — never informational (docs R5; S-16 semantics)", () => {
+        // The document is otherwise a clean v2 success document: identity
+        // matches, version meets the minimum, the axis is declared. The
+        // ONLY thing that differs is the policy revision — and that
+        // alone voids compatibility, exactly as the main repository's
+        // own client judges it.
+        const wrongPolicy = mutatedDescribeSuccess((base) => ({ ...base, compilePolicyRevision: 2 }));
+        const state = applyCompatibilityEvent(
+            { status: "discovered", candidate: CANDIDATE },
+            handshake(CANDIDATE, wrongPolicy),
+            REQUIREMENT,
+        );
+        expect(state.status).toBe("incompatible");
+        if (state.status !== "incompatible") {
+            throw new Error("test setup: a wrong policy revision must be incompatible");
+        }
+        const mismatch = state.mismatches[0];
+        if (mismatch === undefined || mismatch.kind !== "compile-policy") {
+            throw new Error("test setup: the compile-policy mismatch is expected");
+        }
+        expect(mismatch.policy).toEqual({
+            status: "unsupported",
+            observedRevision: 2,
+            range: { minimum: 1, maximum: 1 },
+        });
+        // The tool stays handshakable: a re-handshake under a tool whose
+        // policy the client supports is the path back.
+        const reProven = applyCompatibilityEvent(state, handshake(CANDIDATE, DESCRIBE_SUCCESS), REQUIREMENT);
+        expect(reProven.status).toBe("compatible");
     });
 
     it("a handshake whose facts are absent is unproven, with the tool's own diagnostics preserved", () => {
@@ -377,7 +409,7 @@ describe("the ToolCompatibility state machine", () => {
             throw new Error("test setup: the tool must be compatible");
         }
         expect(compatible.candidate).toEqual(CANDIDATE);
-        expect(compatible.proof).toEqual({ processContractVersion: 1 });
+        expect(compatible.proof).toEqual({ processContractVersion: 2, compilePolicyRevision: 1 });
 
         // A DIFFERENT observation (same path, new binary) only enters
         // through discovery: a candidate-resolved event supersedes the
@@ -392,7 +424,7 @@ describe("the ToolCompatibility state machine", () => {
         expect(rebound.status).toBe("compatible");
         if (rebound.status === "compatible") {
             expect(rebound.candidate).toEqual(otherObservation);
-            expect(rebound.proof).toEqual({ processContractVersion: 1 });
+            expect(rebound.proof).toEqual({ processContractVersion: 2, compilePolicyRevision: 1 });
         }
 
         // And a candidate-resolved event for a distinct observation drops

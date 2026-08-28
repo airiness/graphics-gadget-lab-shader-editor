@@ -1456,6 +1456,7 @@ selected descriptorVersion
 generatedSourceIdentity
 resolved gglab-shaderc path
 processContractVersion
+compilePolicyRevision
 toolVersion
 DXC/producer identity
 target

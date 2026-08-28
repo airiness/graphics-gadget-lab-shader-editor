@@ -23,7 +23,8 @@ function facts(producerIdentity: string = "Microsoft Direct3D 12 Shader Compiler
     return {
         toolIdentity: "gglab-shaderc",
         toolVersion: "1.1.0",
-        processContractVersion: 1,
+        processContractVersion: 2,
+        compilePolicyRevision: 1,
         producerKind: "dxc",
         producerIdentity,
         supportedTargets: ["gglab-dx12", "gglab-vulkan13"],

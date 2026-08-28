@@ -6,6 +6,7 @@ import {
 import {
     COMPILE_SUCCESS,
     DESCRIBE_SUCCESS,
+    DESCRIBE_SUCCESS_LEGACY_V1,
     DESCRIBE_USAGE_ERROR,
     DESCRIBE_COMPILER_UNAVAILABLE,
     DESCRIBE_INTERNAL_ERROR,
@@ -38,7 +39,7 @@ function expectRejected(outcome: HandshakeReadOutcome, reason: string, document:
 }
 
 describe("the strict handshake reader", () => {
-    it("reads the published success document and its five verdict facts", () => {
+    it("reads the published success document and carries every verdict fact", () => {
         const outcome = readHandshakeDocument(DESCRIBE_SUCCESS);
         expect(outcome.status).toBe("read");
         if (outcome.status !== "read") {
@@ -52,7 +53,8 @@ describe("the strict handshake reader", () => {
         }
         expect(document.status).toBe("ok");
         expect(document.exitCode).toBe(0);
-        expect(document.processContractVersion).toBe(1);
+        expect(document.processContractVersion).toBe(2);
+        expect(document.compilePolicyRevision).toBe(1);
         expect(document.toolIdentity).toBe("gglab-shaderc");
         expect(document.toolVersion).toBe("1.1.0");
         expect(document.producerKind).toBe("dxc");
@@ -87,7 +89,7 @@ describe("the strict handshake reader", () => {
             expect(outcome.document.success).toBe(false);
             expect(outcome.document.status).toBe(item.status);
             expect(outcome.document.exitCode).toBe(item.exitCode);
-            expect(outcome.document.processContractVersion).toBe(1);
+            expect(outcome.document.processContractVersion).toBe(2);
             // The failure payload carries no business facts — the shape
             // itself excludes them.
             expect(outcome.document).not.toHaveProperty("toolIdentity");
@@ -111,6 +113,7 @@ describe("the strict handshake reader", () => {
     it("rejects a missing required field explicitly, on either document kind", () => {
         expectRejected(readHandshakeDocument(withoutField(DESCRIBE_SUCCESS, "toolVersion")), "missing-field", "success without toolVersion");
         expectRejected(readHandshakeDocument(withoutField(DESCRIBE_SUCCESS, "processContractVersion")), "missing-field", "success without the contract axis");
+        expectRejected(readHandshakeDocument(withoutField(DESCRIBE_SUCCESS, "compilePolicyRevision")), "missing-field", "success without the compile-policy axis");
         expectRejected(readHandshakeDocument(withoutField(DESCRIBE_USAGE_ERROR, "processContractVersion")), "missing-field", "failure without the contract axis");
         expectRejected(readHandshakeDocument(withoutField(DESCRIBE_USAGE_ERROR, "diagnostics")), "missing-field", "failure without diagnostics");
     });
@@ -131,29 +134,46 @@ describe("the strict handshake reader", () => {
     it("rejects the KNOWN success-only fields on a failure payload — a contract rule, absent not ignored", () => {
         expectRejected(readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "toolIdentity", "gglab-shaderc")), "forbidden-field", "failure carrying toolIdentity");
         expectRejected(readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "supportedTargets", ["gglab-dx12"])), "forbidden-field", "failure carrying supportedTargets");
+        expectRejected(readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "compilePolicyRevision", 1)), "forbidden-field", "failure carrying compilePolicyRevision");
     });
 
     it("treats an out-of-range axis as a VALID machine document the client does not consume — refused at the axis, before any payload interpretation", () => {
-        // A future-axis document, even one carrying fields the client has
-        // never seen, is refused AS AN AXIS OBSERVATION, never as
-        // malformed: the negotiation bootstrap holds.
-        const futureAxis = withField(DESCRIBE_SUCCESS, "processContractVersion", 2);
+        // A future-axis document (beyond the declared 2..2), even one
+        // carrying fields the client has never seen, is refused AS AN
+        // AXIS OBSERVATION, never as malformed: the negotiation
+        // bootstrap holds.
+        const futureAxis = withField(DESCRIBE_SUCCESS, "processContractVersion", 3);
         const futureOutcome = readHandshakeDocument(futureAxis);
         expect(futureOutcome.status, futureAxis).toBe("unsupported-contract");
         if (futureOutcome.status === "unsupported-contract") {
             expect(futureOutcome.contract).toEqual({
                 supported: false,
                 reason: "observed-version-outside-range",
-                observedVersion: 2,
-                range: { minimum: 1, maximum: 1 },
+                observedVersion: 3,
+                range: { minimum: 2, maximum: 2 },
             });
         }
 
-        const futureAxisNewField = withField(withField(DESCRIBE_SUCCESS, "processContractVersion", 2), "futureFact", 42);
+        const futureAxisNewField = withField(withField(DESCRIBE_SUCCESS, "processContractVersion", 3), "futureFact", 42);
         expect(readHandshakeDocument(futureAxisNewField).status).toBe("unsupported-contract");
 
-        const futureFailure = withField(DESCRIBE_USAGE_ERROR, "processContractVersion", 2);
+        const futureFailure = withField(DESCRIBE_USAGE_ERROR, "processContractVersion", 3);
         expect(readHandshakeDocument(futureFailure).status).toBe("unsupported-contract");
+
+        // The LEGACY v1 document — valid under the v1 contract, with no
+        // compilePolicyRevision — is refused the same way (axis 1 is
+        // outside the declared 2..2): no reinterpretation, no guessed
+        // policy mapping (docs declaration policy).
+        const legacyV1 = readHandshakeDocument(DESCRIBE_SUCCESS_LEGACY_V1);
+        expect(legacyV1.status, DESCRIBE_SUCCESS_LEGACY_V1).toBe("unsupported-contract");
+        if (legacyV1.status === "unsupported-contract") {
+            expect(legacyV1.contract).toEqual({
+                supported: false,
+                reason: "observed-version-outside-range",
+                observedVersion: 1,
+                range: { minimum: 2, maximum: 2 },
+            });
+        }
 
         // The null-declaration world is reachable explicitly and refuses
         // the same way, with its own structured reason.
@@ -163,7 +183,7 @@ describe("the strict handshake reader", () => {
             expect(noDeclaration.contract).toEqual({
                 supported: false,
                 reason: "no-supported-contract-declared",
-                observedVersion: 1,
+                observedVersion: 2,
             });
         }
     });
@@ -173,6 +193,7 @@ describe("the strict handshake reader", () => {
         expectRejected(readHandshakeDocument(withField(DESCRIBE_SUCCESS, "exitCode", "zero")), "field-type-mismatch", "string exitCode");
         expectRejected(readHandshakeDocument(withField(DESCRIBE_SUCCESS, "success", "yes")), "field-type-mismatch", "string success");
         expectRejected(readHandshakeDocument(withField(DESCRIBE_SUCCESS, "processContractVersion", "1")), "field-type-mismatch", "string contract axis");
+        expectRejected(readHandshakeDocument(withField(DESCRIBE_SUCCESS, "compilePolicyRevision", "1")), "field-type-mismatch", "string compile-policy axis");
     });
 
     it("rejects malformed diagnostics", () => {

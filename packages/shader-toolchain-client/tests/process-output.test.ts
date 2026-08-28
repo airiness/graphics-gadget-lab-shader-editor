@@ -100,14 +100,14 @@ describe("the process-level channel readers", () => {
     });
 
     it("an unsupported axis is still an axis observation, reached over a clean channel", () => {
-        const future = mutatedDescribe((base) => ({ ...base, processContractVersion: 2 }));
+        const future = mutatedDescribe((base) => ({ ...base, processContractVersion: 3 }));
         const outcome = readHandshakeOutput(output({ stdout: utf8Encode(future) }));
         expect(outcome.kind).toBe("unsupported-contract");
         if (outcome.kind === "unsupported-contract") {
             expect(outcome.contract).toMatchObject({
                 supported: false,
                 reason: "observed-version-outside-range",
-                observedVersion: 2,
+                observedVersion: 3,
             });
         }
     });

@@ -61,6 +61,7 @@ export function projectToolFacts(state: ToolCompatibilityState): BuildInspectorR
                 row("tool identity", facts.toolIdentity, "client verdict over the tool's facts"),
                 row("tool version", facts.toolVersion, "tool's proven fact (client's reader)"),
                 row("process-contract axis", `${state.proof.processContractVersion}`, "tool's proven fact / client declaration"),
+                row("compile-policy axis", `${state.proof.compilePolicyRevision}`, "tool's proven fact / client declaration"),
                 row("producer identity", facts.producerIdentity, "tool's proven fact"),
                 row("supported targets", [...facts.supportedTargets].join(", ") || "(none)", "tool's published fact (client-extracted)"),
             ];
@@ -147,6 +148,7 @@ export function projectBuildFacts(
                   row("build intent — source identity", anchor.sourceIdentity, "composed NativeCompileRequest"),
                   row("build intent — target / stage / entry", `${anchor.target} / ${anchor.stage} / ${anchor.entry}`, "composed NativeCompileRequest"),
                   row("build intent — tool identity / version", `${anchor.tool.identity} / ${anchor.tool.version}`, "composed NativeCompileRequest (proven facts)"),
+                  row("build intent — contract / policy axes", `${anchor.tool.processContractVersion} / ${anchor.tool.compilePolicyRevision}`, "composed NativeCompileRequest (proven facts)"),
                   row("build intent — producer identity", anchor.tool.producerIdentity, "composed NativeCompileRequest (proven facts)"),
               ];
     const generatedRow = emission === null ? [] : [row("generated-source identity", emission.sourceIdentity, "core's emission (SHA-256 of the exact bytes)")];
