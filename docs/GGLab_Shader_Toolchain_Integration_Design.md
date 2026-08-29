@@ -388,6 +388,15 @@ artifact facts — is client work and needs no toolchain-side change.
 
 ## 8. Native compile request composition
 
+This section owns the Slice 2 **generated-function qualification** request. The
+descriptor's `EvaluateSurface` entry is not a complete Runtime pixel program,
+and the resulting Shader Artifact is not a Runtime Preview Artifact. The later
+Preview operation must be a distinct request that composes the exact generated
+bytes with a main-GGLab-owned Pixel/`PSMain` program. The proposed fixed-input
+contract is documented in the GGLab docs repository as
+`GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md`; it remains outside this
+stage until owner approval.
+
 The request is composed at the editor's composition point from facts with
 exactly one source each:
 
@@ -428,8 +437,10 @@ Tauri ShaderToolService       the product host boundary: validates the
                               bytes + exit code + timeout/cancel state — or
                               the pre-spawn refusal (candidate-invalidated: changed / missing /
                               unreadable, or launch-failed) — is the entire output)
-   ↓
-gglab-shaderc                 production compilation (its own policy, its own evidence)
+  ↓
+gglab-shaderc                 generated-function qualification compilation
+                              (its own policy, its own evidence; not the
+                              Runtime Preview Program build)
    ↓
 raw output surface →         the Toolchain Client owns the full
                               interpretation, level by level: process-level
@@ -880,8 +891,12 @@ contract exists):*
 - **Native diagnostic → graph navigation** (source-map lookup, markers,
   node/port highlighting) — the diagnostics stage, built on §11's
   intent/attempt binding and §12's transport.
-- **Preview Lab / Material Programs / Runtime integration** — later stages;
-  `launchPreview` stays a reserved slot, unbuilt.
+- **Preview Lab / Runtime integration** — a later stage; `launchPreview` stays
+  a reserved slot, unbuilt. Its proposed distinct Pixel/`PSMain` composition,
+  immutable publication, identity, and last-good contract is in the GGLab docs
+  repository's
+  `GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md`. Material Programs
+  remain a separate, later design.
 - **Node inspector and the remaining canvas interaction refinements** — the
   owner's deferred list; they land after the toolchain loop closes.
 - **Packaging / deployment closure** (the packaged toolchain + DXC runtime
