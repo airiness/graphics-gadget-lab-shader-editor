@@ -164,7 +164,8 @@ export function projectBuildFacts(
         lastOutcome === null
             ? []
             : [row("newest issued attempt — outcome", describeOutcome(lastOutcome), "the session line's record for the anchor's BuildId (client's outcome vocabulary, never raw bytes)")];
-    return [...generatedRow, ...intentRows, ...lineRows, ...outcomeRows];
+    const detailRows = lastOutcome === null ? [] : outcomeDetailRows(lastOutcome);
+    return [...generatedRow, ...intentRows, ...lineRows, ...outcomeRows, ...detailRows];
 }
 
 /** The outcome's stable one-line description (the client's structured
@@ -177,9 +178,62 @@ function describeOutcome(outcome: AttemptOutcome): string {
             return "canceled (explicit, never lost)";
         case "failed":
             if ("envelope" in outcome) {
-                return `failed (tool status ${outcome.envelope.status})`;
+                const count = outcome.envelope.diagnostics.length;
+                return `failed (tool status "${outcome.envelope.status}", ${count} diagnostic${count === 1 ? "" : "s"} — the diagnostics follow as their own rows)`;
             }
-            return `failed (${outcome.termination.kind}${outcome.termination.kind === "candidate-invalidated" ? `: ${outcome.termination.observation}` : ""})`;
+            return `failed (termination: ${outcome.termination.kind}${outcome.termination.kind === "candidate-invalidated" ? `: ${outcome.termination.observation}` : ""})`;
+    }
+}
+
+/** The failed attempt, made visible — projected from the session
+ *  line's OWN outcome record (one source of truth; this module computes
+ *  nothing). A tool failure surfaces every structured diagnostic
+ *  verbatim (its message, and its location fact when the tool reports
+ *  one); a termination that carries structure — the strict reader's
+ *  rejection, the channel violation, the host's provenance refutation —
+ *  surfaces that structure. `timed-out` and `launch-failed` are
+ *  complete as the one-line summary and add no hidden facts. */
+function outcomeDetailRows(outcome: AttemptOutcome): BuildInspectorRow[] {
+    if (outcome.kind !== "failed") {
+        return [];
+    }
+    if ("envelope" in outcome) {
+        const diagnostics = outcome.envelope.diagnostics;
+        if (diagnostics.length === 0) {
+            return [row("newest issued attempt — diagnostic", "(the tool reported the failure with no structured diagnostic)", "the tool's own failure envelope (carried verbatim)")];
+        }
+        return diagnostics.map((diagnostic, index) =>
+            row(
+                `newest issued attempt — diagnostic ${index + 1}/${diagnostics.length}`,
+                diagnostic.sourceIdentity !== undefined ? `${diagnostic.message}  [${diagnostic.sourceIdentity}]` : diagnostic.message,
+                "the tool's own structured diagnostic (verbatim; location fact when the tool reports one)",
+            ),
+        );
+    }
+    const termination = outcome.termination;
+    switch (termination.kind) {
+        case "machine-document-rejected":
+            return [row("newest issued attempt — rejection", `the machine document was rejected (${termination.rejection.reason}: ${termination.rejection.detail})`, "the client's strict reader (the structured refusal)")];
+        case "channel-violated": {
+            const violation = termination.violation;
+            const detail =
+                violation.reason === "exit-code-mismatch"
+                    ? `exit-code mismatch (document says ${violation.documentExitCode}, process exited ${violation.processExitCode})`
+                    : violation.reason === "stderr-non-empty"
+                        ? `stderr was not empty (${violation.byteLength} bytes)`
+                        : `${violation.reason} (${violation.detail})`;
+            return [row("newest issued attempt — channel", `channel rule violated: ${detail}`, "the client's channel judgment over the boundary's raw facts (structured, never prose)")];
+        }
+        case "candidate-invalidated": {
+            const rows = [row("newest issued attempt — invalidation", `the host refuted the candidate's observation at spawn time: ${termination.observation}`, "the host's provenance refutation (their fact, carried verbatim)")];
+            if (termination.observedIdentity !== null) {
+                rows.push(row("newest issued attempt — observed identity", termination.observedIdentity, "the host's observation fact"));
+            }
+            return rows;
+        }
+        case "timed-out":
+        case "launch-failed":
+            return [];
     }
 }
 

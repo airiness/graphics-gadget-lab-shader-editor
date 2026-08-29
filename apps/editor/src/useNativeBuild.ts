@@ -365,7 +365,34 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
             // only when the attempt has already settled.
             bump((n) => n + 1);
             const settledOutcome = await admission.outcome;
-            note("info", `Attempt #${admission.buildId.sequence} settled: the line records the outcome.`);
+            // The settle note names the OUTCOME (projected from the
+            // settled value itself): a failure says why at a glance —
+            // the tool's first diagnostic when the tool reports one —
+            // and points to the Replayable evidence section for the
+            // full structured list. The session line remains the single
+            // authority for the record.
+            const seq = admission.buildId.sequence;
+            if (settledOutcome.kind === "succeeded") {
+                note("ok", `Attempt #${seq} succeeded (binary ${settledOutcome.envelope.binaryFormat} ${settledOutcome.envelope.binaryHash.slice(0, 16)}…, cache ${settledOutcome.envelope.fromCache ? "hit" : "miss"}).`);
+            } else if (settledOutcome.kind === "canceled") {
+                note("info", `Attempt #${seq} canceled (explicit).`);
+            } else if ("envelope" in settledOutcome) {
+                const diagnostics = settledOutcome.envelope.diagnostics;
+                const first = diagnostics[0];
+                const more = diagnostics.length > 1 ? ` (+${diagnostics.length - 1} more under Replayable evidence → Build)` : "";
+                note("refusal", `Attempt #${seq} failed (tool status "${settledOutcome.envelope.status}"): ${first !== undefined ? `"${first.message}"` : "(no structured diagnostic)"}${more}`);
+            } else {
+                const termination = settledOutcome.termination;
+                const detail =
+                    termination.kind === "machine-document-rejected"
+                        ? ` (${termination.rejection.reason}: ${termination.rejection.detail})`
+                        : termination.kind === "channel-violated"
+                            ? ` (${termination.violation.reason})`
+                            : termination.kind === "candidate-invalidated"
+                                ? ` (${termination.observation})`
+                                : "";
+                note("refusal", `Attempt #${seq} failed (termination: ${termination.kind}${detail}).`);
+            }
             bump((n) => n + 1);
             return { admitted: true, buildId: admission.buildId.sequence, outcome: settledOutcome };
         },
