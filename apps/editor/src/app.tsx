@@ -1250,18 +1250,18 @@ export function App() {
                             {native.ready ? "Ready" : "NotReady"}
                         </Badge>
                         {readyReasonList(native.readiness) !== null && <ul className="gglab-native-reasons">{readyReasonList(native.readiness)}</ul>}
-                        {/* Program-composition state (integrated design 2026-08-30 amendment):
+                        {/* Program-composition state (Preview Program design v1.0, 2026-08-30):
                             no product path composes or issues a function-only complete-program
-                            request. The state is the fact — the preview line (the GGLab
-                            Preview Program design) re-enables native production through a
-                            main-owned program, and the permanent surface generated-function
-                            gate in the main repository is the qualification authority now. */}
+                            request. The state is the fact — the approved preview line re-enables
+                            native production through a main-owned program, and the permanent
+                            surface generated-function gate in the main repository is the
+                            qualification authority now. */}
                         <div className="gglab-native-field" role="status" aria-label="Program composition state">
                             <p className="gglab-native-field-label">Program composition: unavailable</p>
                             <p className="gglab-native-field-hint">
                                 This profile version's generated function has no complete-program composition available in this editor: the native production path for it is
-                                the GGLab Preview Program line (a main-owned program), pending its approval and implementation. Function-level native
-                                qualification remains permanently covered by the main repository's surface generated-function compile gate.
+                                the approved GGLab Preview Program design (v1.0), whose main-owned program and Standalone Preview Lab are pending implementation.
+                                Function-level native qualification remains permanently covered by the main repository's surface generated-function compile gate.
                             </p>
                         </div>
                         {/* Configuration (sections 5 and 8) — each field is a
