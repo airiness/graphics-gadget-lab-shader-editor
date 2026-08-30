@@ -1,6 +1,7 @@
 # GGLab Shader Editor — Toolchain Integration Design
 
 > Status: Construction-level design (active stage, started 2026-08-24)
+> Correctness amendment (2026-08-30): a generated surface function is not a complete shader-program entry. The earlier function-only `NativeCompileRequest` composition and its product-path acceptance are withdrawn; the corrected qualification and Preview ownership are defined below.
 > Scope: how the shader editor CONSUMES the external Shader Toolchain contract and completes the toolchain-integration stage: tool discovery, the strict readiness gate, the narrow host service, native compile request composition, generated-source staging, revisioned build state, the Build Inspector, the test model, and the implementation order.
 > Authority relationship: Implements the owner decisions recorded in `GGLab_Shader_Graph_Editor_Architecture.md` (§19 – §22, §25, §31 stage record, 2026-08-24). It does not modify the baseline; where the two differ, the baseline wins and this document is a defect to report.
 > Read first: the architecture baseline, then this document.
@@ -21,17 +22,17 @@ One sentence for the whole document:
 - The strict readiness gate, as two state spaces in two domains: ToolCompatibility (`unavailable / discovered / unproven / incompatible / compatible`, client verdict) and NativeBuildReadiness (`Ready` / `NotReady{reasons}`, editor composition), with no bypass path.
 - The new headless `shader-toolchain-client` package: machine-protocol consumption, ToolCompatibility verdicts, the host-boundary contract (allowlisted operations + the `NativeCompileRequest` shape — no argv in its vocabulary), build-intent and build-line (stale/current/last-good) pure rules, and reference host-boundary fakes.
 - The narrow Tauri `ShaderToolService` (discover / handshake / compile / cancel).
-- Native compile request composition (target/stage/entry/source) and generated-source staging.
+- Complete-program native compile request composition and generated-source staging; the generated surface function alone is explicitly rejected as an incomplete program.
 - Revisioned asynchronous build state and last-good preservation.
 - Toolchain diagnostics transport (carry, display, bind — not yet navigate).
 - The Build Inspector model: exact fields, each with one source of truth.
-- The test model: pure client tests, host-boundary fakes (exposing no argv), intent/attempt ordering (including the producer-identity intent case), ToolIncompatible/ToolUnproven/ToolUnavailable, TargetUnsupported as a readiness reason (never a tool-state change), the per-attempt staging rule, plus the two kind-distinct manual smokes (exploratory — permitted at any time, outside the editor, state-changing never; stage-acceptance — after the handshake, real product path).
+- The test model: pure client tests, host-boundary fakes (exposing no argv), intent/attempt ordering (including the producer-identity intent case), ToolIncompatible/ToolUnproven/ToolUnavailable, TargetUnsupported as a readiness reason (never a tool-state change), `ProgramCompositionUnavailable` for generated-function-only state, the per-attempt staging rule, and complete-program-only exploratory smoke. The former function-only product smoke is withdrawn.
 
 **Out of scope (explicit non-goals):**
 
 - Defining, proposing, or duplicating the toolchain handshake/result wire schema, or assigning values to any toolchain version axis, or pre-declaring the external contract's unknown-field policy. That authority is the GGLab Shader Toolchain contract authority's (normative design in the GGLab docs repository; implementation and self-tests in the main GGLab repository).
 - Native diagnostic → graph navigation via the source map (a later stage's work).
-- The Preview Lab, Material Programs, and Runtime integration.
+- Material Programs and general Runtime integration. The Preview Lab is now owned by the separately reviewed `GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md`; its live Editor bridge remains outside this stage.
 - A `build` command or any native-build orchestration in `apps/cli` (owner-deferred; separately reviewed).
 - Packaging/deployment closure (the packaged toolchain + DXC runtime).
 - Any second compiler, backend policy, or material ABI — invariant, not negotiable.
@@ -81,8 +82,11 @@ Both headless packages remain independently usable and independently testable. T
   editor's composition layer maps core facts into the client's plain value
   inputs: the descriptor's tool requirement (identity, minimum version,
   comparison rule), the emission's source bytes + its SHA-256 identity, and
-  the descriptor's generated-function facts (stage, entry). The editor is the
-  only place where a core type and a client type meet.
+  the descriptor's generated-function facts. Those generated-function facts
+  describe a callable function; they do **not** provide the complete-program
+  `stage` / `entry` required by `NativeCompileRequest`. Only a main-owned
+  composition may supply those program facts. The editor is the only place
+  where a core type and a client type meet.
 - **The client's vocabulary is its own plain value types** (contract facts,
   envelopes, the `NativeCompileRequest` shape, build intents, result states).
   It never understands `ShaderGraphDocument`, `GraphType`, node semantics, or
@@ -259,10 +263,11 @@ Ready      tool compatible
            AND host execution capability (service report)
            AND the explicit build target configured
            AND the configured target ∈ the tool's published supported targets
+           AND a complete program composition supplies source/stage/entry
 NotReady   otherwise — ALWAYS with a structured reason list:
            [ToolUnavailable | ToolDiscovered | ToolUnproven | ToolIncompatible
             | DescriptorIncompatible | HostUnavailable | TargetNotConfigured
-            | TargetUnsupported]
+            | TargetUnsupported | ProgramCompositionUnavailable]
 ```
 
 Reasons are visible, complete, and structured: every non-Ready input
@@ -272,7 +277,8 @@ a failure.
 Guarantees, per layer — each layer guarantees exactly what it owns:
 
 - **The product compile gate lives in the editor orchestration.** Only a
-  `Ready` composition issues a native compile request. No bypass: no dev
+  `Ready` composition with a complete program issues a native compile
+  request. Generated-function facts cannot satisfy that input. No bypass: no dev
   mode, environment flag, or local setting routes a request through a
   `NotReady` composition — the path does not exist to configure because none
   is defined.
@@ -386,101 +392,74 @@ artifact facts — is client work and needs no toolchain-side change.
 
 ---
 
-## 8. Native compile request composition
+## 8. Complete-program request composition — correctness amendment
 
-This section owns the Slice 2 **generated-function qualification** request. The
-descriptor's `EvaluateSurface` entry is not a complete Runtime pixel program,
-and the resulting Shader Artifact is not a Runtime Preview Artifact. The later
-Preview operation must be a distinct request that composes the exact generated
-bytes with a main-GGLab-owned Pixel/`PSMain` program. The proposed fixed-input
-contract is documented in the GGLab docs repository as
-`GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md`; it remains outside this
-stage until owner approval.
+`NativeCompileRequest` is a **complete shader-program compile** request. Its
+`stage` and `entry` identify the program entry passed to the native compiler.
+The Surface Profile Descriptor's `generatedFunction.name = EvaluateSurface`
+and `generatedFunction.stage = pixel` instead describe a function that an
+owning program may call. They are function facts, not program-entry facts.
 
-The request is composed at the editor's composition point from facts with
-exactly one source each:
+Therefore the former Editor composition
+`stage=pixel, entry=EvaluateSurface, source=<generated function>` is invalid:
+the generated function has no pixel-output semantic and DXC correctly rejects
+it as an entry point. The Editor must remove or disable that path. It must not
+form a function-only `NativeCompileRequest`, call it qualification, or treat
+its output as any kind of Shader Artifact.
+
+There are two valid full-program compositions, with separate ownership and
+separate artifact identities:
 
 ```text
-target   ← explicit build configuration (owner-selected; ALWAYS explicit;
-           never derived from the descriptor)
-stage    ← descriptor generatedFunction fact
-entry    ← descriptor generatedFunction fact
-defines/includes ← descriptor contract facts (empty for the frozen v2 profile; the slot exists)
-source   ← the staged generated HLSL: bytes = core's emission; identity = SHA-256 of the exact bytes
-roots    ← service-owned locations (its private staging/cache/artifact areas)
+qualification program
+  exact generated function bytes
+  + main-GGLab-owned qualification PSMain
+  → gglab-shaderc
+  → qualification-program evidence
+
+Runtime Preview Program
+  exact generated function bytes
+  + main-GGLab-owned Preview adapter and PSMain
+  + the frozen Preview descriptor / binding contract
+  → build-preview
+  → Runtime Preview Artifact
 ```
 
-The API shape keeps the target rule structural: the caller of the compile
-entry supplies the request FACTS — a shape with NO target field — and the
-composition point itself injects the configured target into the request
-value. That same value is what the well-formed gate judges AND what the
-boundary issues: configuration → request → BuildIntent is a one-way fact
-stream, and no call shape can judge one target and issue another.
+The permanent gate in the main GGLab repository is the current qualification
+authority. It proves that the generated function can participate in a valid
+native program; it does not publish a standalone generated-function artifact.
+The second composition is owned by
+`GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md` and is introduced in its
+live-Editor milestone only after the standalone Preview Lab is accepted.
 
-The flow, in order — each stage has one job and never does the next stage's
-job, and **no argv exists anywhere on the TypeScript side**:
+The generic Toolchain Client and host boundary may continue to expose
+`NativeCompileRequest` for callers that already own a complete program:
 
 ```text
-NativeCompileRequest          domain-shaped, composed at the editor's
-                              composition point:
-                                { source bytes, sourceIdentity,
-                                  target, stage, entry,
-                                  defines/includes (empty in v2) }
-   ↓
-Tauri ShaderToolService       the product host boundary: validates the
-                              allowlisted request shape, then serializes the
-                              approved request into the tool's invocation
-                              (structural arguments — host-internal, no shell
-                              string, no policy), and executes bounded
-                              (timeout/cancel; the pre-spawn provenance
-                              check precedes the spawn; stdout + stderr
-                              bytes + exit code + timeout/cancel state — or
-                              the pre-spawn refusal (candidate-invalidated: changed / missing /
-                              unreadable, or launch-failed) — is the entire output)
+NativeCompileRequest          { complete source bytes, sourceIdentity,
+                                explicit target, program stage, program entry,
+                                defines/includes }
   ↓
-gglab-shaderc                 generated-function qualification compilation
-                              (its own policy, its own evidence; not the
-                              Runtime Preview Program build)
-   ↓
-raw output surface →         the Toolchain Client owns the full
-                              interpretation, level by level: process-level
-                              channel facts FIRST (canceled/timed-out are
-                              terminal; stderr must be empty; stdout must
-                              decode; the document's exit code must equal
-                              the observed process exit code), THEN the
-                              envelope read — verdicts + result facts
+Tauri ShaderToolService       validates the allowlisted request, serializes
+                              host-internal invocation arguments, and performs
+                              bounded execution; no argv enters TypeScript
+  ↓
+gglab-shaderc                 compiles that complete program
+  ↓
+raw output surface            interpreted by the Toolchain Client
 ```
 
-**Build intent and attempt identity — three concepts, not one.**
+But core emission plus descriptor facts alone can no longer satisfy this
+shape. Until the owning program composition exists, the graph Editor exposes
+the generated-source identity and tool proof but reports native program build
+as unavailable; it issues no compile request.
 
-```text
-GeneratedSourceIdentity   SHA-256 of the exact emitted bytes — the core's
-                          durable CONTENT identity (unchanged)
-BuildIntent               the semantic identity of the compile request:
-                          sourceIdentity + target + stage/entry +
-                          descriptor-contract inputs (defines/includes) +
-                          the relevant proven tool/process facts
-                          (identity, version, process-contract axis,
-                          compile-policy axis, producer identity) —
-                          everything that actually affects what the tool
-                          compiles (a policy revision can change the
-                          binary even with the same recipe and DXC)
-BuildId                   the identity of ONE concrete asynchronous attempt
-                          (session-local, ordered) — who came later, when two
-                          attempts share an intent
-```
-
-Identity and ordering are separate axes: same source bytes under a different
-target is a DIFFERENT intent; two attempts within one intent are ordered by
-BuildId. A result can be `current` only if it belongs to the current
-BuildIntent and is the newest successful attempt within that intent (§11).
-This creates no new persisted identity — both are session-local structured
-data, and the durable content identity stays the core's SHA-256 and nothing
-else.
-
-The first real target is **`gglab-dx12`**, as explicit configuration — a
-deployment choice for the development environment, not a semantic fact and
-not a default smuggled into the descriptor.
+For the future Preview operation, semantic identity includes at least the
+generated-source identity, explicit target, Preview descriptor identity,
+input-contract identity, tool identity/version, process-contract version,
+Preview-build-contract version, compile-policy version, and producer identity.
+An attempt identifier remains session-local ordering, not durable content
+identity. The first Preview target remains explicit **`gglab-dx12`**.
 
 ---
 
@@ -696,7 +675,7 @@ truth for one field is a review failure.
 
 | Field | Source of truth | Notes |
 | --- | --- | --- |
-| readiness state | composed (editor orchestration): NativeBuildReadiness = ToolCompatibility (client) + profile×descriptor (core) + host capability (service) + target configured + target supported by the tool (facts vs config) | `Ready`, or `NotReady{reasons}` — every reason structured and visible, not a boolean |
+| readiness state | composed (editor orchestration): NativeBuildReadiness = ToolCompatibility (client) + profile×descriptor (core) + host capability (service) + target configured/supported + complete-program composition available | `Ready`, or `NotReady{reasons}` — generated-function-only state includes `ProgramCompositionUnavailable` |
 | discovered tool path + provenance | service (discovery) | which rule resolved it |
 | tool identity | client verdict over the tool's facts | checked against the descriptor's requirement |
 | tool version | tool's proven fact (via the client's reader) | judged under the descriptor's own rule |
@@ -707,8 +686,9 @@ truth for one field is a review failure.
 | profile×descriptor compatibility | core's capability verdict | the core owns this judgment |
 | build target | explicit configuration | never the descriptor, never the tool |
 | configured target supported by the tool? | the editor composition, from the client-extracted `supportedTargets` fact and the configuration | target READINESS — one build's compatibility, judged where the configuration lives; the tool's compatibility verdict never changes when the target changes |
-| stage / entry | descriptor generatedFunction facts | the descriptor's legit facts in the request |
-| build intent (target / stage / entry / source identity / tool identity / tool version / process-contract axis / compile-policy axis / producer identity) | the composed NativeCompileRequest (editor, from the client's vocabulary) | the `current`-ness anchor: the semantic identity of the compile request |
+| generated function name / stage | descriptor `generatedFunction` facts | callable-function facts only; never substituted for a complete-program entry |
+| complete-program stage / entry | the owner of the complete program composition | unavailable for generated-function-only Slice 2; Preview fixes these to Pixel / `PSMain` under the main-owned Preview descriptor |
+| build intent | the valid complete-program request | no valid graph-product intent exists for the withdrawn function-only request; the future Preview intent includes the generated source, target, Preview descriptor/input-contract identities, tool/process/Preview-build/policy versions, and producer identity |
 | generated-source identity | core's emission (SHA-256) | the core's durable CONTENT identity; a component of the build intent |
 | staging evidence | service (local name) + core identity | name for evidence, not a usable path |
 | build-line states (current/stale/last-good/failed/canceled) | session store over the client's rules | the ordered line, newest visible |
@@ -717,9 +697,11 @@ truth for one field is a review failure.
 | diagnostics (this stage: carried, not yet navigated) | tool result via the client | structured layer, bound to its build (BuildIntent + BuildId) |
 
 The inspector is the stage's "replayable evidence, not opaque *Compile
-failed*" surface: a reviewer must be able to determine, from it alone, which
-tool, under which contract facts, compiled which exact bytes, to what
-evidence, and why the state is what it is.
+failed*" surface. During the corrected generated-function-only stage it must
+say that no complete program is owned and no native compile was issued. Once a
+valid owning program exists, a reviewer must be able to determine, from the
+inspector alone, which tool, under which contract facts, compiled which exact
+complete-program bytes, to what evidence, and why the state is what it is.
 
 **Surface grouping.** The right inspector groups its distinct
 responsibilities into zones (contract & checks · document · emission ·
@@ -766,29 +748,31 @@ anywhere.
 - build-line rules: stale ordering, late slow results, last-good
   preservation across failure runs, cancellation, attempt ordering within
   one intent;
-- request-value composition: determinism of the `NativeCompileRequest` for
-  fixed inputs (same semantic compile request → same request VALUE — a
-  value, never an argument array);
+- request-value composition for a test-owned **complete program**:
+  determinism of the `NativeCompileRequest` for fixed inputs (same semantic
+  compile request → same request VALUE — a value, never an argument array);
 - the client's vocabulary independence: no import of core types, and no
   argv type in the client's vocabulary at all (tests that fail if either
   leaks in).
 
-**Host-boundary tests (the product path, in the editor suite):**
+**Host-boundary tests (generic complete-program harness, in the editor suite):**
 
 - the host-boundary fake implementing the declared contract (§3):
   deterministic envelopes, exit codes, timeout behavior, cancel behavior;
   the fake exposes no argv;
-- the full chain: Ready composition (gate) → `NativeCompileRequest` →
-  (fake) service → fake tool → envelope → client verdict → result states →
-  inspector state, driven entirely by fakes;
+- the full chain for a test-owned complete program: Ready composition (gate)
+  → `NativeCompileRequest` → (fake) service → fake tool → envelope → client
+  verdict → result states → inspector state, driven entirely by fakes;
 - the gate (editor orchestration): a `Ready` composition issues requests;
   for EACH `NotReady` reason type (`ToolUnavailable`, `ToolDiscovered`,
   `ToolUnproven`, `ToolIncompatible`, `DescriptorIncompatible`,
-  `HostUnavailable`, `TargetNotConfigured`, `TargetUnsupported`) nothing is
-  issued and the reason is visible;
+  `HostUnavailable`, `TargetNotConfigured`, `TargetUnsupported`,
+  `ProgramCompositionUnavailable`) nothing is issued and the reason is
+  visible;
 - required scenarios (each a named test):
   1. compatible proven tool + compatible descriptor + capable host +
-     configured target → `Ready` → compile → artifact/build facts visible;
+     configured target + a test-owned complete program → `Ready` → compile
+     → artifact/build facts visible;
   2. incompatible tool — facts that the tool itself reports contradict the
      required ones (identity, version, contract axis; target mismatch is
      NOT one of these kinds) → `ToolIncompatible` + explicit structured
@@ -809,8 +793,9 @@ anywhere.
       target (e.g. a DX12-only tool with Vulkan configured): the tool state
       STAYS `compatible`; the composition is `NotReady[TargetUnsupported]`;
       switching the target to a supported one flips the composition to
-      `Ready` with the tool state untouched — no incompatible↔compatible
-      oscillation for the same executable;
+      `Ready` only when a complete program is also present, with the tool state
+      untouched — no incompatible↔compatible oscillation for the same
+      executable;
   11. the tool's proven producer identity changes (a different DXC under the
       same gglab-shaderc version): a DIFFERENT BuildIntent — a slow result
       of the old producer lands late and cannot become current; the late
@@ -847,6 +832,19 @@ anywhere.
      flight (say, the startup bring-up) joins that execution — never two
      concurrent handshakes for one candidate.
 
+**Graph-product correction tests (Editor orchestration):**
+
+- frozen v1 and v2 core emissions plus their descriptors yield
+  `NotReady[ProgramCompositionUnavailable]` for generic native compile;
+- clicking the former compile action issues no service call and creates no
+  BuildId, build intent, artifact row, or last-good mutation;
+- the Inspector still shows generation identity and independently proven tool
+  facts, but clearly says that a complete program is not available;
+- Preview product-path tests are not simulated by substituting
+  `EvaluateSurface` as the entry. They enter only with the Preview descriptor,
+  adapter, `PSMain`, Preview-build handshake, and artifact contract owned by
+  the separate Preview design.
+
 **Non-normative test invariants:** no test asserts against a human-facing
 tool surface (`--version` text, `targets` listing, help output) — such a
 test is testing the wrong layer and is deleted, not fixed. And no test
@@ -859,24 +857,20 @@ host-internal details, not a contract surface.
 contract exists):*
 
 - the owner may run `gglab-shaderc` from outside the editor (terminal) to
-  investigate the tool's behavior against a known emission;
+  investigate the tool's behavior against a known **complete-program**
+  fixture or against a main-owned qualification harness plus a known emission;
 - it is investigative evidence ONLY: it must not change the tool's state
   (`unproven` stays `unproven`), must not flow into the editor's product
   path, and must not surface in the editor as any readiness claim;
 - it is not a readiness proof and not a stage-exit input.
 
-*Stage-acceptance smoke (after the handshake exists; part of closure):*
-
-- permitted only after the toolchain handshake contract exists and the
-  client declares it supported;
-- first target: explicit `gglab-dx12`; through the REAL editor product path
-  (Ready composition, real service, real tool) — not via the terminal;
-- run by the owner, outside CI (never a CI default), and recorded with the
-  toolchain checkout identity (commit) + binary identity + the observed
-  verdict and result facts — evidence in the working record, not in
-  fixture files;
-- a failed smoke is an explicit result with its diagnostics preserved — it
-  never becomes a silent skip.
+*Product stage-acceptance smoke:* the former function-only Editor smoke is
+withdrawn. Current generated-function qualification is the permanent main
+GGLab gate, which owns a valid qualification `PSMain`. The next real Editor
+product smoke is the live Preview smoke in Preview Milestone B; it is admitted
+only after the Preview-specific handshake and full-program operation are
+implemented. A failure remains explicit evidence and never becomes a silent
+skip.
 
 ---
 
@@ -891,10 +885,11 @@ contract exists):*
 - **Native diagnostic → graph navigation** (source-map lookup, markers,
   node/port highlighting) — the diagnostics stage, built on §11's
   intent/attempt binding and §12's transport.
-- **Preview Lab / Runtime integration** — a later stage; `launchPreview` stays
-  a reserved slot, unbuilt. Its proposed distinct Pixel/`PSMain` composition,
-  immutable publication, identity, and last-good contract is in the GGLab docs
-  repository's
+- **Live Editor Preview bridge / Runtime integration** — it follows the
+  standalone Preview Lab. `launchPreview` stays a reserved slot until that
+  first milestone is accepted. The distinct Pixel/`PSMain` composition,
+  immutable publication, identity, version handshake, and last-good contract
+  are in the GGLab docs repository's
   `GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md`. Material Programs
   remain a separate, later design.
 - **Node inspector and the remaining canvas interaction refinements** — the
@@ -950,36 +945,38 @@ logic in any host test.
 
 **Step 4 — editor composition and surface.** The `NativeBuildReadiness`
 composer (ToolCompatibility + core's descriptor verdict + host capability +
-target config) with structured `NotReady{reasons}`; the product gate (only
-`Ready` issues); the build-line session store over the client's rules; the
-Build Inspector per §13; the explicit target configuration (development
-default: `gglab-dx12`, always user-visible and changeable); the
-compile/cancel actions routed through gate → request value → service only.
+target config + complete-program availability) with structured
+`NotReady{reasons}`; the product gate (only `Ready` issues); the build-line
+session store over the client's rules; the Build Inspector per §13; and the
+explicit target configuration. A generic, test-owned complete-program harness
+may exercise gate → request value → service, but core emission alone must end
+at `ProgramCompositionUnavailable`.
 *Exit:* both state spaces are visibly explicit at every rung; no request is
-issued for a `NotReady` composition, with complete visible reasons; the
-inspector fields each show their single source of truth.
+issued for a `NotReady` composition; generated-function-only state has no
+BuildId or artifact claim; the inspector fields each show their single source
+of truth.
 
-**Step 5 — the gate opens (externally blocked).** After the toolchain
-handshake contract exists (contract authority: normative design in the GGLab
-docs repository; implementation and self-tests in the main GGLab
-repository) and the client declares it supported: the real tool proves, and
-the stage-acceptance smoke runs through the real editor product path (first
-target `gglab-dx12`). The repository-side half of this step is the
-discovery configuration surface: the rule 1/2 values of section 5 become
-explicit, visible, changeable configuration — passed to the discovery
-request verbatim; an empty value is the honest "not configured" (that
-rule records its own failure), and `bundled` is a world FACT stated in
-the request, not a setting to be hidden.
-*Exit:* the baseline's acceptance — compatible toolchain + compatible
-selected profile → `Ready` → generated HLSL → `gglab-shaderc` → artifact /
-build identity visible — holds in the desktop application, with the smoke
-recorded.
+**Step 5 — correctness closure for the withdrawn product path.** Remove or
+disable the Editor composition that maps descriptor `generatedFunction` facts
+to `NativeCompileRequest.stage/entry`; remove the corresponding compile action
+and acceptance claim; add the §14 correction tests. Keep discovery, handshake,
+tool proof, target facts, and generated-source identity visible because they
+are valid inputs to the later Preview operation.
+*Exit:* frozen v1/v2 graph emissions never issue a function-only native compile
+and never claim a Shader Artifact. The permanent main GGLab gate is the
+recorded qualification authority.
+
+**Next product milestone — owned by the Preview design.** Implement and accept
+the standalone Preview Lab first. Only then add the live Editor
+`build-preview` operation, its dedicated Preview-build contract handshake,
+immutable publication handoff, and attached launch. This ordering makes a
+visible Runtime consumer real before adding cross-process orchestration.
 
 **Global exit criteria for the stage:**
 
-- the acceptance chain above holds, and every intermediate state (at every
-  rung, and at every result state) is visible and explainable from the
-  Build Inspector alone;
+- the corrected chain holds: graph generation and tool proof remain visible,
+  generated-function-only native build is explicitly unavailable, and no
+  incomplete program reaches the host boundary;
 - no test depends on a real binary, a machine-specific path, or a
   human-facing tool output;
 - no code path assembles a shell string anywhere, and argv does not exist
@@ -987,6 +984,8 @@ recorded.
 - ToolCompatibility and NativeBuildReadiness are distinct state spaces in
   the code, and the single composition point is the editor orchestration —
   the service holds no readiness logic;
+- descriptor `generatedFunction` facts are never used as complete-program
+  `stage` / `entry` facts;
 - `shader-graph-core` is byte-identical in its public surface (no new
   imports in either direction with the client);
 - a failed or canceled build never erases a safe `last-good`, and a slow old
