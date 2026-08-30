@@ -109,8 +109,20 @@ function facts(): CompileRequestFacts {
     };
 }
 
+// The test world OWNS a complete-program composition: this file pins
+// the FLOW's generic machinery (admission, the attempt line, settlement,
+// last-good), which stays ready for a caller that owns a program. The
+// editor surface's own program-composition state (the generated function
+// only — the function is a contract, not a program entry) is pinned at
+// the readiness and surface levels, where the composition is NotReady
+// and nothing is issued.
 function makeFlow(boundary: HostToolBoundary): NativeBuildFlow {
-    return new NativeBuildFlow(boundary, () => ({ available: true, detail: "the fake service is reachable" }), JUDGMENT);
+    return new NativeBuildFlow(
+        boundary,
+        () => ({ available: true, detail: "the fake service is reachable" }),
+        JUDGMENT,
+        { available: true, detail: "the test world owns a complete program composition for the generated function" },
+    );
 }
 
 /** The descriptor-side gate inputs as the app holds them (all ready). */

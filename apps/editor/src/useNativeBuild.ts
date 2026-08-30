@@ -47,6 +47,21 @@ import { createTauriToolBoundary, toolBoundaryAvailable } from "./toolchain-host
 
 const EMPTY_REQUIREMENT = { identity: "", minimumVersion: "", versionComparison: "semver" };
 
+/** The surface's OWN program-composition fact (one source for the whole
+ *  editor surface): the generated function is a function contract, not a
+ *  complete program entry (Preview Program design v1.0), and this editor
+ *  owns no main-owned program. While it holds, the native production
+ *  path is closed FOR THIS SURFACE at the readiness gate — no request,
+ *  no BuildId, no artifact claim — while the generic flow/client mechanism
+ *  stands ready for the caller that owns a complete program. */
+const PRODUCT_PROGRAM_COMPOSITION = {
+    available: false as const,
+    detail:
+        "This editor surface owns no complete-program composition for the generated function (a function contract, not a program entry). " +
+        "The approved GGLab Preview Program design (v1.0) — the main-owned program and its Standalone Preview Lab — is the native production " +
+        "path, pending implementation; function-level native qualification remains the main repository's permanent surface generated-function gate.",
+};
+
 export interface UseNativeBuildInput {
     /** The loaded descriptor instance (null = not loaded — the core's
      *  reader's own fact). */
@@ -146,6 +161,7 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
                             : { available: false, detail: "no Tauri host in this shell (web build — the desktop service is the only execution host)" };
                     },
                     { requirement: EMPTY_REQUIREMENT },
+                    PRODUCT_PROGRAM_COMPOSITION,
                 );
             }
             bump((n) => n + 1);

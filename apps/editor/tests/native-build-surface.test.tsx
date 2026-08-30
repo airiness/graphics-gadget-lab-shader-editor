@@ -3,10 +3,14 @@
  * driven against the reference fake boundary — the desktop shape, with
  * the Tauri host module mocked to the fake.
  *
- * The surfaces these pin (2026-08-30 correctness amendment: the
- * function-only native production path is no longer offered by the
- * surface — no test here issues a compile): bring-up to a Ready
- * composition, the discovery/handshake single-flight windows observed
+ * The surfaces these pin (Preview Program design v1.0: the
+ * generated-function-only surface has NO native production path — no
+ * test here admits a compile): the mechanism brings up fully ready
+ * (tool proven, descriptor compatible, host available, target
+ * supported) while the SURFACE verdict stays NotReady
+ * [ProgramCompositionUnavailable] and the gate refuses structurally —
+ * no request issued, no BuildId created, no Shader Artifact claim
+ * produced — plus the discovery/handshake single-flight windows observed
  * open-then-closed by the surface, and the discovery configuration
  * pass-through.
  */
@@ -142,8 +146,9 @@ beforeEach(() => {
 });
 
 /** Renders the surface over the fake world and brings it up: the
- *  boundary exists, the tool is discovered + proven (the startup
- *  handshake), and the composition is Ready. */
+ *  boundary exists and the tool is discovered + proven (the startup
+ *  handshake) — the mechanism's inputs fully ready, while the surface's
+ *  program-composition fact keeps the verdict NotReady. */
 function bringUpSurface() {
     const hook = renderHook(() =>
         useNativeBuild({
@@ -158,7 +163,7 @@ function bringUpSurface() {
 }
 
 describe("the native-build surface (hook over the fake world)", () => {
-    it("brings up to a Ready composition — tool proven, descriptor compatible, host available, target supported", async () => {
+    it("brings the MECHANISM up fully ready — and the generated-function-only verdict stays NotReady [ProgramCompositionUnavailable]", async () => {
         const { hook, fake } = bringUpSurface();
         await waitFor(async () => {
             expect(hook.result.current.flow).not.toBeNull();
@@ -167,13 +172,72 @@ describe("the native-build surface (hook over the fake world)", () => {
             expect(hook.result.current.flow?.tool.status).toBe("compatible");
         });
         expect(fake.handshakeCalls, "the startup handshake is the tool's own event").toBe(1);
-        expect(hook.result.current.readiness).toEqual({ status: "Ready" });
-        expect(hook.result.current.ready).toBe(true);
-        // The native production path is not offered by the surface (the
-        // 2026-08-30 amendment): no compile action, no in-flight window
-        // — readiness is a displayed fact, not a compile gate here.
+        // The mechanism's inputs are all ready (tool compatible — the
+        // handshake proved it; descriptor compatible; host available;
+        // target supported) — yet the SURFACE's own program-composition
+        // fact is false, and THAT alone keeps the verdict NotReady.
+        expect(hook.result.current.readiness).toEqual({
+            status: "NotReady",
+            reasons: [expect.objectContaining({ reason: "ProgramCompositionUnavailable" })],
+        });
+        expect(
+            hook.result.current.readiness.status === "NotReady" ? hook.result.current.readiness.reasons.length : -1,
+            "ONE visible reason — the surface's product fact (the mechanism's are all ready)",
+        ).toBe(1);
+        expect(hook.result.current.ready, "the generated-function-only surface NEVER is Ready").toBe(false);
         expect(hook.result.current.handshakeInFlight, "the startup handshake has closed its lane").toBe(false);
         expect(hook.result.current.discoveryInFlight, "the startup discovery has closed its lane").toBe(false);
+    });
+
+    it("the gate refuses structurally — no request issued, no BuildId created, no Shader Artifact claim produced", async () => {
+        const { hook, fake } = bringUpSurface();
+        await waitFor(async () => {
+            expect(hook.result.current.flow).not.toBeNull();
+            expect(hook.result.current.flow?.tool.status).toBe("compatible");
+        });
+        const flow = hook.result.current.flow;
+        if (flow === null) {
+            throw new Error("the flow is constructed before the handshake settles");
+        }
+        // The well-formed request value the caller would offer — the
+        // test composes it (a fixture; the surface no longer composes
+        // one). The gate below must refuse it BEFORE any issuance.
+        const facts = {
+            source: new Uint8Array([47, 42, 43]),
+            sourceIdentity: "cd".repeat(32),
+            stage: "pixel",
+            entry: "PSMain",
+            defines: [],
+            includes: [],
+        };
+        const input = { descriptorLoaded: true, descriptorCompatible: true, descriptorDetail: "", configuredTarget: "gglab-dx12" };
+        let admission: Awaited<ReturnType<typeof flow.compile>> | undefined;
+        await act(async () => {
+            admission = await flow.compile(facts, input);
+        });
+        expect(admission, "the compile call was issued over the flow's single public entry").toBeDefined();
+        if (admission === undefined) {
+            throw new Error("the gate returned no admission value");
+        }
+        expect(admission.admitted).toBe(false);
+        if (admission.admitted === false) {
+            expect(admission.gate.readiness.status, "the refusal carries the surface's product fact").toBe("NotReady");
+            if (admission.gate.readiness.status === "NotReady") {
+                expect(admission.gate.readiness.reasons.map((reason) => reason.reason)).toContain("ProgramCompositionUnavailable");
+            }
+        }
+        // ① No native compile request issued — against a LIVE, scripted
+        //    boundary (the world's compile script is dormant; a surface
+        //    that issued would be caught by its own fake).
+        expect(fake.compileCalls, "NOTHING may be issued for the generated-function-only surface").toBe(0);
+        // ② No BuildId created — the session's line is empty (a BuildId
+        //    only ever exists on the line of an admitted attempt).
+        expect(flow.buildSession.lastIssued).toBeNull();
+        expect(flow.buildSession.inFlight).toEqual([]);
+        // ③ No Shader Artifact claim — nothing settled on the line,
+        //    nothing current, no outcome anywhere on the surface.
+        expect(hook.result.current.lineReport?.current, "no attempt succeeded — the line has no current artifact").toBeUndefined();
+        expect(hook.result.current.lastOutcome, "the surface carries no attempt outcome").toBeNull();
     });
 
     // THE IN-FLIGHT WINDOW TESTS: the flow's lanes are the authority;

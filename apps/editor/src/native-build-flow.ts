@@ -188,13 +188,26 @@ export class NativeBuildFlow {
      *  a CURRENT fact, not a snapshot: a descriptor change refreshes it,
      *  and the next handshake judges against the new contract. */
     private judgment: CompatibilityJudgment;
+    /** The surface's program-composition fact (constructor-injected —
+     *  one source per fact; see the parameter's docs). */
+    private programComposition: { readonly available: boolean; readonly detail: string };
 
     constructor(
         private readonly boundary: HostToolBoundary,
         private readonly hostCapability: () => HostCapabilityReport,
         initialJudgment: CompatibilityJudgment,
+        /** The surface's OWN program-composition fact (single source:
+         *  the construction point, never a request caller). The editor's
+         *  product surface supplies `available: false` — the generated
+         *  function is a function contract, not a complete program entry,
+         *  and this surface owns no main-owned program until the approved
+         *  Preview Program line is implemented. The flow's machinery is
+         *  generic over this fact, and stands ready for the caller that
+         *  owns one. */
+        programComposition: { readonly available: boolean; readonly detail: string },
     ) {
         this.judgment = initialJudgment;
+        this.programComposition = programComposition;
     }
 
     /** Refreshes the judgment input from the current descriptor (the
@@ -420,11 +433,14 @@ export class NativeBuildFlow {
     // ---- the product gate + the build line -------------------------------
 
     /** The readiness composition for one moment — recomposed from the
-     *  current facts (tool state, the descriptor side, the host report,
-     *  the target configuration, the proven supported targets). */
+     *  current facts (the surface's program-composition fact, tool
+     *  state, the descriptor side, the host report, the target
+     *  configuration, the proven supported targets). */
     readiness(input: DescriptorAndTargetInput): NativeBuildReadiness {
         const host = this.host();
         const all: NativeReadinessInput = {
+            programCompositionAvailable: this.programComposition.available,
+            programCompositionDetail: this.programComposition.detail,
             tool: this.toolState,
             descriptorLoaded: input.descriptorLoaded,
             descriptorCompatible: input.descriptorCompatible,

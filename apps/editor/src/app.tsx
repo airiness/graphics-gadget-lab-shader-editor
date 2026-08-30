@@ -1250,20 +1250,14 @@ export function App() {
                             {native.ready ? "Ready" : "NotReady"}
                         </Badge>
                         {readyReasonList(native.readiness) !== null && <ul className="gglab-native-reasons">{readyReasonList(native.readiness)}</ul>}
-                        {/* Program-composition state (Preview Program design v1.0, 2026-08-30):
-                            no product path composes or issues a function-only complete-program
-                            request. The state is the fact — the approved preview line re-enables
-                            native production through a main-owned program, and the permanent
-                            surface generated-function gate in the main repository is the
-                            qualification authority now. */}
-                        <div className="gglab-native-field" role="status" aria-label="Program composition state">
-                            <p className="gglab-native-field-label">Program composition: unavailable</p>
-                            <p className="gglab-native-field-hint">
-                                This profile version's generated function has no complete-program composition available in this editor: the native production path for it is
-                                the approved GGLab Preview Program design (v1.0), whose main-owned program and Standalone Preview Lab are pending implementation.
-                                Function-level native qualification remains permanently covered by the main repository's surface generated-function compile gate.
-                            </p>
-                        </div>
+                        {/* Program-composition state: carried INSIDE the
+                            readiness reason list above (one source per
+                            fact, one verdict — Preview Program design
+                            v1.0): while this surface owns no
+                            complete-program composition, the readiness
+                            verdict is NotReady [ProgramCompositionUnavailable]
+                            and the gate refuses structurally. No second
+                            display surface for it here. */}
                         {/* Configuration (sections 5 and 8) — each field is a
                             stacked block: a short label, the explanation in
                             the hint, and the control on its own full-width

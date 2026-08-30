@@ -7,12 +7,14 @@
  * Two state spaces, two domains: the TOOL's compatibility is the
  * client's verdict over the tool (judged in @gglab/shader-toolchain-client);
  * the BUILD's readiness is this composition over that verdict plus the
- * other inputs only this composition point knows: the profile/descriptor
- * verdict (core's), the host execution capability (the service's report,
- * as observed by the shell), the explicit target configuration, and the
- * target-coverage judgment (the client-extracted supportedTargets FACT
- * against the CONFIGURED target — one build's compatibility, judged
- * where the configuration lives).
+ * other inputs only this composition point knows: the program-composition
+ * fact (the SURFACE's product fact — whether this surface owns a
+ * complete-program composition for the generated function), the
+ * profile/descriptor verdict (core's), the host execution capability
+ * (the service's report, as observed by the shell), the explicit target
+ * configuration, and the target-coverage judgment (the
+ * client-extracted supportedTargets FACT against the CONFIGURED target —
+ * one build's compatibility, judged where the configuration lives).
  *
  * The composition is recomposed from current facts on every input
  * change (readiness is derived, never remembered), and a `NotReady` is
@@ -27,6 +29,17 @@ import type { ToolCompatibilityState, UnprovenReason } from "@gglab/shader-toolc
  *  complete detail line (and, where the machine's own structured facts
  *  exist, their stable codes too) — the inspector reads these verbatim. */
 export type NativeBuildReadinessReason =
+    | {
+          /** The surface's own product fact (the design's vocabulary):
+           *  the generated function is a function contract, not a
+           *  complete program entry — while this surface owns no
+           *  main-owned complete-program composition, the native
+           *  production path is closed FOR THIS SURFACE, and it is the
+           *  most stable reason: it holds regardless of tool, descriptor,
+           *  host, and target. */
+          readonly reason: "ProgramCompositionUnavailable";
+          readonly detail: string;
+      }
     | { readonly reason: "ToolUnavailable"; readonly detail: string }
     | { readonly reason: "ToolDiscovered"; readonly detail: string }
     | {
@@ -56,6 +69,17 @@ export type NativeBuildReadiness =
 
 /** The composition's inputs — each from exactly one owner. */
 export interface NativeReadinessInput {
+    /** The surface's OWN product fact (a construction-time fact of the
+     *  flow instance — the surface supplies it; a request caller never
+     *  can): whether this surface owns a complete-program composition
+     *  for the generated function. Currently FALSE for this editor:
+     *  the generated function is a function contract, not a program
+     *  entry (Preview Program design v1.0). */
+    readonly programCompositionAvailable: boolean;
+    /** The surface's stable explanation where the composition is
+     *  unavailable (one source verbatim: the reason list and, later,
+     *  the inspector's detail line). */
+    readonly programCompositionDetail: string;
     /** The client's verdict over the tool (the tool state space). */
     readonly tool: ToolCompatibilityState;
     /** A descriptor instance is loaded (the core's reader accepted it). */
@@ -120,12 +144,23 @@ function isNonCompatibleTool(tool: ToolCompatibilityState): tool is NonCompatibl
 
 /**
  * The composition. Total: every input contributes at most its own
- * reason(s), in a stable order (tool, descriptor, host, target), so the
- * same facts always read the same — downgrades are as visible as
- * upgrades.
+ * reason(s), in a stable order (program composition, tool, descriptor,
+ * host, target), so the same facts always read the same — downgrades
+ * are as visible as upgrades.
  */
 export function composeNativeBuildReadiness(input: NativeReadinessInput): NativeBuildReadiness {
     const reasons: NativeBuildReadinessReason[] = [];
+    // The surface's own product fact FIRST: while the surface owns no
+    // complete-program composition, the native production path is closed
+    // FOR THIS SURFACE, and the rest of the reasons are the mechanism's
+    // readiness facts (tool, descriptor, host, target) — they hold for
+    // the future caller that owns one.
+    if (!input.programCompositionAvailable) {
+        reasons.push({
+            reason: "ProgramCompositionUnavailable",
+            detail: input.programCompositionDetail,
+        });
+    }
     if (isNonCompatibleTool(input.tool)) {
         // The switch above is exhaustive over the non-compatible states —
         // TypeScript proves it at compile time.
@@ -171,7 +206,14 @@ export function composeNativeBuildReadiness(input: NativeReadinessInput): Native
 /** The product gate (section 6 guarantee): only a `Ready` composition
  *  admits a native compile request. There is no bypass: no dev mode,
  *  environment flag, or local setting routes around this verdict,
- *  because no alternative path is defined. */
+ *  because no alternative path is defined.
+ *
+ *  For the editor surface the closure is structural, not conventional:
+ *  its `ProgramCompositionUnavailable` fact keeps the composition
+ *  `NotReady`, so this predicate refuses — no request is issued, no
+ *  BuildId is created, no Shader Artifact claim is produced — while the
+ *  generic machinery stands ready for the caller that owns a complete
+ *  program. */
 export function readinessAdmitsCompile(readiness: NativeBuildReadiness): boolean {
     return readiness.status === "Ready";
 }

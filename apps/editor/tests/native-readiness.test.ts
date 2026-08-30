@@ -42,8 +42,15 @@ function candidateOf(state: ToolCompatibilityState) {
 }
 type Unknown = unknown;
 
+// The base world is the MECHANISM's ready world — a caller that OWNS a
+// complete program composition (the flow's machinery is generic over
+// that fact). The editor surface's product state (generated function
+// only) is pinned by the dedicated describe below, where the fact is
+// false and the composition must never be Ready.
 function baseInput(overrides: Partial<NativeReadinessInput> = {}): NativeReadinessInput {
     return {
+        programCompositionAvailable: true,
+        programCompositionDetail: "",
         tool: compatibleTool(),
         descriptorLoaded: true,
         descriptorCompatible: true,
@@ -181,5 +188,44 @@ describe("the gate admits ONLY Ready", () => {
         expect(readinessAdmitsCompile({ status: "Ready" })).toBe(true);
         const notReady = composeNativeBuildReadiness(baseInput({ hostAvailable: false, hostDetail: "x" }));
         expect(readinessAdmitsCompile(notReady)).toBe(false);
+    });
+});
+
+/*
+ * The generated-function-only state (Preview Program design v1.0): the
+ * surface's own program-composition fact is FALSE, and that alone keeps
+ * the composition NotReady — the native production path is closed FOR
+ * THE SURFACE, structurally, however ready the mechanism's other inputs
+ * are. The gate therefore refuses, and nothing is issued.
+ */
+describe("the generated-function-only state — ProgramCompositionUnavailable", () => {
+    it("unavailable composition alone (the mechanism fully ready): NotReady, its reason only, detail visible, gate refuses", () => {
+        const readiness = composeNativeBuildReadiness(
+            baseInput({
+                programCompositionAvailable: false,
+                programCompositionDetail: "the surface owns no complete-program composition for the generated function",
+            }),
+        );
+        expect(reasonsOf(readiness)).toEqual(["ProgramCompositionUnavailable"]);
+        if (readiness.status === "NotReady") {
+            expect(readiness.reasons[0]?.detail).toEqual(
+                "the surface owns no complete-program composition for the generated function",
+            );
+        }
+        expect(readinessAdmitsCompile(readiness), "no request may be issued for a generated-function-only surface").toBe(false);
+    });
+
+    it("unavailable composition + other failures: first, in the stable order, the complete list otherwise", () => {
+        const readiness = composeNativeBuildReadiness(
+            baseInput({
+                programCompositionAvailable: false,
+                programCompositionDetail: "the surface owns no complete-program composition for the generated function",
+                tool: initialToolState,
+                supportedTargets: null,
+                configuredTarget: null,
+            }),
+        );
+        expect(reasonsOf(readiness)).toEqual(["ProgramCompositionUnavailable", "ToolUnavailable", "TargetNotConfigured"]);
+        expect(readinessAdmitsCompile(readiness)).toBe(false);
     });
 });
