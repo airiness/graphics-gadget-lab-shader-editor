@@ -63,12 +63,10 @@ import {
     type ShaderGraphDiagnostic,
     type SurfaceProfileDescriptor,
 } from "@gglab/shader-graph-core";
-import { utf8Encode } from "@gglab/shader-toolchain-client";
 import { DEFAULT_BUILD_TARGET } from "./build-target-config.js";
 import type { BuildInspectorRow } from "./build-inspector.js";
 import { createDesktopFileChannel, isDesktopHost, type FileChannel } from "./host-io.js";
 import { useNativeBuild } from "./useNativeBuild.js";
-import type { CompileRequestFacts } from "./native-build-flow.js";
 import type { NativeBuildReadiness } from "./native-build-readiness.js";
 import { basenameOf, closeAction, createSession, isDirty, provenanceFromImport, provenanceFromFile, saveTarget, sessionSaved, sessionTitle, type CloseChoice, type DocumentProvenance, type DocumentSession } from "./document-session.js";
 import { saveShortcutOf } from "./shortcuts.js";
@@ -915,41 +913,10 @@ export function App() {
         emission,
     });
 
-    /** Compose the compile request FACTS (each field one source —
-     *  section 8) and pass them through the product gate. The TARGET is
-     *  deliberately NOT among the caller's facts: it has exactly one
-     *  authority (the explicit build configuration), and the flow
-     *  injects it into the request value it will judge AND issue.
-     *  Nothing is issued on a refusal: the gate's complete reasons are
-     *  the note. */
-    const onNativeCompile = async (): Promise<void> => {
-        if (emission === null || emission.ok === false || emission.sourceMap === null) {
-            native.addNote("refusal", "Native build needs the core's emission (Generate HLSL first): the request's source bytes and identity are the core's facts.");
-            return;
-        }
-        if (descriptor === null) {
-            native.addNote("refusal", "Native build needs the loaded descriptor (stage / entry are its generatedFunction facts).");
-            return;
-        }
-        const facts: CompileRequestFacts = {
-            source: utf8Encode(emission.source),
-            sourceIdentity: emission.sourceMap.generatedSourceIdentity,
-            stage: descriptor.generatedFunction.stage,
-            entry: descriptor.generatedFunction.name,
-            defines: [],
-            includes: [...descriptor.requiredIncludes],
-        };
-        await native.compileNow(facts);
-    };
-
     const nativeTargetOptions = useMemo(() => {
         const supported = native.flow?.supportedTargets ?? null;
         return Array.from(new Set<string>([native.target.target, DEFAULT_BUILD_TARGET, ...(supported ?? [])]));
     }, [native.flow, native.target.target]);
-
-    const nativeInFlightAttempts = native.flow !== null ? native.flow.buildSession.inFlight : [];
-    const lastInFlight = nativeInFlightAttempts.length > 0 ? nativeInFlightAttempts[nativeInFlightAttempts.length - 1] : undefined;
-    const nativeInFlightSequence = lastInFlight === undefined ? null : lastInFlight.buildId.sequence;
 
     // Discovery-config picks (design section 5, rules 1 and 2): the
     // native dialog seam belongs to the file channel (desktop host only —
@@ -1275,13 +1242,28 @@ export function App() {
                     <section className="gglab-panel gglab-panel-native-build" aria-label="Native build">
                         <h2 className="gglab-panel-title">Native build</h2>
                         <p className="gglab-panel-hint">
-                            The product gate: only a Ready composition issues a native compile request (gate → request value → service; no path around it).
+                            Tool readiness, proof, and the generated-function facts for the native production contract. The generated surface function is a
+                            function contract, not a complete program entry.
                         </p>
                         <Badge variant={native.ready ? "ok" : "error"}>
                             <BadgeDot />
                             {native.ready ? "Ready" : "NotReady"}
                         </Badge>
                         {readyReasonList(native.readiness) !== null && <ul className="gglab-native-reasons">{readyReasonList(native.readiness)}</ul>}
+                        {/* Program-composition state (integrated design 2026-08-30 amendment):
+                            no product path composes or issues a function-only complete-program
+                            request. The state is the fact — the preview line (the GGLab
+                            Preview Program design) re-enables native production through a
+                            main-owned program, and the permanent surface generated-function
+                            gate in the main repository is the qualification authority now. */}
+                        <div className="gglab-native-field" role="status" aria-label="Program composition state">
+                            <p className="gglab-native-field-label">Program composition: unavailable</p>
+                            <p className="gglab-native-field-hint">
+                                This profile version's generated function has no complete-program composition available in this editor: the native production path for it is
+                                the GGLab Preview Program line (a main-owned program), pending its approval and implementation. Function-level native
+                                qualification remains permanently covered by the main repository's surface generated-function compile gate.
+                            </p>
+                        </div>
                         {/* Configuration (sections 5 and 8) — each field is a
                             stacked block: a short label, the explanation in
                             the hint, and the control on its own full-width
@@ -1356,9 +1338,11 @@ export function App() {
                             </select>
                         </div>
                         {/* Actions, in lifecycle order: resolve the tool
-                            (the rule walk), establish proof (the handshake),
-                            and only then may the Ready gate issue a compile.
-                            Cancel lives with the attempt it stops. */}
+                            (the rule walk), establish proof (the handshake).
+                            No compile action: the function-only program
+                            composition is unavailable in this editor (the
+                            state above), so the surface offers no path to
+                            issue one. */}
                         <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
                             Actions
                         </h3>
@@ -1369,14 +1353,6 @@ export function App() {
                             <Button variant="ghost" onClick={() => void native.handshakeNow()} disabled={native.handshakeInFlight}>
                                 {native.handshakeInFlight ? "Handshaking…" : "Handshake (establish proof)"}
                             </Button>
-                            <Button variant="secondary" onClick={() => void onNativeCompile()} disabled={!native.ready}>
-                                {native.ready ? `Compile (target ${native.target.target})` : "Compile refused — NotReady (reasons above)"}
-                            </Button>
-                            {nativeInFlightSequence !== null && (
-                                <Button variant="ghost" onClick={() => void native.cancelNow(nativeInFlightSequence)}>
-                                    Cancel in-flight
-                                </Button>
-                            )}
                         </ButtonGroup>
                         {native.lineReport !== null && (
                             <>

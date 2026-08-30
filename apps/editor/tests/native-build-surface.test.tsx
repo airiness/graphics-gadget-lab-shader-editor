@@ -1,22 +1,20 @@
 /**
  * Native-build SURFACE tests (the React hook over the pure modules),
- * driven against the reference fake boundary — the product path in its
- * desktop shape, with the Tauri host module mocked to the fake.
+ * driven against the reference fake boundary — the desktop shape, with
+ * the Tauri host module mocked to the fake.
  *
- * The invariant these pin: an ADMITTED attempt is IN FLIGHT on the
- * session line before its settlement is awaited — the surface observes
- * it (the in-flight row and its cancel target) for the WHOLE window.
- * The compile must not learn of its own attempt only when the attempt
- * has already settled: that would make the cancel invisible for the
- * entire compile, and Step 4's explicit compile/cancel surface would
- * not exist in the window it is for.
+ * The surfaces these pin (2026-08-30 correctness amendment: the
+ * function-only native production path is no longer offered by the
+ * surface — no test here issues a compile): bring-up to a Ready
+ * composition, the discovery/handshake single-flight windows observed
+ * open-then-closed by the surface, and the discovery configuration
+ * pass-through.
  */
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { FakeHostBoundary, utf8Encode } from "@gglab/shader-toolchain-client";
+import { FakeHostBoundary } from "@gglab/shader-toolchain-client";
 import { parseSurfaceProfileDescriptor, type SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
 import { useNativeBuild } from "../src/useNativeBuild.js";
-import type { CompileRequestFacts } from "../src/native-build-flow.js";
 
 /** The fake boundary the (mocked) host module creates — reachable from
  *  the test side for its settlement controls (releasePending,
@@ -51,6 +49,10 @@ vi.mock("../src/toolchain-host.js", async () => {
         supportedTargets: ["gglab-dx12", "gglab-vulkan13"],
         diagnostics: [],
     });
+    // The boundary contract carries four capabilities, so the fake world
+    // provides a compile world too — dormant in these tests: the surface
+    // no longer offers the native production path (2026-08-30 amendment),
+    // so nothing here ever issues one.
     const compileOk = JSON.stringify({
         command: "compile",
         success: true,
@@ -139,18 +141,6 @@ beforeEach(() => {
     surfaceWorld.holdHandshake = false;
 });
 
-/** The caller's request FACTS — no target field: the composition's
- *  configuration (its default "gglab-dx12") is the target's one
- *  authority, and the flow composes it into the request value. */
-const REQUEST_FACTS: CompileRequestFacts = {
-    source: utf8Encode("/* generated */\nvoid EvaluateSurface() { }"),
-    sourceIdentity: "cd".repeat(32),
-    stage: "pixel",
-    entry: "EvaluateSurface",
-    defines: [],
-    includes: [],
-};
-
 /** Renders the surface over the fake world and brings it up: the
  *  boundary exists, the tool is discovered + proven (the startup
  *  handshake), and the composition is Ready. */
@@ -179,71 +169,19 @@ describe("the native-build surface (hook over the fake world)", () => {
         expect(fake.handshakeCalls, "the startup handshake is the tool's own event").toBe(1);
         expect(hook.result.current.readiness).toEqual({ status: "Ready" });
         expect(hook.result.current.ready).toBe(true);
-        expect(hook.result.current.compileInFlight).toBe(false);
+        // The native production path is not offered by the surface (the
+        // 2026-08-30 amendment): no compile action, no in-flight window
+        // — readiness is a displayed fact, not a compile gate here.
         expect(hook.result.current.handshakeInFlight, "the startup handshake has closed its lane").toBe(false);
         expect(hook.result.current.discoveryInFlight, "the startup discovery has closed its lane").toBe(false);
-    });
-
-    it("shows an admitted attempt IN FLIGHT before it settles — the cancel target is visible for the whole window", async () => {
-        const { hook, fake } = bringUpSurface();
-        await waitFor(async () => {
-            expect(hook.result.current.flow?.tool.status).toBe("compatible");
-        });
-        expect(hook.result.current.ready).toBe(true);
-        expect(hook.result.current.compileInFlight, "nothing is in flight before the compile").toBe(false);
-
-        // Issue the compile. The call suspends on the attempt's OWN
-        // settlement (the fake keeps it pending) — nothing settles.
-        let compilePromise: Promise<{ admitted: boolean; buildId?: number }> | undefined;
-        await act(async () => {
-            compilePromise = hook.result.current.compileNow(REQUEST_FACTS);
-        });
-        expect(compilePromise, "the compile call was issued").toBeDefined();
-
-        // The window: admitted, not yet settled. The surface must already
-        // see the attempt IN FLIGHT — that is what the cancel button
-        // renders against (its sequence is the session's in-flight set).
-        expect(hook.result.current.compileInFlight, "the admitted attempt is visible IN FLIGHT, before any settlement").toBe(true);
-        const inFlight = hook.result.current.flow?.buildSession.inFlight ?? [];
-        expect(inFlight.length, "exactly one attempt in flight").toBe(1);
-        const sequence = inFlight[0]?.buildId.sequence;
-        expect(sequence, "the cancel target is the session's in-flight attempt").not.toBeNull();
-        expect(hook.result.current.lineReport?.inFlight.map((id) => id.sequence)).toEqual([sequence]);
-        // The line still has no settled attempt — the window is not over:
-        // no current, no last-good yet.
-        expect(hook.result.current.lineReport?.current).toBeUndefined();
-        // The anchor's own outcome is not settled either — the surface's
-        // "newest issued attempt outcome" is the honest "not yet" (and it
-        // can never be a different attempt's outcome in its place).
-        expect(hook.result.current.lastOutcome, "the anchor is in flight: no outcome yet, and no other attempt's in its place").toBeNull();
-        // And readiness has not changed in the meantime — the window is
-        // an in-flight fact, not a readiness change.
-        expect(hook.result.current.ready).toBe(true);
-
-        // The window ends: the world settles the attempt; the surface
-        // learns of it, and the in-flight row closes.
-        const promise = compilePromise as Promise<{ admitted: boolean; buildId?: number }>;
-        let settled: { admitted: boolean; buildId?: number } | undefined;
-        fake.releasePending({ sequence: 1 });
-        await act(async () => {
-            settled = await promise;
-        });
-        expect(settled, "the compile call resolves once the attempt settles").toBeDefined();
-        expect(settled?.admitted).toBe(true);
-        expect(hook.result.current.compileInFlight).toBe(false);
-        expect(hook.result.current.lineReport?.current?.buildId.sequence).toBe(1);
-        expect(hook.result.current.lineReport?.states.find((entry) => entry.buildId.sequence === 1)?.state).toBe("current");
-        // The surface's "newest issued attempt outcome" is now the
-        // ANCHOR's own record from the session line — its single
-        // authority (not a second copy stamped anywhere else).
-        expect(hook.result.current.lastOutcome?.kind, "the anchor's settled outcome, read from the line").toBe("succeeded");
     });
 
     // THE IN-FLIGHT WINDOW TESTS: the flow's lanes are the authority;
     // the surface's in-flight flags must OBSERVE a lane the moment it
     // opens (the Re-discover / Handshake buttons render their disabled
     // state from that observation). Stale flags through the window are
-    // the same class of bug as the cancel being invisible.
+    // the same class of bug as a button staying enabled across the whole
+    // window it should guard.
 
     it("shows the STARTUP discovery in flight in its window — true before release, false after (and the click's window too)", async () => {
         surfaceWorld.holdDiscovered = true;
