@@ -1534,10 +1534,12 @@ main-owned qualification `PSMain`; Runtime preview requires the generated
 function plus a main-owned Preview `PSMain`. The Editor must not synthesize
 either entry or pass binding. Its current function-only request composition is a
 known implementation defect and must be removed or disabled until a reviewed
-full-program operation exists. The proposed fixed-input composition,
-publication, identity, versioning, and last-good contract is owned by the GGLab
-docs repository in `GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md` and
-is the approved authority for implementation.
+full-program operation exists. The fixed input contracts, standalone Preview
+Program, ordinary runtime catalog mappings, visualizer, and milestone order are
+approved for Milestone A by
+`GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md`. Its `build-preview`,
+publication/session, Preview handshake, identity, and live last-good design are
+directionally accepted only and require final owner approval before Milestone B.
 
 It must follow normal GGLab Lab/runtime discipline:
 
