@@ -3,6 +3,7 @@ import type { ToolCandidate } from "../src/host-boundary.js";
 import {
     admitPreviewBuild,
     judgePreviewEligibility,
+    type CandidateBoundPreviewHandshake,
     type PreviewEligibilityRequirement,
 } from "../src/preview-compatibility.js";
 import { readPreviewHandshakeDocument } from "../src/preview-handshake-document.js";
@@ -60,6 +61,13 @@ function processFrom(text: string): PreviewHandshakeProcessOutcome {
     return { kind: "rejected", rejection: read.rejection };
 }
 
+function handshakeFrom(
+    text: string,
+    candidate: ToolCandidate = CANDIDATE,
+): CandidateBoundPreviewHandshake {
+    return { candidate, process: processFrom(text) };
+}
+
 function mutate(change: Record<string, unknown>): string {
     return JSON.stringify({
         ...(JSON.parse(DESCRIBE_PREVIEW_SUCCESS) as Record<string, unknown>),
@@ -71,20 +79,18 @@ describe("Preview eligibility", () => {
     it("admits only the exact target, descriptor, input contract, schemas, and continuous producer proof", () => {
         const eligibility = judgePreviewEligibility(
             TOOL,
-            CANDIDATE,
-            processFrom(DESCRIBE_PREVIEW_SUCCESS),
+            handshakeFrom(DESCRIBE_PREVIEW_SUCCESS),
             REQUIREMENT,
         );
         expect(eligibility.status).toBe("eligible");
-        expect(admitPreviewBuild(eligibility)).toBe(true);
+        expect(admitPreviewBuild(eligibility, CANDIDATE)).toBe(true);
     });
 
     it("requires ordinary proof for the exact candidate observation", () => {
         expect(
             judgePreviewEligibility(
                 { status: "discovered", candidate: CANDIDATE },
-                CANDIDATE,
-                processFrom(DESCRIBE_PREVIEW_SUCCESS),
+                handshakeFrom(DESCRIBE_PREVIEW_SUCCESS),
                 REQUIREMENT,
             ),
         ).toMatchObject({
@@ -94,18 +100,43 @@ describe("Preview eligibility", () => {
         expect(
             judgePreviewEligibility(
                 TOOL,
-                { ...CANDIDATE, observationIdentity: "candidate-b" },
-                processFrom(DESCRIBE_PREVIEW_SUCCESS),
+                handshakeFrom(DESCRIBE_PREVIEW_SUCCESS, {
+                    ...CANDIDATE,
+                    observationIdentity: "candidate-b",
+                }),
                 REQUIREMENT,
             ),
         ).toMatchObject({ status: "unproven", reasons: [{ reason: "proof-not-for-this-candidate" }] });
     });
 
+    it("binds Preview proof and build admission to the candidate that executed the handshake", () => {
+        const candidateB: ToolCandidate = {
+            ...CANDIDATE,
+            observationIdentity: "candidate-b",
+            resolvedAt: 2,
+        };
+        const toolB: ToolCompatibilityState = {
+            ...TOOL,
+            candidate: candidateB,
+        };
+        const handshakeA = handshakeFrom(DESCRIBE_PREVIEW_SUCCESS, CANDIDATE);
+
+        expect(judgePreviewEligibility(toolB, handshakeA, REQUIREMENT)).toMatchObject({
+            status: "unproven",
+            candidate: CANDIDATE,
+            reasons: [{ reason: "proof-not-for-this-candidate" }],
+        });
+
+        const eligibilityA = judgePreviewEligibility(TOOL, handshakeA, REQUIREMENT);
+        expect(eligibilityA).toMatchObject({ status: "eligible", candidate: CANDIDATE });
+        expect(admitPreviewBuild(eligibilityA, CANDIDATE)).toBe(true);
+        expect(admitPreviewBuild(eligibilityA, candidateB)).toBe(false);
+    });
+
     it("rejects producer discontinuity between ordinary and Preview handshakes", () => {
         const eligibility = judgePreviewEligibility(
             TOOL,
-            CANDIDATE,
-            processFrom(mutate({ producerIdentity: "different dxc" })),
+            handshakeFrom(mutate({ producerIdentity: "different dxc" })),
             REQUIREMENT,
         );
         expect(eligibility).toMatchObject({
@@ -124,8 +155,7 @@ describe("Preview eligibility", () => {
     it("reports each Preview-specific eligibility mismatch without collapsing them", () => {
         const eligibility = judgePreviewEligibility(
             TOOL,
-            CANDIDATE,
-            processFrom(
+            handshakeFrom(
                 mutate({
                     supportedTargets: ["gglab-vulkan13"],
                     previewProgramDescriptorVersion: 2,
@@ -152,8 +182,7 @@ describe("Preview eligibility", () => {
         expect(
             judgePreviewEligibility(
                 TOOL,
-                CANDIDATE,
-                processFrom(DESCRIBE_PREVIEW_USAGE_ERROR),
+                handshakeFrom(DESCRIBE_PREVIEW_USAGE_ERROR),
                 REQUIREMENT,
             ),
         ).toMatchObject({
@@ -161,7 +190,11 @@ describe("Preview eligibility", () => {
             reasons: [{ reason: "preview-handshake-facts-absent", status: "usage-error" }],
         });
         expect(
-            judgePreviewEligibility(TOOL, CANDIDATE, { kind: "timed-out" }, REQUIREMENT),
+            judgePreviewEligibility(
+                TOOL,
+                { candidate: CANDIDATE, process: { kind: "timed-out" } },
+                REQUIREMENT,
+            ),
         ).toMatchObject({ status: "unproven", reasons: [{ reason: "preview-handshake-timed-out" }] });
 
         const unsupported = readPreviewHandshakeDocument(DESCRIBE_PREVIEW_SUCCESS, { minimum: 2, maximum: 2 }, null);
@@ -171,8 +204,10 @@ describe("Preview eligibility", () => {
         expect(
             judgePreviewEligibility(
                 TOOL,
-                CANDIDATE,
-                { kind: "unsupported-preview-contract", contract: unsupported.contract },
+                {
+                    candidate: CANDIDATE,
+                    process: { kind: "unsupported-preview-contract", contract: unsupported.contract },
+                },
                 REQUIREMENT,
             ),
         ).toMatchObject({

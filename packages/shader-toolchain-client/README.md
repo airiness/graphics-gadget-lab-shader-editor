@@ -13,6 +13,9 @@ published ordinary handshake/result (`describe` / `compile`) and dedicated
 Preview handshake/result (`describe-preview` / `build-preview`) envelopes, the
 version/identity verdicts, the candidate-observation identity (path +
 observed identity), and the tool-compatibility state machine around it —
+the dedicated Preview handshake settlement and its resulting eligibility are
+bound to the exact candidate that executed it, and Preview build admission
+rechecks that candidate so proof cannot travel between observations;
 every resolved state carries the candidate it is about (the state owns the
 current candidate; the proof owns the proof facts), total over every
 settlement, and race-safe: a candidate-scoped event (a handshake

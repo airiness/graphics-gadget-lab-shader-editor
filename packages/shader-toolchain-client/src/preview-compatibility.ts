@@ -30,6 +30,15 @@ export interface PreviewEligibilityRequirement {
     readonly inputContract: PreviewInputContractRequirement;
 }
 
+/** One Preview handshake result together with the exact candidate whose
+ *  executable produced it. Keep this pair intact from host invocation through
+ *  eligibility judgment: Preview proof may never travel to another candidate
+ *  observation, even when that candidate reports identical protocol facts. */
+export interface CandidateBoundPreviewHandshake {
+    readonly candidate: ToolCandidate;
+    readonly process: PreviewHandshakeProcessOutcome;
+}
+
 export type PreviewContinuityField =
     | "toolIdentity"
     | "toolVersion"
@@ -82,9 +91,21 @@ export type PreviewUnprovenReason =
       };
 
 export type PreviewEligibility =
-    | { readonly status: "eligible"; readonly facts: PreviewHandshakeSuccessDocument }
-    | { readonly status: "unproven"; readonly reasons: readonly PreviewUnprovenReason[] }
-    | { readonly status: "incompatible"; readonly mismatches: readonly PreviewCompatibilityMismatch[] };
+    | {
+          readonly status: "eligible";
+          readonly candidate: ToolCandidate;
+          readonly facts: PreviewHandshakeSuccessDocument;
+      }
+    | {
+          readonly status: "unproven";
+          readonly candidate: ToolCandidate;
+          readonly reasons: readonly PreviewUnprovenReason[];
+      }
+    | {
+          readonly status: "incompatible";
+          readonly candidate: ToolCandidate;
+          readonly mismatches: readonly PreviewCompatibilityMismatch[];
+      };
 
 function continuityMismatches(
     ordinary: ToolFacts,
@@ -139,34 +160,49 @@ function addAxisMismatch(
  *  concrete Preview intent the editor wants to form. */
 export function judgePreviewEligibility(
     tool: ToolCompatibilityState,
-    candidate: ToolCandidate,
-    process: PreviewHandshakeProcessOutcome,
+    handshake: CandidateBoundPreviewHandshake,
     requirement: PreviewEligibilityRequirement,
 ): PreviewEligibility {
+    const { candidate, process } = handshake;
     if (tool.status !== "compatible") {
         return {
             status: "unproven",
+            candidate,
             reasons: [{ reason: "ordinary-tool-not-proven", toolStatus: tool.status }],
         };
     }
     if (!candidatesEqual(tool.candidate, candidate)) {
-        return { status: "unproven", reasons: [{ reason: "proof-not-for-this-candidate" }] };
+        return {
+            status: "unproven",
+            candidate,
+            reasons: [{ reason: "proof-not-for-this-candidate" }],
+        };
     }
     if (process.kind === "canceled") {
-        return { status: "unproven", reasons: [{ reason: "preview-handshake-canceled" }] };
+        return {
+            status: "unproven",
+            candidate,
+            reasons: [{ reason: "preview-handshake-canceled" }],
+        };
     }
     if (process.kind === "timed-out") {
-        return { status: "unproven", reasons: [{ reason: "preview-handshake-timed-out" }] };
+        return {
+            status: "unproven",
+            candidate,
+            reasons: [{ reason: "preview-handshake-timed-out" }],
+        };
     }
     if (process.kind === "channel-violated") {
         return {
             status: "unproven",
+            candidate,
             reasons: [{ reason: "preview-channel-violated", violation: process.violation }],
         };
     }
     if (process.kind === "rejected") {
         return {
             status: "unproven",
+            candidate,
             reasons: [{ reason: "preview-handshake-unreadable", detail: process.rejection.detail }],
         };
     }
@@ -178,11 +214,13 @@ export function judgePreviewEligibility(
         ) {
             return {
                 status: "unproven",
+                candidate,
                 reasons: [{ reason: "no-supported-contract-declared", axis, contract: process.contract }],
             };
         }
         return {
             status: "incompatible",
+            candidate,
             mismatches: [
                 {
                     kind: axis === "process" ? "process-contract-unsupported" : "preview-contract-unsupported",
@@ -195,6 +233,7 @@ export function judgePreviewEligibility(
     if (process.document.success !== true) {
         return {
             status: "unproven",
+            candidate,
             reasons: [
                 {
                     reason: "preview-handshake-facts-absent",
@@ -231,10 +270,16 @@ export function judgePreviewEligibility(
     addAxisMismatch(mismatches, preview.previewActivePublicationSchemaVersion, "active-publication");
     addAxisMismatch(mismatches, preview.previewObservationSchemaVersion, "observation");
     return mismatches.length === 0
-        ? { status: "eligible", facts: preview }
-        : { status: "incompatible", mismatches };
+        ? { status: "eligible", candidate, facts: preview }
+        : { status: "incompatible", candidate, mismatches };
 }
 
-export function admitPreviewBuild(eligibility: PreviewEligibility): boolean {
-    return eligibility.status === "eligible";
+/** Admits a Preview build only for the candidate whose dedicated handshake
+ *  established the eligible proof. The candidate stays outside the request
+ *  value (which carries Preview intent only), but it is part of admission. */
+export function admitPreviewBuild(
+    eligibility: PreviewEligibility,
+    candidate: ToolCandidate,
+): boolean {
+    return eligibility.status === "eligible" && candidatesEqual(eligibility.candidate, candidate);
 }
