@@ -483,6 +483,13 @@ capabilities (exactly these, plus the existing scoped document/descriptor file I
                                 distinct NativePreviewBuildRequest operation
   cancel(buildId)             → explicit canceled state for that build
 
+separate compiler-free host capability (not a tool operation):
+  readPreviewObservation(candidate, sessionId)
+                              → at most 90 raw bytes from the candidate
+                                deployment's canonical session observation,
+                                or not-found / too-large / read-failed /
+                                candidate-invalidated
+
 the boundary's actual job (all host-internal, in Rust):
   allowance      the request is one of the declared operations, in declared shape
                  (ordinary source/target/stage/entry fields, or the dedicated
@@ -506,8 +513,9 @@ the boundary's actual job (all host-internal, in Rust):
 Prohibited, by construction:
 
 ```text
-no generic spawn(argv) — the service exposes only the six capabilities above
-    and serializes only approved requests
+no generic spawn(argv) — the service exposes only the six tool capabilities
+    above, plus the distinct compiler-free observation read, and serializes
+    only approved tool requests
 no protocol interpretation in Rust — no envelope parsing, status
     interpretation, version comparison, or diagnostic classification
     (the raw output surface — stdout + stderr bytes, exit
@@ -968,6 +976,13 @@ can read the ordinary base Registry, publish immutable products, and atomically
 advance a session pointer across attempts; the WebView receives no path. No
 Preview protocol interpretation or readiness judgment enters Rust.
 
+Runtime observation consumption is a separate compiler-free boundary, not a
+seventh tool operation. It accepts only the candidate identity and a canonical
+32-lowercase-hex SessionId, re-runs and holds the candidate provenance guard,
+derives `<candidate deployment>/ShaderArtifacts/shader-preview-sessions/<session>/observed.ggsh.preview-observed`,
+and reads at most the published fixed 90-byte size. The WebView cannot provide
+a path, and Rust does not parse the record.
+
 **Editor Preview orchestration slice.** The headless client now maps Preview
 settlements into explicit Pending / Published / Failed / Canceled attempt
 records and binds every readable result to the request's exact
@@ -978,9 +993,13 @@ request only after the dedicated proof for that exact candidate and requirement
 is eligible. One Preview session owns a monotonic sequence and a strict launch
 queue: a newer eligible request cancels an issued older attempt and waits for
 its terminal settlement; requests superseded before issue consume no sequence.
-This slice deliberately calls a successful build `Published`, not `Current` or
-`LastGood`: those two claims remain blocked on the following Runtime-observation
-consumption slice.
+The Runtime-observation consumption slice now strictly reads the main-owned
+90-byte little-endian record, cross-links `AttemptSequence` and both publication
+refs against the session build line, and applies monotonic/transactional
+last-good rules before projecting `Current` / `LastGood` / `Stale` / `Rejected`.
+Concurrent refreshes join one candidate/session read; malformed, unbound, or
+non-monotonic records cannot replace the accepted observation. UI polling and
+the attached Preview surface consume this state in the following slice.
 
 **Step 4 — editor composition and surface.** The `NativeBuildReadiness`
 composer (ToolCompatibility + core's descriptor verdict + host capability +

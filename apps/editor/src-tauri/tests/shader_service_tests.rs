@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gglab_shader_graph_editor::{
-    hash_bytes, BuildId, BoundaryResult, CandidateObservation, DiscoveryRule,
-    NativeCompileRequest, NativePreviewBuildRequest, ServiceError, ShaderToolService,
+    hash_bytes, BoundaryResult, BuildId, CandidateObservation, DiscoveryRule, NativeCompileRequest,
+    NativePreviewBuildRequest, PreviewObservationHostReadResult, ServiceError, ShaderToolService,
     ToolCandidate, ToolchainRoots,
 };
 
@@ -78,6 +78,13 @@ fn preview_request(attempt_sequence: u64) -> NativePreviewBuildRequest {
     }
 }
 
+fn preview_observation_path(base: &Path, session_id: &str) -> PathBuf {
+    base.join("ShaderArtifacts")
+        .join("shader-preview-sessions")
+        .join(session_id)
+        .join("observed.ggsh.preview-observed")
+}
+
 // ---------------------------------------------------------------- execution
 
 #[test]
@@ -109,6 +116,83 @@ fn preview_handshake_executes_the_dedicated_command_on_the_exact_candidate() {
     assert_eq!(output.stderr, b"PREVIEW-DESCRIPT-ERR\n");
     assert_eq!(output.exit_code, 0);
     assert!(!output.timed_out && !output.canceled);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn preview_observation_read_is_candidate_and_session_scoped_and_bounded() {
+    let base = temp_base("preview-observation-read");
+    let tool = build_dummy(&base, "dummy.exe");
+    let content = std::fs::read(&tool).unwrap();
+    let bound_candidate = candidate(&tool, &content);
+    let svc = service(&base, 5_000);
+    let session_id = "34".repeat(16);
+
+    assert_eq!(
+        svc.read_preview_observation(&bound_candidate, &session_id)
+            .unwrap(),
+        PreviewObservationHostReadResult::NotFound
+    );
+
+    let path = preview_observation_path(&base, &session_id);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let bytes: Vec<u8> = (0..90).collect();
+    std::fs::write(&path, &bytes).unwrap();
+    assert_eq!(
+        svc.read_preview_observation(&bound_candidate, &session_id)
+            .unwrap(),
+        PreviewObservationHostReadResult::Read {
+            bytes: bytes.clone()
+        }
+    );
+
+    std::fs::write(&path, vec![7_u8; 91]).unwrap();
+    assert_eq!(
+        svc.read_preview_observation(&bound_candidate, &session_id)
+            .unwrap(),
+        PreviewObservationHostReadResult::TooLarge
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn preview_observation_read_refuses_bad_session_ids_before_touching_the_candidate() {
+    let base = temp_base("preview-observation-session-shape");
+    let missing_tool = base.join("missing.exe");
+    let svc = service(&base, 5_000);
+    let unobservable = candidate(&missing_tool, b"never existed");
+
+    match svc.read_preview_observation(&unobservable, "../outside") {
+        Err(ServiceError::RequestShape { field, .. }) => assert_eq!(field, "sessionId"),
+        other => panic!("expected session request-shape refusal, got {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn preview_observation_read_never_uses_a_changed_candidate_deployment() {
+    let base = temp_base("preview-observation-provenance");
+    let tool = base.join("dummy.exe");
+    let observed = b"observed candidate";
+    std::fs::write(&tool, observed).unwrap();
+    let bound_candidate = candidate(&tool, observed);
+    std::fs::write(&tool, b"replacement candidate").unwrap();
+    let svc = service(&base, 5_000);
+
+    match svc
+        .read_preview_observation(&bound_candidate, &"56".repeat(16))
+        .unwrap()
+    {
+        PreviewObservationHostReadResult::CandidateInvalidated {
+            candidate,
+            observation: CandidateObservation::Changed,
+            observed_identity: Some(identity),
+        } => {
+            assert_eq!(candidate, bound_candidate);
+            assert_eq!(identity, hash_bytes(b"replacement candidate"));
+        }
+        other => panic!("expected changed-candidate refusal, got {other:?}"),
+    }
     let _ = std::fs::remove_dir_all(&base);
 }
 

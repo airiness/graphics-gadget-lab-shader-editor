@@ -1,6 +1,7 @@
 //! The ShaderToolService — the product implementation of the declared
 //! host boundary (design §9 plus the approved Preview Milestone B extension),
-//! exactly six capabilities:
+//! exactly six tool capabilities, plus one compiler-free Runtime observation
+//! read:
 //!
 //! ```text
 //! discover(config)            → candidate facts + per-rule failure reasons
@@ -11,6 +12,7 @@
 //!                               settles
 //! build_preview(candidate, request) → buildId + Preview settlement
 //! cancel(buildId)             → the explicit canceled state of that build
+//! read_preview_observation(candidate, session_id) → bounded raw observation
 //! ```
 //!
 //! and the host-internal work behind them, in order:
@@ -36,6 +38,7 @@
 //! good one — that is decided above it), graph or profile knowledge, and
 //! any argv in any TypeScript-facing surface.
 
+use std::io::Read as _;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -47,7 +50,8 @@ use super::provenance::{verify_and_hold, GuardRefusal};
 use super::staging::ToolchainRoots;
 use super::types::{
     BoundaryResult, BuildId, CancelOutcome, CandidateObservation, DiscoverOutcome, DiscoverRequest,
-    NativeCompileRequest, NativePreviewBuildRequest, ToolCandidate,
+    NativeCompileRequest, NativePreviewBuildRequest, PreviewObservationHostReadResult,
+    ToolCandidate,
 };
 
 /// The service state, shared across the (few) async command tasks:
@@ -177,6 +181,54 @@ impl ShaderToolService {
     /// guarantees as ordinary `describe`; its bytes remain uninterpreted.
     pub fn preview_handshake(&self, candidate: &ToolCandidate) -> BoundaryResult {
         self.execute_handshake(candidate, "describe-preview")
+    }
+
+    /// Read the fixed Runtime observation record for one Preview session.
+    /// The web side supplies identities only: the deployment root and file
+    /// name are host-owned derivations. Candidate provenance is held across
+    /// the file open/read, and the host applies only a transport bound; the
+    /// strict binary reader and all Current/LastGood meaning live above it.
+    pub fn read_preview_observation(
+        &self,
+        candidate: &ToolCandidate,
+        session_id: &str,
+    ) -> Result<PreviewObservationHostReadResult, ServiceError> {
+        validate_preview_session_id(session_id)?;
+        let guard = match verify_and_hold(&candidate.tool_path, &candidate.observation_identity) {
+            Ok(guard) => guard,
+            Err(refusal) => return Ok(observation_guard_refusal(refusal, candidate)),
+        };
+        let executable = std::path::Path::new(&candidate.tool_path);
+        let Some(deployment_root) = executable.parent() else {
+            return Ok(PreviewObservationHostReadResult::ReadFailed);
+        };
+        let path = deployment_root
+            .join("ShaderArtifacts")
+            .join("shader-preview-sessions")
+            .join(session_id)
+            .join("observed.ggsh.preview-observed");
+        let mut file = match std::fs::File::open(path) {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(PreviewObservationHostReadResult::NotFound);
+            }
+            Err(_) => return Ok(PreviewObservationHostReadResult::ReadFailed),
+        };
+        const OBSERVATION_SIZE: u64 = 90;
+        let mut bytes = Vec::with_capacity(OBSERVATION_SIZE as usize);
+        if file
+            .by_ref()
+            .take(OBSERVATION_SIZE + 1)
+            .read_to_end(&mut bytes)
+            .is_err()
+        {
+            return Ok(PreviewObservationHostReadResult::ReadFailed);
+        }
+        drop(guard);
+        if bytes.len() > OBSERVATION_SIZE as usize {
+            return Ok(PreviewObservationHostReadResult::TooLarge);
+        }
+        Ok(PreviewObservationHostReadResult::Read { bytes })
     }
 
     fn execute_handshake(&self, candidate: &ToolCandidate, command: &str) -> BoundaryResult {
@@ -410,26 +462,36 @@ fn validate_request(request: &NativeCompileRequest) -> Result<(), ServiceError> 
 /// Admission-time mirror of `isWellFormedPreviewBuildRequest`. The request is
 /// still only a value here: semantic support is proven by the Preview
 /// handshake and judged by the TypeScript client, never by this service.
-fn validate_preview_request(request: &NativePreviewBuildRequest) -> Result<(), ServiceError> {
-    fn field(field: &str, detail: &str) -> ServiceError {
-        ServiceError::RequestShape {
-            field: field.to_string(),
-            detail: detail.to_string(),
-        }
+fn request_shape(field: &str, detail: &str) -> ServiceError {
+    ServiceError::RequestShape {
+        field: field.to_string(),
+        detail: detail.to_string(),
     }
-    fn is_lower_hex(value: &str, length: usize) -> bool {
-        value.len() == length
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    }
+}
 
-    if !is_lower_hex(&request.session_id, 32) {
-        return Err(field(
+fn is_lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn validate_preview_session_id(session_id: &str) -> Result<(), ServiceError> {
+    if !is_lower_hex(session_id, 32) {
+        return Err(request_shape(
             "sessionId",
             "the session identity must be exactly 32 lowercase hexadecimal characters",
         ));
     }
+    Ok(())
+}
+
+fn validate_preview_request(request: &NativePreviewBuildRequest) -> Result<(), ServiceError> {
+    fn field(field: &str, detail: &str) -> ServiceError {
+        request_shape(field, detail)
+    }
+
+    validate_preview_session_id(&request.session_id)?;
     for (field_name, value) in [
         ("targetProfile", request.target_profile.as_str()),
         ("profileId", request.profile_id.as_str()),
@@ -660,5 +722,31 @@ fn guard_refusal(refusal: GuardRefusal, candidate: &ToolCandidate) -> BoundaryRe
         GuardRefusal::Unsupported => BoundaryResult::LaunchFailed {
             candidate: candidate.clone(),
         },
+    }
+}
+
+fn observation_guard_refusal(
+    refusal: GuardRefusal,
+    candidate: &ToolCandidate,
+) -> PreviewObservationHostReadResult {
+    match refusal {
+        GuardRefusal::Changed { current_identity } => {
+            PreviewObservationHostReadResult::CandidateInvalidated {
+                candidate: candidate.clone(),
+                observation: CandidateObservation::Changed,
+                observed_identity: Some(current_identity),
+            }
+        }
+        GuardRefusal::Missing => PreviewObservationHostReadResult::CandidateInvalidated {
+            candidate: candidate.clone(),
+            observation: CandidateObservation::Missing,
+            observed_identity: None,
+        },
+        GuardRefusal::Unreadable => PreviewObservationHostReadResult::CandidateInvalidated {
+            candidate: candidate.clone(),
+            observation: CandidateObservation::Unreadable,
+            observed_identity: None,
+        },
+        GuardRefusal::Unsupported => PreviewObservationHostReadResult::ReadFailed,
     }
 }

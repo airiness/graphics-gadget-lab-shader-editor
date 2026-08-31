@@ -162,6 +162,30 @@ pub enum BoundaryResult {
     },
 }
 
+/// One compiler-free read of the Runtime's Preview observation record. This
+/// is deliberately not a tool operation: the host derives the path from the
+/// candidate deployment plus SessionId, bounds the bytes, and leaves the
+/// record's protocol meaning to the TypeScript client.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind")]
+pub enum PreviewObservationHostReadResult {
+    #[serde(rename = "read")]
+    Read { bytes: Vec<u8> },
+    #[serde(rename = "not-found")]
+    NotFound,
+    #[serde(rename = "too-large")]
+    TooLarge,
+    #[serde(rename = "read-failed")]
+    ReadFailed,
+    #[serde(rename = "candidate-invalidated")]
+    CandidateInvalidated {
+        candidate: ToolCandidate,
+        observation: CandidateObservation,
+        #[serde(default, rename = "observedIdentity")]
+        observed_identity: Option<String>,
+    },
+}
+
 /// `cancel(buildId)` outcome — always a value: the attempt was in flight
 /// and is now canceled, or it had already settled (cancel reports that and
 /// changes nothing).
@@ -299,6 +323,29 @@ mod wire_shape_tests {
         let mut keys: Vec<&str> = value.as_object().unwrap().keys().map(|k| k.as_str()).collect();
         keys.sort_unstable();
         assert_eq!(keys, vec!["candidate", "kind"]);
+    }
+
+    #[test]
+    fn the_preview_observation_read_shape_materializes_bytes_and_candidate_facts() {
+        let read = PreviewObservationHostReadResult::Read {
+            bytes: vec![0, 1, 255],
+        };
+        let value = serde_json::to_value(read).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({ "kind": "read", "bytes": [0, 1, 255] })
+        );
+
+        let invalidated = PreviewObservationHostReadResult::CandidateInvalidated {
+            candidate: sample_candidate(),
+            observation: CandidateObservation::Changed,
+            observed_identity: Some("b".repeat(64)),
+        };
+        let value = serde_json::to_value(invalidated).unwrap();
+        assert_eq!(value["kind"], "candidate-invalidated");
+        assert_eq!(value["observation"], "changed");
+        assert_eq!(value["observedIdentity"], "b".repeat(64));
+        assert_eq!(value["candidate"]["toolPath"], "C:/tools/gglab-shaderc.exe");
     }
 
     #[test]

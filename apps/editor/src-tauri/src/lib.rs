@@ -2,7 +2,8 @@
 //!
 //! Two layers in one crate (see the crate-level note in `Cargo.toml`):
 //! the thin shell (the two official plugins — dialog and scoped fs),
-//! and the six service commands. The thin layer of commands below owns
+//! and the six tool commands plus one compiler-free observation command. The
+//! thin layer of commands below owns
 //! no logic of its own: it takes the client's values in, hands them to
 //! the service, and returns the service's values back — the service is
 //! the only place where host internals live.
@@ -155,8 +156,28 @@ fn shader_tool_cancel(
     Ok(state.service().cancel(build_id))
 }
 
+/// Read one candidate/session-scoped Runtime observation without spawning
+/// the tool. The service validates both identities, derives the canonical
+/// deployment path, and bounds the byte read; protocol interpretation stays
+/// in the headless client.
+#[tauri::command(rename = "shader-preview-read-observation")]
+async fn shader_preview_read_observation(
+    state: tauri::State<'_, ServiceShared>,
+    candidate: ToolCandidate,
+    session_id: String,
+) -> Result<PreviewObservationHostReadResult, ServiceError> {
+    let service = Arc::clone(&state.0);
+    tauri::async_runtime::spawn_blocking(move || {
+        service.read_preview_observation(&candidate, &session_id)
+    })
+    .await
+    .map_err(|err| ServiceError::Host {
+        detail: format!("the host task ended: {err}"),
+    })?
+}
+
 /// The production entry: the two official plugins (the access model)
-/// plus the six service commands (the host boundary), and nothing else
+/// plus the six tool commands and compiler-free observation read, and nothing else
 /// in the web-facing surface.
 /// The boundary's public surface — the host-side contract that the
 /// toolchain client declares (and its tests implement as a fake).
@@ -167,13 +188,13 @@ pub use shader_tool::identity::{hash_bytes, hash_file};
 pub use shader_tool::service::{CompileAttempt, ShaderToolService};
 pub use shader_tool::staging::ToolchainRoots;
 pub use shader_tool::types::{
-    BuildId, BoundaryOutput, BoundaryResult, CancelOutcome, CandidateObservation, CompileDefine,
-    DiscoverOutcome, DiscoverRequest, DiscoveryRule, DiscoveryRuleFailure,
-    NativeCompileRequest, NativePreviewBuildRequest, ToolCandidate,
+    BoundaryOutput, BoundaryResult, BuildId, CancelOutcome, CandidateObservation, CompileDefine,
+    DiscoverOutcome, DiscoverRequest, DiscoveryRule, DiscoveryRuleFailure, NativeCompileRequest,
+    NativePreviewBuildRequest, PreviewObservationHostReadResult, ToolCandidate,
 };
 
 /// The production entry: the two official plugins (the access model)
-/// plus the six service commands (the host boundary), and nothing else
+/// plus the six tool commands and compiler-free observation read, and nothing else
 /// in the web-facing surface.
 pub fn run() {
     tauri::Builder::default()
@@ -186,7 +207,8 @@ pub fn run() {
             shader_tool_preview_handshake,
             shader_tool_compile,
             shader_tool_build_preview,
-            shader_tool_cancel
+            shader_tool_cancel,
+            shader_preview_read_observation
         ])
         .run(tauri::generate_context!())
         .expect("error while running the GGLab Shader Graph Editor desktop shell");

@@ -4,7 +4,8 @@
  * `HostToolBoundary` contract that the client package owns.
  *
  * The two implementations are independent and never import each other:
- * this one runs the service's six allowlisted commands; the reference
+ * this one runs the service's six allowlisted tool commands and the
+ * separate compiler-free observation read; the reference
  * fake (client package) runs the scripted world. Both deliver the same
  * declared settlement surface, so the client's readers, state machine,
  * and build-line rules are written once against the CONTRACT, not
@@ -24,7 +25,7 @@
  *   entire byte vocabulary.
  *
  * The module never assembles a shell string and never interprets output
- * content: the six commands, and nothing else, are invocable here.
+ * content.
  */
 import type {
     BoundaryOutput,
@@ -36,6 +37,8 @@ import type {
     HostToolBoundary,
     NativeCompileRequest,
     NativePreviewBuildRequest,
+    PreviewObservationBoundary,
+    PreviewObservationHostReadResult,
     ToolCandidate,
 } from "@gglab/shader-toolchain-client";
 import { isDesktopHost } from "./host-io.js";
@@ -65,6 +68,18 @@ type WireBoundaryResult =
       }
     | { readonly kind: "launch-failed"; readonly candidate: ToolCandidate };
 
+type WirePreviewObservationHostReadResult =
+    | { readonly kind: "read"; readonly bytes: ByteArray }
+    | { readonly kind: "not-found" }
+    | { readonly kind: "too-large" }
+    | { readonly kind: "read-failed" }
+    | {
+          readonly kind: "candidate-invalidated";
+          readonly candidate: ToolCandidate;
+          readonly observation: "changed" | "missing" | "unreadable";
+          readonly observedIdentity: string | null;
+      };
+
 function materializeOutput(output: WireBoundaryOutput): BoundaryOutput {
     return {
         stdout: new Uint8Array(output.stdout),
@@ -92,6 +107,15 @@ function materializeResult(wire: WireBoundaryResult): BoundaryResult {
         case "launch-failed":
             return { kind: "launch-failed", candidate: wire.candidate };
     }
+}
+
+function materializePreviewObservationResult(
+    wire: WirePreviewObservationHostReadResult,
+): PreviewObservationHostReadResult {
+    if (wire.kind === "read") {
+        return { kind: "read", bytes: new Uint8Array(wire.bytes) };
+    }
+    return wire;
 }
 
 /** The discovery request as the service's DTO expects (the same plain
@@ -200,6 +224,22 @@ export async function createTauriToolBoundary(): Promise<HostToolBoundary> {
         async cancel(buildId: { readonly sequence: number }): Promise<CancelOutcome> {
             const outcome = (await invoke("shader-tool-cancel", { buildId })) as { canceled: boolean; alreadySettled: boolean };
             return { buildId, canceled: outcome.canceled, alreadySettled: outcome.alreadySettled };
+        },
+    };
+}
+
+/** Builds the separate compiler-free observation boundary. Keeping this out
+ *  of HostToolBoundary preserves the six-operation tool contract: this call
+ *  only reads a host-derived Runtime record for one candidate/session. */
+export async function createTauriPreviewObservationBoundary(): Promise<PreviewObservationBoundary> {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return {
+        async readPreviewObservation(candidate: ToolCandidate, sessionId: string) {
+            const wire = (await invoke("shader-preview-read-observation", {
+                candidate,
+                sessionId,
+            })) as WirePreviewObservationHostReadResult;
+            return materializePreviewObservationResult(wire);
         },
     };
 }

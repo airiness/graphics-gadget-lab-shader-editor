@@ -9,9 +9,10 @@ edition = "2021"
 # - the thin desktop shell (main.rs): it hosts the React/Vite frontend and
 #   owns TWO official plugins (dialog, scoped fs) — the access model;
 # - the ShaderToolService (src/shader_tool/): the host-side implementation
-#   of the toolchain client's declared host boundary — exactly six
+#   of the toolchain client's declared host boundary — exactly six tool
 #   allowlisted capabilities (discover / handshake / preview-handshake /
-#   compile / build-preview / cancel),
+#   compile / build-preview / cancel), plus the separate compiler-free,
+#   candidate/session-scoped Runtime observation read,
 #   host-internal request validation and invocation serialization (no shell
 #   string, no argv in any TypeScript-facing surface), bounded execution
 #   (timeout / cancel / whole-output capture), the pre-spawn provenance

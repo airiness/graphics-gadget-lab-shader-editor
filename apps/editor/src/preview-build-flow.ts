@@ -9,11 +9,10 @@
  * - one SessionId issues monotonically increasing AttemptSequence values;
  * - a newer eligible build cancels an older in-flight build and waits for its
  *   terminal settlement before it can issue;
- * - settlements enter the client's Pending/Published/Failed/Canceled line.
- *
- * Runtime observation is intentionally absent. Published is not Current, and
- * latestPublished is not called LastGood until the Runtime observation proves
- * which publication actually loaded.
+ * - settlements enter the client's Pending/Published/Failed/Canceled line;
+ * - candidate/session-scoped Runtime observations are read single-flight,
+ *   strictly decoded, cross-linked, and monotonically accepted before they
+ *   can project Current/LastGood/Stale/Rejected.
  */
 import {
     admitPreviewBuild,
@@ -22,6 +21,9 @@ import {
     judgePreviewEligibility,
     previewAttemptOutcomeOfBuildResult,
     previewBuildIntentOf,
+    projectPreviewRuntime,
+    acceptPreviewObservation,
+    readPreviewObservation,
     readPreviewHandshakeOutput,
     type BoundaryResult,
     type BuildId,
@@ -31,6 +33,13 @@ import {
     type PreviewEligibility,
     type PreviewEligibilityRequirement,
     type PreviewHandshakeProcessOutcome,
+    type PreviewObservation,
+    type PreviewObservationBoundary,
+    type PreviewObservationBinding,
+    type PreviewObservationHostReadResult,
+    type PreviewObservationOrderingRejection,
+    type PreviewObservationReadRejection,
+    type PreviewRuntimeProjection,
     type PreviewRequestWellFormed,
     type ToolCandidate,
     type ToolCompatibilityState,
@@ -155,6 +164,23 @@ export type PreviewBuildLaunch =
           readonly outcome: Promise<PreviewAttemptOutcome>;
       };
 
+type PreviewObservationCandidateInvalidated = Extract<
+    PreviewObservationHostReadResult,
+    { readonly kind: "candidate-invalidated" }
+>;
+
+export type PreviewObservationRefresh =
+    | { readonly kind: "no-attempt" }
+    | { readonly kind: "candidate-invalidated"; readonly result: PreviewObservationCandidateInvalidated }
+    | { readonly kind: "host-refused"; readonly reason: "not-found" | "too-large" | "read-failed" }
+    | { readonly kind: "record-rejected"; readonly rejection: PreviewObservationReadRejection }
+    | {
+          readonly kind: "binding-rejected";
+          readonly binding: Exclude<PreviewObservationBinding, "none" | "bound">;
+      }
+    | { readonly kind: "ordering-rejected"; readonly rejection: PreviewObservationOrderingRejection }
+    | { readonly kind: "accepted"; readonly changed: boolean; readonly observation: PreviewObservation };
+
 function requirementsEqual(left: PreviewEligibilityRequirement, right: PreviewEligibilityRequirement): boolean {
     return (
         left.targetProfile === right.targetProfile &&
@@ -215,11 +241,15 @@ export class PreviewBuildFlow {
     private buildQueue: Promise<void> = Promise.resolve();
     private latestBuildRequestOrdinal = 0;
     private activeBuild: { readonly buildId: BuildId; cancelRequested: boolean } | null = null;
+    private acceptedObservationState: PreviewObservation | null = null;
+    private lastObservationRefreshState: PreviewObservationRefresh | null = null;
+    private observationLane: Promise<PreviewObservationRefresh> | null = null;
 
     constructor(
         private readonly boundary: HostToolBoundary,
         private readonly toolPort: PreviewToolStatePort,
         sessionId: string,
+        private readonly observationBoundary: PreviewObservationBoundary,
     ) {
         this.sessionState = createPreviewBuildSession(sessionId);
     }
@@ -238,6 +268,14 @@ export class PreviewBuildFlow {
 
     get activeBuildId(): BuildId | null {
         return this.activeBuild?.buildId ?? null;
+    }
+
+    get acceptedObservation(): PreviewObservation | null {
+        return this.acceptedObservationState;
+    }
+
+    get lastObservationRefresh(): PreviewObservationRefresh | null {
+        return this.lastObservationRefreshState;
     }
 
     private compose(input: PreviewCompositionInput): PreviewComposition {
@@ -532,5 +570,85 @@ export class PreviewBuildFlow {
         active.cancelRequested = true;
         const outcome = await this.boundary.cancel(active.buildId);
         return { canceled: outcome.canceled, alreadySettled: outcome.alreadySettled };
+    }
+
+    /** Reads one observation for the deployment that owns the newest issued
+     *  attempt. Concurrent callers join one host read. A malformed, unbound,
+     *  or non-monotonic record never replaces the accepted last-good fact. */
+    refreshObservation(): Promise<PreviewObservationRefresh> {
+        if (this.observationLane !== null) {
+            return this.observationLane;
+        }
+        const latest = [...this.sessionState.line.attempts].sort(
+            (left, right) => right.attemptSequence - left.attemptSequence,
+        )[0];
+        if (latest === undefined) {
+            const record: PreviewObservationRefresh = { kind: "no-attempt" };
+            this.lastObservationRefreshState = record;
+            return Promise.resolve(record);
+        }
+        const promise = this.runObservationRefresh(latest.candidate).finally(() => {
+            if (this.observationLane === promise) {
+                this.observationLane = null;
+            }
+        });
+        this.observationLane = promise;
+        return promise;
+    }
+
+    private async runObservationRefresh(candidate: ToolCandidate): Promise<PreviewObservationRefresh> {
+        const host = await this.observationBoundary.readPreviewObservation(
+            candidate,
+            this.sessionState.sessionId,
+        );
+        let record: PreviewObservationRefresh;
+        if (host.kind === "candidate-invalidated") {
+            this.toolPort.candidateInvalidated(host);
+            record = { kind: "candidate-invalidated", result: host };
+        } else if (host.kind !== "read") {
+            record = { kind: "host-refused", reason: host.kind };
+        } else {
+            const read = readPreviewObservation(host.bytes);
+            if (read.status === "rejected") {
+                record = { kind: "record-rejected", rejection: read.rejection };
+            } else {
+                const projection = projectPreviewRuntime(this.sessionState.line, null, read.observation);
+                if (projection.observationBinding !== "bound") {
+                    if (projection.observationBinding === "none") {
+                        throw new Error("a decoded Preview observation cannot have no binding");
+                    }
+                    record = {
+                        kind: "binding-rejected",
+                        binding: projection.observationBinding,
+                    };
+                } else {
+                    const update = acceptPreviewObservation(this.acceptedObservationState, read.observation);
+                    if (!update.accepted) {
+                        record = { kind: "ordering-rejected", rejection: update.rejection };
+                    } else {
+                        this.acceptedObservationState = update.observation;
+                        record = {
+                            kind: "accepted",
+                            changed: update.changed,
+                            observation: update.observation,
+                        };
+                    }
+                }
+            }
+        }
+        this.lastObservationRefreshState = record;
+        return record;
+    }
+
+    /** The honest runtime view for the graph currently in the editor. A
+     *  present build request is used only to derive semantic intent; this
+     *  method never issues work or advances AttemptSequence. */
+    runtimeProjection(input: PreviewCompositionInput): PreviewRuntimeProjection {
+        const gate = this.buildGate(input);
+        const intent =
+            gate.admitted && gate.request !== null && gate.eligibility?.status === "eligible"
+                ? previewBuildIntentOf(gate.request, gate.eligibility.facts)
+                : null;
+        return projectPreviewRuntime(this.sessionState.line, intent, this.acceptedObservationState);
     }
 }
