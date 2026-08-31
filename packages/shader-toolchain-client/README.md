@@ -3,12 +3,14 @@
 Headless client for the GGLab shader toolchain (gglab-shaderc).
 
 Owns: the machine-protocol vocabulary (contract facts, envelopes, the
-`NativeCompileRequest` shape, build intents, result states), the process-
+`NativeCompileRequest` and `NativePreviewBuildRequest` shapes, build intents,
+result states), the process-
 level channel interpretation over the boundary's raw execution facts
 (terminal states first — canceled / timed-out — then channel discipline:
 stderr empty, stdout valid UTF-8, and the intact document's exit code
 matching the observed process exit code), the strict readers for the
-published handshake (`describe`) and result (`compile`) envelopes, the
+published ordinary handshake/result (`describe` / `compile`) and dedicated
+Preview handshake/result (`describe-preview` / `build-preview`) envelopes, the
 version/identity verdicts, the candidate-observation identity (path +
 observed identity), and the tool-compatibility state machine around it —
 every resolved state carries the candidate it is about (the state owns the

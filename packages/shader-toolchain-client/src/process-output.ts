@@ -33,6 +33,17 @@ import {
     type CompileDocument,
     type CompileRejection,
 } from "./result-envelope.js";
+import {
+    readPreviewHandshakeDocument,
+    type PreviewHandshakeDocument,
+    type PreviewHandshakeRejection,
+} from "./preview-handshake-document.js";
+import {
+    readPreviewBuildDocument,
+    type PreviewBuildDocument,
+    type PreviewBuildRejection,
+} from "./preview-result-envelope.js";
+import { clientSupportedPreviewBuildContractRange } from "./preview-contract-range-declaration.js";
 import type {
     HandshakeDocument,
     HandshakeRejection,
@@ -69,6 +80,22 @@ export type CompileProcessOutcome =
     | { readonly kind: "channel-violated"; readonly violation: ChannelViolation }
     | { readonly kind: "read"; readonly document: CompileDocument }
     | { readonly kind: "rejected"; readonly rejection: CompileRejection };
+
+export type PreviewHandshakeProcessOutcome =
+    | { readonly kind: "canceled" }
+    | { readonly kind: "timed-out" }
+    | { readonly kind: "channel-violated"; readonly violation: ChannelViolation }
+    | { readonly kind: "read"; readonly document: PreviewHandshakeDocument }
+    | { readonly kind: "unsupported-process-contract"; readonly contract: ContractSupportVerdict }
+    | { readonly kind: "unsupported-preview-contract"; readonly contract: ContractSupportVerdict }
+    | { readonly kind: "rejected"; readonly rejection: PreviewHandshakeRejection };
+
+export type PreviewBuildProcessOutcome =
+    | { readonly kind: "canceled" }
+    | { readonly kind: "timed-out" }
+    | { readonly kind: "channel-violated"; readonly violation: ChannelViolation }
+    | { readonly kind: "read"; readonly document: PreviewBuildDocument }
+    | { readonly kind: "rejected"; readonly rejection: PreviewBuildRejection };
 
 /**
  * Reads one handshake attempt's boundary output under the machine
@@ -165,6 +192,92 @@ export function readCompileOutput(output: BoundaryOutput): CompileProcessOutcome
             };
         }
         return { kind: "read", document };
+    }
+    return { kind: "rejected", rejection: read.rejection };
+}
+
+/** Reads a dedicated Preview handshake without changing the meaning of the
+ *  ordinary describe operation for tools that do not support Preview. */
+export function readPreviewHandshakeOutput(
+    output: BoundaryOutput,
+    processRange: SupportedContractRange | null = clientSupportedContractRange,
+    previewRange: SupportedContractRange | null = clientSupportedPreviewBuildContractRange,
+): PreviewHandshakeProcessOutcome {
+    if (output.canceled) {
+        return { kind: "canceled" };
+    }
+    if (output.timedOut) {
+        return { kind: "timed-out" };
+    }
+    if (output.stderr.byteLength !== 0) {
+        return {
+            kind: "channel-violated",
+            violation: { reason: "stderr-non-empty", byteLength: output.stderr.byteLength },
+        };
+    }
+    const decoded = utf8Decode(output.stdout);
+    if (!decoded.ok) {
+        return {
+            kind: "channel-violated",
+            violation: { reason: "stdout-not-valid-utf8", detail: decoded.detail },
+        };
+    }
+    const read = readPreviewHandshakeDocument(decoded.text, processRange, previewRange);
+    if (read.status === "read") {
+        if (read.document.exitCode !== output.exitCode) {
+            return {
+                kind: "channel-violated",
+                violation: {
+                    reason: "exit-code-mismatch",
+                    documentExitCode: read.document.exitCode,
+                    processExitCode: output.exitCode,
+                },
+            };
+        }
+        return { kind: "read", document: read.document };
+    }
+    if (read.status === "unsupported-process-contract") {
+        return { kind: "unsupported-process-contract", contract: read.contract };
+    }
+    if (read.status === "unsupported-preview-contract") {
+        return { kind: "unsupported-preview-contract", contract: read.contract };
+    }
+    return { kind: "rejected", rejection: read.rejection };
+}
+
+export function readPreviewBuildOutput(output: BoundaryOutput): PreviewBuildProcessOutcome {
+    if (output.canceled) {
+        return { kind: "canceled" };
+    }
+    if (output.timedOut) {
+        return { kind: "timed-out" };
+    }
+    if (output.stderr.byteLength !== 0) {
+        return {
+            kind: "channel-violated",
+            violation: { reason: "stderr-non-empty", byteLength: output.stderr.byteLength },
+        };
+    }
+    const decoded = utf8Decode(output.stdout);
+    if (!decoded.ok) {
+        return {
+            kind: "channel-violated",
+            violation: { reason: "stdout-not-valid-utf8", detail: decoded.detail },
+        };
+    }
+    const read = readPreviewBuildDocument(decoded.text);
+    if (read.status === "read") {
+        if (read.document.exitCode !== output.exitCode) {
+            return {
+                kind: "channel-violated",
+                violation: {
+                    reason: "exit-code-mismatch",
+                    documentExitCode: read.document.exitCode,
+                    processExitCode: output.exitCode,
+                },
+            };
+        }
+        return { kind: "read", document: read.document };
     }
     return { kind: "rejected", rejection: read.rejection };
 }

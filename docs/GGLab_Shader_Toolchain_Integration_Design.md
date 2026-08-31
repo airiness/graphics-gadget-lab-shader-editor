@@ -32,7 +32,7 @@ One sentence for the whole document:
 
 - Defining, proposing, or duplicating the toolchain handshake/result wire schema, or assigning values to any toolchain version axis, or pre-declaring the external contract's unknown-field policy. That authority is the GGLab Shader Toolchain contract authority's (normative design in the GGLab docs repository; implementation and self-tests in the main GGLab repository).
 - Native diagnostic → graph navigation via the source map (a later stage's work).
-- Material Programs and general Runtime integration. The standalone Preview Lab is approved and owned by `GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md`; its live Editor bridge remains outside this stage and awaits final Milestone B approval.
+- Material Programs and general Runtime integration. The standalone Preview Lab is complete, and the narrowly approved live Preview bridge is now governed by `GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md` Milestone B; it does not authorize a Material Program.
 - A `build` command or any native-build orchestration in `apps/cli` (owner-deferred; separately reviewed).
 - Packaging/deployment closure (the packaged toolchain + DXC runtime).
 - Any second compiler, backend policy, or material ABI — invariant, not negotiable.
@@ -885,13 +885,12 @@ skip.
 - **Native diagnostic → graph navigation** (source-map lookup, markers,
   node/port highlighting) — the diagnostics stage, built on §11's
   intent/attempt binding and §12's transport.
-- **Live Editor Preview bridge / Runtime integration** — it follows the
-  standalone Preview Lab. `launchPreview` stays a reserved slot until that
-  first milestone is accepted. The distinct Pixel/`PSMain` composition,
-  immutable publication, identity, version handshake, and last-good contract
-  are in the GGLab docs repository's
-  `GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md`. Material Programs
-  remain a separate, later design.
+- **Material Program / general Runtime integration** — remains a separate,
+  later design. The narrow live Editor Preview bridge is no longer deferred:
+  Milestone A is complete and Q4/Q5/Q7 authorize Milestone B under the distinct
+  Pixel/`PSMain`, immutable publication, identity, version-handshake, and
+  last-good contract in the GGLab docs repository's
+  `GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md`.
 - **Node inspector and the remaining canvas interaction refinements** — the
   owner's deferred list; they land after the toolchain loop closes.
 - **Packaging / deployment closure** (the packaged toolchain + DXC runtime
@@ -966,12 +965,13 @@ are valid inputs to the later Preview operation.
 and never claim a Shader Artifact. The permanent main GGLab gate is the
 recorded qualification authority.
 
-**Next product milestone — owned by the Preview design.** Implement and accept
-the standalone Preview Lab first. Only then add the live Editor
-`build-preview` operation, its dedicated Preview-build contract handshake,
-immutable publication handoff, and attached launch—and only after Q4, Q5, and
-Q7 receive final owner approval. This ordering makes a visible Runtime consumer
-real before adding cross-process orchestration.
+**Next product milestone — owned by the Preview design.** The standalone
+Preview Lab is complete (GraphicsGadgetLab PR #175, merge `d6a2b75d`) and
+Q4/Q5/Q7 have final owner approval. Main-repository Milestone B Steps 1–4 now
+publish the dedicated Preview handshake, `build-preview`, immutable publication
+handoff, session pointer, attached launch, and Runtime observation contracts.
+The active step is their strict Editor Toolchain Client/Tauri consumption,
+same-session single-flight orchestration, and honest current/last-good/stale UI.
 
 **Global exit criteria for the stage:**
 

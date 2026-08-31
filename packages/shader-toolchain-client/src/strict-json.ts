@@ -34,6 +34,12 @@ export function isDigestHex(value: unknown): value is string {
     return typeof value === "string" && /^[0-9a-fA-F]{64}$/u.test(value);
 }
 
+/** A canonical lowercase SHA-256 identity. Preview publication contracts
+ *  use this narrower spelling so one identity has one wire form. */
+export function isLowerDigestHex(value: unknown): value is string {
+    return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
+}
+
 export type DiagnosticArrayOutcome =
     | { readonly ok: true; readonly diagnostics: readonly ToolDiagnostic[] }
     | { readonly ok: false; readonly detail: string };

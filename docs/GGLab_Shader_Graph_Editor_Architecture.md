@@ -1535,11 +1535,13 @@ function plus a main-owned Preview `PSMain`. The Editor must not synthesize
 either entry or pass binding. Its current function-only request composition is a
 known implementation defect and must be removed or disabled until a reviewed
 full-program operation exists. The fixed input contracts, standalone Preview
-Program, ordinary runtime catalog mappings, visualizer, and milestone order are
-approved for Milestone A by
-`GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md`. Its `build-preview`,
-publication/session, Preview handshake, identity, and live last-good design are
-directionally accepted only and require final owner approval before Milestone B.
+Program, ordinary runtime catalog mappings, visualizer, and milestone order were
+approved and completed in Milestone A (GraphicsGadgetLab PR #175, merge
+`d6a2b75d`). Q4, Q5, and Q7 are now approved for Milestone B by
+`GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md`. The main repository has
+published the Preview handshake, `build-preview`, immutable publication/session
+coordination, and attached Runtime observation path; Editor consumption is the
+current ordered implementation step. Material Programs remain separate.
 
 It must follow normal GGLab Lab/runtime discipline:
 

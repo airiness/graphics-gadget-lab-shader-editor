@@ -26,12 +26,17 @@ export function getClientPackageName(): string {
 export * from "./contract-facts.js";
 export * from "./contract-range-declaration.js";
 export * from "./contract-range.js";
+export * from "./preview-contract-range-declaration.js";
 export * from "./semver.js";
 export * from "./verdicts.js";
 export * from "./handshake-document.js";
 export * from "./result-envelope.js";
+export * from "./preview-handshake-document.js";
+export * from "./preview-result-envelope.js";
+export * from "./preview-compatibility.js";
 export * from "./tool-compatibility.js";
 export * from "./native-compile-request.js";
+export * from "./native-preview-build-request.js";
 export * from "./build-line.js";
 export * from "./host-boundary.js";
 export * from "./utf8.js";
