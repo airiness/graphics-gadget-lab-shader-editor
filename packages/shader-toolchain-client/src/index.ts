@@ -38,6 +38,7 @@ export * from "./tool-compatibility.js";
 export * from "./native-compile-request.js";
 export * from "./native-preview-build-request.js";
 export * from "./build-line.js";
+export * from "./preview-build-line.js";
 export * from "./host-boundary.js";
 export * from "./utf8.js";
 export * from "./process-output.js";

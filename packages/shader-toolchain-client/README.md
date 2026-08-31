@@ -28,8 +28,11 @@ a handshake settlement — stops being a resolved fact: the tool returns to
 unavailable, proof void, until a fresh discovery + handshake — plus the
 client-owned closure of every compile settlement into one structured
 attempt outcome (a read envelope, or a structured termination fact, but
-never a free-form reason) — and the revisioned build-line rules (stale /
-current / last-good) over those outcomes, and the host-boundary
+never a free-form reason) — the revisioned ordinary build-line rules (stale /
+current / last-good) over those outcomes, and the Preview attempt-line rules
+(pending / published / failed / canceled plus the latest successful
+publication, with Current/LastGood deliberately deferred to Runtime
+observation), and the host-boundary
 contract (the six allowlisted capabilities — the ordinary four plus dedicated
 Preview handshake/build — and the pre-spawn provenance
 guarantee with its structured pre-spawn refusals — the candidate-invalidated

@@ -29,7 +29,10 @@ function isNonEmptyString(value: unknown): value is string {
     return typeof value === "string" && value.length > 0;
 }
 
-function isSessionId(value: unknown): value is string {
+/** The Preview coordination namespace is exactly one canonical 128-bit
+ *  lowercase hexadecimal value. Export the predicate so editor session
+ *  storage does not grow a second copy of the wire rule. */
+export function isPreviewSessionId(value: unknown): value is string {
     return typeof value === "string" && /^[0-9a-f]{32}$/u.test(value);
 }
 
@@ -40,7 +43,7 @@ function isPositiveSafeInteger(value: unknown): value is number {
 export function isWellFormedPreviewBuildRequest(
     request: NativePreviewBuildRequest,
 ): PreviewRequestWellFormed {
-    if (!isSessionId(request.sessionId)) {
+    if (!isPreviewSessionId(request.sessionId)) {
         return {
             ok: false,
             reason: "sessionId",

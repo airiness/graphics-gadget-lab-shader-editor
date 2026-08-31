@@ -52,6 +52,7 @@ import {
     readHandshakeOutput,
     requirementsEqual,
     type AttemptOutcome,
+    type BoundaryResult,
     type BuildId,
     type CompileDefine,
     type CompatibilityJudgment,
@@ -293,6 +294,26 @@ export class NativeBuildFlow {
         return this.hostCapability();
     }
 
+    /** Accepts the host's candidate-scoped provenance refutation from a
+     *  sibling native operation (currently the dedicated Preview flow). The
+     *  ordinary ToolCompatibility machine remains the single owner: it
+     *  applies the event only when the refuted candidate is still current and
+     *  ignores a stale settlement after discovery moved on. */
+    candidateInvalidated(
+        result: Extract<BoundaryResult, { readonly kind: "candidate-invalidated" }>,
+    ): void {
+        this.toolState = applyCompatibilityEvent(
+            this.toolState,
+            {
+                kind: "candidate-invalidated",
+                candidate: result.candidate,
+                observation: result.observation,
+                observedIdentity: result.observedIdentity,
+            },
+            this.judgment,
+        );
+    }
+
     // ---- the tool lifecycle ---------------------------------------------
 
     private discoveryLane: Promise<DiscoverOutcome> | null = null;
@@ -396,16 +417,7 @@ export class NativeBuildFlow {
                 // time: a LIFECYCLE event (the observation is no longer a
                 // fact; a proof bound to it is void). Fired from BOTH
                 // sources alike — this one and the compile settlement.
-                this.toolState = applyCompatibilityEvent(
-                    this.toolState,
-                    {
-                        kind: "candidate-invalidated",
-                        candidate: result.candidate,
-                        observation: result.observation,
-                        observedIdentity: result.observedIdentity,
-                    },
-                    this.judgment,
-                );
+                this.candidateInvalidated(result);
                 const record: HandshakeAttemptRecord = {
                     admission,
                     candidateInvalidated: true,
@@ -552,16 +564,7 @@ export class NativeBuildFlow {
                 // state (the machine applies it candidate-scoped and
                 // ignores it when it is stale), voiding any proof bound
                 // to it, until a fresh discovery + handshake re-enters.
-                this.toolState = applyCompatibilityEvent(
-                    this.toolState,
-                    {
-                        kind: "candidate-invalidated",
-                        candidate: result.candidate,
-                        observation: result.observation,
-                        observedIdentity: result.observedIdentity,
-                    },
-                    this.judgment,
-                );
+                this.candidateInvalidated(result);
             }
             const settled = attemptOutcomeOfCompileResult(result);
             this.session = sessionSettle(this.session, handle.buildId, settled);
