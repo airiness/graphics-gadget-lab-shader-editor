@@ -1,6 +1,7 @@
 /**
  * The declared host boundary (design authority: the toolchain integration
- * design, section 9): exactly four allowlisted capabilities and their
+ * design, section 9 plus the approved Preview Milestone B extension):
+ * exactly six allowlisted capabilities and their
  * request/result shapes — no generic spawn, no protocol interpretation,
  * no readiness logic, and no argv anywhere in the TypeScript world.
  *
@@ -41,6 +42,7 @@
  * continuity and does not satisfy this boundary.
  */
 import type { BuildId, NativeCompileRequest } from "./native-compile-request.js";
+import type { NativePreviewBuildRequest } from "./native-preview-build-request.js";
 
 /** The discovery rules the tool resolution walks, first hit wins. */
 export type DiscoveryRule = "explicit-config" | "sibling-build" | "bundled";
@@ -125,6 +127,13 @@ export interface CompileAttemptHandle {
     readonly result: Promise<BoundaryResult>;
 }
 
+/** A dedicated Preview build is the same asynchronous host shape as a
+ *  complete-program compile, but its request and tool operation are distinct. */
+export interface PreviewBuildAttemptHandle {
+    readonly buildId: BuildId;
+    readonly result: Promise<BoundaryResult>;
+}
+
 export interface CancelOutcome {
     readonly buildId: BuildId;
     /** True when the attempt was in flight and is now explicit
@@ -151,12 +160,13 @@ export interface CancelOutcome {
  *   code promoted to protocol, and not the host interpreting anything
  *   above it).
  *
- * This is the boundary's guarantee: `handshake(candidate)` and
- * `compile(candidate, request)` only spawn an executable whose current
- * observation matches the candidate they were given. What the candidate
- * identity MEANS (file identity, size/mtime, a hash, an opaque host
- * token) is the host implementation's business; the check-before-spawn
- * semantics and these structured failures are the contract's.
+ * This is the boundary's guarantee: every operation that executes the tool
+ * (`handshake`, `previewHandshake`, `compile`, and `buildPreview`) only spawns
+ * an executable whose current observation matches the candidate it was given.
+ * What the candidate identity MEANS (file identity, size/mtime, a hash, an
+ * opaque host token) is the host implementation's business; the
+ * check-before-spawn semantics and these structured failures are the
+ * contract's.
  */
 export type CandidateObservation = "changed" | "missing" | "unreadable";
 
@@ -173,7 +183,7 @@ export type BoundaryResult =
     | { readonly kind: "launch-failed"; readonly candidate: ToolCandidate };
 
 /**
- * The four capabilities and their shapes. The service implements this
+ * The six capabilities and their shapes. The service implements this
  * boundary and nothing else: it cannot be asked to spawn an argv, to
  * judge a readiness, or to read a protocol.
  */
@@ -186,11 +196,23 @@ export interface HostToolBoundary {
      * unverified executable, never an OS-error exception.
      */
     handshake(candidate: ToolCandidate): Promise<BoundaryResult>;
+    /** Runs the dedicated, zero-side-effect Preview compatibility handshake
+     *  against this exact candidate observation. It neither changes nor
+     *  substitutes the ordinary handshake. */
+    previewHandshake(candidate: ToolCandidate): Promise<BoundaryResult>;
     /** Compiles by spawning the tool at the candidate path — the EXACT
      *  candidate the editor holds (and, for proof, the candidate the
      *  client's proof was taken under) — under the same pre-spawn
      *  provenance guarantee. The boundary owns no "current tool" of its
      *  own. */
     compile(candidate: ToolCandidate, request: NativeCompileRequest): Promise<CompileAttemptHandle>;
+    /** Builds and publishes a complete main-owned Preview Program from the
+     *  Preview intent value, under the same exact-candidate provenance guard.
+     *  The boundary owns staging and invocation serialization, not Preview
+     *  compatibility or readiness. */
+    buildPreview(
+        candidate: ToolCandidate,
+        request: NativePreviewBuildRequest,
+    ): Promise<PreviewBuildAttemptHandle>;
     cancel(buildId: BuildId): Promise<CancelOutcome>;
 }

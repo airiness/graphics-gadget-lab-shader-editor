@@ -509,6 +509,7 @@ describe("11 · a proven producer change is a different intent; the late old evi
                 counters.handshake += 1;
                 return world.handshake(candidate);
             },
+            previewHandshake: (candidate) => worldA.previewHandshake(candidate),
             compile: (candidate, req) => {
                 const world = counters.compile >= 1 ? worldB : worldA;
                 const globalSequence = counters.compile + 1;
@@ -518,6 +519,7 @@ describe("11 · a proven producer change is a different intent; the late old evi
                 // its own calls from 1).
                 return world.compile(candidate, req).then((handle) => ({ buildId: { sequence: globalSequence }, result: handle.result }));
             },
+            buildPreview: (candidate, request) => worldA.buildPreview(candidate, request),
             cancel: (id) => worldA.cancel(id),
         };
         const flow = makeFlow(boundary);
@@ -628,6 +630,7 @@ describe("13 · an attempt's intent binds to the proof of its admission, never t
         const boundary: HostToolBoundary = {
             discover: (req) => fake.discover(req),
             handshake: (candidate) => fake.handshake(candidate),
+            previewHandshake: (candidate) => fake.previewHandshake(candidate),
             compile: async (candidate, request) => {
                 const admission = await fake.compile(candidate, request);
                 // The world moves in the SECOND attempt's admission window:
@@ -639,6 +642,7 @@ describe("13 · an attempt's intent binds to the proof of its admission, never t
                 }
                 return admission;
             },
+            buildPreview: (candidate, request) => fake.buildPreview(candidate, request),
             cancel: (buildId) => fake.cancel(buildId),
         };
         const flow = makeFlow(boundary);

@@ -3,8 +3,8 @@
 //! sections 8, 9, and 10).
 //!
 //! One crate module, deliberately small, because the boundary is
-//! deliberately small: exactly four capabilities
-//! (`discover` / `handshake` / `compile` / `cancel`), and the four
+//! deliberately small: exactly six capabilities (`discover` / `handshake` /
+//! `preview_handshake` / `compile` / `build_preview` / `cancel`), and the
 //! host-internal jobs behind them — allowance (the request is an
 //! allowlisted shape), serialization (the approved request becomes the
 //! tool's invocation — structural arguments, no shell string, no
@@ -31,7 +31,7 @@
 //!   write/delete/replace/replace, held until the spawn settles);
 //! - `execution` — the budget + cancel + whole-capture mechanics;
 //! - `staging` — the private root layout (per-attempt isolation);
-//! - `service` — the four capabilities, tied together.
+//! - `service` — the six capabilities, tied together.
 
 pub mod discovery;
 pub mod error;

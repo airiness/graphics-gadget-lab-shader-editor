@@ -200,6 +200,24 @@ pub struct NativeCompileRequest {
     pub includes: Vec<String>,
 }
 
+/// The dedicated Preview build request — one to one with the client's
+/// `NativePreviewBuildRequest`. It carries Preview intent and identities only;
+/// the service owns private paths and invocation serialization, while the
+/// toolchain owns adapter/PSMain/compiler/publication policy.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativePreviewBuildRequest {
+    pub session_id: String,
+    pub target_profile: String,
+    pub profile_id: String,
+    pub profile_version: u64,
+    pub preview_input_contract_id: String,
+    pub preview_program_descriptor_identity: String,
+    pub generated_source_identity: String,
+    pub generated_source_bytes: Vec<u8>,
+    pub attempt_sequence: u64,
+}
+
 #[cfg(test)]
 mod wire_shape_tests {
     //! Serialization golden tests: these lock the EXACT wire names the
@@ -319,5 +337,31 @@ mod wire_shape_tests {
         let value = serde_json::to_value(&empty).unwrap();
         assert!(value.get("candidate").is_none());
         assert_eq!(value["failures"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn the_preview_request_wire_shape_contains_intent_and_identities_but_no_paths() {
+        let request = NativePreviewBuildRequest {
+            session_id: "12".repeat(16),
+            target_profile: "gglab-dx12".to_string(),
+            profile_id: "gglab.surface".to_string(),
+            profile_version: 2,
+            preview_input_contract_id: "gglab.preview-input.surface.texture2d".to_string(),
+            preview_program_descriptor_identity: "a".repeat(64),
+            generated_source_identity: "b".repeat(64),
+            generated_source_bytes: vec![1, 2, 3],
+            attempt_sequence: 7,
+        };
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(value["sessionId"], "12".repeat(16));
+        assert_eq!(value["targetProfile"], "gglab-dx12");
+        assert_eq!(value["generatedSourceBytes"], serde_json::json!([1, 2, 3]));
+        assert_eq!(value["attemptSequence"], 7);
+        let keys = value.as_object().unwrap();
+        assert!(!keys.contains_key("sourceRoot"));
+        assert!(!keys.contains_key("cacheRoot"));
+        assert!(!keys.contains_key("artifactRoot"));
+        assert!(!keys.contains_key("stage"));
+        assert!(!keys.contains_key("entry"));
     }
 }

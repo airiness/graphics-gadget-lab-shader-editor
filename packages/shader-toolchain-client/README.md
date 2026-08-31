@@ -30,7 +30,8 @@ client-owned closure of every compile settlement into one structured
 attempt outcome (a read envelope, or a structured termination fact, but
 never a free-form reason) — and the revisioned build-line rules (stale /
 current / last-good) over those outcomes, and the host-boundary
-contract (the four allowlisted capabilities, the pre-spawn provenance
+contract (the six allowlisted capabilities — the ordinary four plus dedicated
+Preview handshake/build — and the pre-spawn provenance
 guarantee with its structured pre-spawn refusals — the candidate-invalidated
 fact (changed / missing / unreadable) and the launch-failed fact — and the
 request / result shapes) with its reference fake.

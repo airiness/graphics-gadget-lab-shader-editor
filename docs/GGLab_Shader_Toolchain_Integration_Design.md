@@ -21,7 +21,9 @@ One sentence for the whole document:
 - Tool discovery model: precedence rules, candidate facts, failure as structured state.
 - The strict readiness gate, as two state spaces in two domains: ToolCompatibility (`unavailable / discovered / unproven / incompatible / compatible`, client verdict) and NativeBuildReadiness (`Ready` / `NotReady{reasons}`, editor composition), with no bypass path.
 - The new headless `shader-toolchain-client` package: machine-protocol consumption, ToolCompatibility verdicts, the host-boundary contract (allowlisted operations + the `NativeCompileRequest` shape — no argv in its vocabulary), build-intent and build-line (stale/current/last-good) pure rules, and reference host-boundary fakes.
-- The narrow Tauri `ShaderToolService` (discover / handshake / compile / cancel).
+- The narrow Tauri `ShaderToolService`: the ordinary discover / handshake /
+  compile / cancel surface plus the approved, distinct Preview handshake and
+  Preview build operations.
 - Complete-program native compile request composition and generated-source staging; the generated surface function alone is explicitly rejected as an incomplete program.
 - Revisioned asynchronous build state and last-good preservation.
 - Toolchain diagnostics transport (carry, display, bind — not yet navigate).
@@ -474,12 +476,17 @@ capabilities (exactly these, plus the existing scoped document/descriptor file I
                                 + exit code + timeout/cancel state) — or the
                                 pre-spawn refusal (candidate-invalidated: changed / missing / unreadable,
                                 or launch-failed) BEFORE the spawn
+  previewHandshake(candidate) → the same raw/refusal surface for the distinct,
+                                zero-side-effect describe-preview operation
   compile(candidate, request) → buildId ; the same settlement when it settles
+  buildPreview(candidate, request) → buildId ; the same settlement for the
+                                distinct NativePreviewBuildRequest operation
   cancel(buildId)             → explicit canceled state for that build
 
 the boundary's actual job (all host-internal, in Rust):
   allowance      the request is one of the declared operations, in declared shape
-                 (source bytes + identity present; target/stage/entry present)
+                 (ordinary source/target/stage/entry fields, or the dedicated
+                 Preview intent/identity fields, are present and in shape)
   serialization  an APPROVED request is mapped to the tool's invocation —
                  structural arguments, no shell string, ever; this mapping is
                  a host-internal detail and owns no DXC/backend policy
@@ -499,7 +506,7 @@ the boundary's actual job (all host-internal, in Rust):
 Prohibited, by construction:
 
 ```text
-no generic spawn(argv) — the service exposes only the four capabilities above
+no generic spawn(argv) — the service exposes only the six capabilities above
     and serializes only approved requests
 no protocol interpretation in Rust — no envelope parsing, status
     interpretation, version comparison, or diagnostic classification
@@ -587,6 +594,16 @@ deliberately not introduced in this stage.
 
 The WebView's compile flow delivers bytes + identity to the service and
 receives results back; it never names, opens, or manages a staging file.
+
+The Preview extension preserves that per-attempt rule for generated-source
+staging. Its other roots are deliberately different: the host derives the
+selected candidate deployment's main-owned `Shaders`, `ShaderCache`, and
+canonical `ShaderArtifacts` roots next to `gglab-shaderc`. `build-preview` must
+read the ordinary active base Registry from that exact artifact root, publish
+immutable products beneath it, and atomically order each session's active
+pointer there. An empty service-private or attempt-local artifact root could
+never satisfy that contract. These derived paths remain host-internal and are
+never exposed to the WebView.
 
 ---
 
@@ -933,7 +950,7 @@ ToolCompatibility state machine; the build-intent and build-line rules
 dependency-free in both directions; no host API imported anywhere in the
 package; no argv type exists anywhere in its vocabulary.
 
-**Step 3 — the Tauri `ShaderToolService`.** The four capabilities;
+**Step 3 — the Tauri `ShaderToolService`.** The original four capabilities;
 allowlisted-request validation + approved-request → invocation serialization
 (host-internal); bounded execution (no shell string, timeout, cancel,
 whole-output capture); private per-attempt staging per §10; the capability
@@ -941,6 +958,15 @@ set extended only for these commands.
 *Exit:* host tests with a trivial dummy executable emitting fixed bytes prove
 execution/capture/timeout/cancel; no protocol content and no readiness
 logic in any host test.
+
+**Preview Milestone B extension.** Add only the dedicated candidate-scoped
+`previewHandshake` and `buildPreview` capabilities to that same boundary. They
+reuse the provenance guard, bounded execution, shared BuildId/cancel domain,
+and per-attempt generated-source staging. Preview uses the candidate
+deployment's stable canonical ShaderArtifacts root so the main-owned toolchain
+can read the ordinary base Registry, publish immutable products, and atomically
+advance a session pointer across attempts; the WebView receives no path. No
+Preview protocol interpretation or readiness judgment enters Rust.
 
 **Step 4 — editor composition and surface.** The `NativeBuildReadiness`
 composer (ToolCompatibility + core's descriptor verdict + host capability +

@@ -13,10 +13,9 @@
 //!
 //! Modes (first argument):
 //!
-//! - `describe` — emit fixed bytes on both streams; if the executable's
-//!   own file name contains `sleep`, first sleep for a long time (the
-//!   timeout / cancel tests point the candidate at that copy).
-//! - `compile`  — dump the complete argument list (mode + everything
+//! - `describe` / `describe-preview` — emit operation-specific fixed bytes on
+//!   both streams; a file name containing `sleep` sleeps first.
+//! - `compile` / `build-preview` — dump the complete argument list (mode + everything
 //!   after it, joined with the unit separator U+0001) so the host tests
 //!   can assert the service's invocation serialization structurally,
 //!   then exit with a fixed code that is NOT the tool's vocabulary.
@@ -48,7 +47,17 @@ fn main() {
             let _ = stdout.write_all(b"DESCRIPT-BYTES\n");
             let _ = stderr.write_all(b"DESCRIPT-ERR\n");
         }
+        "describe-preview" => {
+            if slow {
+                std::thread::sleep(std::time::Duration::from_secs(30));
+            }
+            let _ = stdout.write_all(b"PREVIEW-DESCRIPT-BYTES\n");
+            let _ = stderr.write_all(b"PREVIEW-DESCRIPT-ERR\n");
+        }
         "compile" => {
+            if slow {
+                std::thread::sleep(std::time::Duration::from_secs(30));
+            }
             // The complete structural argument list, in order.
             let mut all = vec![mode.clone()];
             all.extend(rest);
@@ -56,6 +65,17 @@ fn main() {
             let _ = stdout.write_all(joined.as_bytes());
             let _ = stderr.write_all(b"COMPILE-ERR-BYTES\n");
             std::process::exit(4);
+        }
+        "build-preview" => {
+            if slow {
+                std::thread::sleep(std::time::Duration::from_secs(30));
+            }
+            let mut all = vec![mode.clone()];
+            all.extend(rest);
+            let joined = all.join("\u{1}");
+            let _ = stdout.write_all(joined.as_bytes());
+            let _ = stderr.write_all(b"PREVIEW-BUILD-ERR-BYTES\n");
+            std::process::exit(5);
         }
         _ => {}
     }

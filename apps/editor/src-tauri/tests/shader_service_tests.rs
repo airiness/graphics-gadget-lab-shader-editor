@@ -15,7 +15,8 @@ use std::time::Duration;
 
 use gglab_shader_graph_editor::{
     hash_bytes, BuildId, BoundaryResult, CandidateObservation, DiscoveryRule,
-    NativeCompileRequest, ServiceError, ShaderToolService, ToolCandidate, ToolchainRoots,
+    NativeCompileRequest, NativePreviewBuildRequest, ServiceError, ShaderToolService,
+    ToolCandidate, ToolchainRoots,
 };
 
 fn temp_base(name: &str) -> PathBuf {
@@ -63,6 +64,20 @@ fn unwrap_spawned(result: BoundaryResult) -> gglab_shader_graph_editor::Boundary
     }
 }
 
+fn preview_request(attempt_sequence: u64) -> NativePreviewBuildRequest {
+    NativePreviewBuildRequest {
+        session_id: "12".repeat(16),
+        target_profile: "gglab-dx12".to_string(),
+        profile_id: "gglab.surface".to_string(),
+        profile_version: 2,
+        preview_input_contract_id: "gglab.preview-input.surface.texture2d".to_string(),
+        preview_program_descriptor_identity: "a".repeat(64),
+        generated_source_identity: "b".repeat(64),
+        generated_source_bytes: b"generated Preview HLSL".to_vec(),
+        attempt_sequence,
+    }
+}
+
 // ---------------------------------------------------------------- execution
 
 #[test]
@@ -80,6 +95,20 @@ fn execution_reports_fixed_bytes_and_the_exit_code() {
     assert_eq!(output.exit_code, 0);
     assert!(!output.timed_out);
     assert!(!output.canceled);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn preview_handshake_executes_the_dedicated_command_on_the_exact_candidate() {
+    let base = temp_base("preview-handshake");
+    let tool = build_dummy(&base, "dummy.exe");
+    let content = std::fs::read(&tool).unwrap();
+    let svc = service(&base, 5_000);
+    let output = unwrap_spawned(svc.preview_handshake(&candidate(&tool, &content)));
+    assert_eq!(output.stdout, b"PREVIEW-DESCRIPT-BYTES\n");
+    assert_eq!(output.stderr, b"PREVIEW-DESCRIPT-ERR\n");
+    assert_eq!(output.exit_code, 0);
+    assert!(!output.timed_out && !output.canceled);
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -125,6 +154,18 @@ fn timeout_ends_the_attempt_with_the_flag_and_any_captured_bytes() {
     assert!(!output.canceled);
     // The end state is the fact: nothing is fabricated after the end.
     assert_eq!(output.stdout, Vec::<u8>::new());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn preview_handshake_uses_the_bounded_handshake_budget() {
+    let base = temp_base("preview-handshake-timeout");
+    let tool = build_dummy(&base, "slow-dummy-sleep.exe");
+    let content = std::fs::read(&tool).unwrap();
+    let svc = service(&base, 400);
+    let output = unwrap_spawned(svc.preview_handshake(&candidate(&tool, &content)));
+    assert!(output.timed_out);
+    assert!(!output.canceled);
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -207,6 +248,41 @@ fn a_replaced_file_is_refused_with_the_current_observed_identity() {
             assert_eq!(observed_identity, Some(second_identity));
         }
         other => panic!("expected candidate-invalidated, got {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn preview_operations_never_spawn_a_candidate_with_a_changed_observation() {
+    let base = temp_base("preview-provenance-changed");
+    let tool = base.join("dummy.exe");
+    let observed = b"preview-tool-first";
+    std::fs::write(&tool, observed).unwrap();
+    let bound_candidate = candidate(&tool, observed);
+    std::fs::write(&tool, b"preview-tool-replaced").unwrap();
+    let current_identity = gglab_shader_graph_editor::hash_file(&tool).unwrap();
+    let svc = service(&base, 5_000);
+
+    for result in [
+        svc.preview_handshake(&bound_candidate),
+        svc.build_preview(&bound_candidate, &preview_request(1))
+            .unwrap()
+            .settle
+            .join()
+            .unwrap(),
+    ] {
+        match result {
+            BoundaryResult::CandidateInvalidated {
+                candidate,
+                observation,
+                observed_identity,
+            } => {
+                assert_eq!(candidate, bound_candidate);
+                assert_eq!(observation, CandidateObservation::Changed);
+                assert_eq!(observed_identity, Some(current_identity.clone()));
+            }
+            other => panic!("expected Preview candidate-invalidated, got {other:?}"),
+        }
     }
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -330,6 +406,99 @@ fn the_compile_invocation_is_serialized_structurally_and_in_order() {
     // The sequence is asserted EXACTLY — order, flags, and values —
     // with path separators normalized (the OS owns the path form).
     assert_eq!(actual, expected);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn the_preview_invocation_contains_only_approved_intent_and_host_derived_roots() {
+    let base = temp_base("preview-argv");
+    let tool = build_dummy(&base, "dummy.exe");
+    let content = std::fs::read(&tool).unwrap();
+    let svc = service(&base, 5_000);
+    let request = preview_request(41);
+    let attempt = svc
+        .build_preview(&candidate(&tool, &content), &request)
+        .unwrap();
+    let output = unwrap_spawned(attempt.settle.join().unwrap());
+    assert_eq!(
+        output.exit_code, 5,
+        "the raw dummy exit code is not interpreted"
+    );
+    let actual: Vec<String> = String::from_utf8(output.stdout)
+        .unwrap()
+        .split('\u{1}')
+        .map(|value| value.replace('\\', "/"))
+        .collect();
+    let private = base.join("toolchain-service");
+    let staging = private
+        .join("staging")
+        .join(attempt.build_id.sequence.to_string());
+    let source = staging.join(format!("{}.hlsl", request.generated_source_identity));
+    let expected = vec![
+        "build-preview".to_string(),
+        "--source-root".to_string(),
+        base.join("Shaders").to_string_lossy().replace('\\', "/"),
+        "--generated-source".to_string(),
+        source.to_string_lossy().replace('\\', "/"),
+        "--generated-source-identity".to_string(),
+        request.generated_source_identity.clone(),
+        "--target".to_string(),
+        request.target_profile.clone(),
+        "--profile-id".to_string(),
+        request.profile_id.clone(),
+        "--profile-version".to_string(),
+        request.profile_version.to_string(),
+        "--preview-input-contract-id".to_string(),
+        request.preview_input_contract_id.clone(),
+        "--preview-program-descriptor-identity".to_string(),
+        request.preview_program_descriptor_identity.clone(),
+        "--session-id".to_string(),
+        request.session_id.clone(),
+        "--attempt-sequence".to_string(),
+        request.attempt_sequence.to_string(),
+        "--cache-root".to_string(),
+        base.join("ShaderCache")
+            .to_string_lossy()
+            .replace('\\', "/"),
+        "--artifact-root".to_string(),
+        base.join("ShaderArtifacts")
+            .to_string_lossy()
+            .replace('\\', "/"),
+        "--result-format".to_string(),
+        "json".to_string(),
+    ];
+    assert_eq!(actual, expected);
+    assert_eq!(output.stderr, b"PREVIEW-BUILD-ERR-BYTES\n");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn preview_build_staging_is_per_host_attempt_cancellable_and_cleaned() {
+    let base = temp_base("preview-staging-cancel");
+    let tool = build_dummy(&base, "slow-dummy-sleep.exe");
+    let content = std::fs::read(&tool).unwrap();
+    let svc = service(&base, 10_000);
+    let request = preview_request(9);
+    let attempt = svc
+        .build_preview(&candidate(&tool, &content), &request)
+        .unwrap();
+    let staged = base
+        .join("toolchain-service")
+        .join("staging")
+        .join(attempt.build_id.sequence.to_string())
+        .join(format!("{}.hlsl", request.generated_source_identity));
+    assert_eq!(
+        std::fs::read(&staged).unwrap(),
+        request.generated_source_bytes
+    );
+    let canceled = svc.cancel(attempt.build_id);
+    assert!(canceled.canceled && !canceled.already_settled);
+    let output = unwrap_spawned(attempt.settle.join().unwrap());
+    assert!(output.canceled && !output.timed_out);
+    assert!(
+        !staged.exists(),
+        "Preview staging must be cleaned on cancel settlement"
+    );
     let _ = std::fs::remove_dir_all(&base);
 }
 

@@ -4,7 +4,7 @@
  * `HostToolBoundary` contract that the client package owns.
  *
  * The two implementations are independent and never import each other:
- * this one runs the service's four allowlisted commands; the reference
+ * this one runs the service's six allowlisted commands; the reference
  * fake (client package) runs the scripted world. Both deliver the same
  * declared settlement surface, so the client's readers, state machine,
  * and build-line rules are written once against the CONTRACT, not
@@ -24,7 +24,7 @@
  *   entire byte vocabulary.
  *
  * The module never assembles a shell string and never interprets output
- * content: the four commands, and nothing else, are invocable here.
+ * content: the six commands, and nothing else, are invocable here.
  */
 import type {
     BoundaryOutput,
@@ -35,6 +35,7 @@ import type {
     DiscoverRequest,
     HostToolBoundary,
     NativeCompileRequest,
+    NativePreviewBuildRequest,
     ToolCandidate,
 } from "@gglab/shader-toolchain-client";
 import { isDesktopHost } from "./host-io.js";
@@ -117,6 +118,23 @@ function compileRequestWire(request: NativeCompileRequest): Record<string, unkno
     };
 }
 
+/** The dedicated Preview request's wire materialization. It remains an
+ *  intent/identity value: all paths, adapters, PSMain, and publication policy
+ *  stay inside the native boundary/toolchain. */
+function previewBuildRequestWire(request: NativePreviewBuildRequest): Record<string, unknown> {
+    return {
+        sessionId: request.sessionId,
+        targetProfile: request.targetProfile,
+        profileId: request.profileId,
+        profileVersion: request.profileVersion,
+        previewInputContractId: request.previewInputContractId,
+        previewProgramDescriptorIdentity: request.previewProgramDescriptorIdentity,
+        generatedSourceIdentity: request.generatedSourceIdentity,
+        generatedSourceBytes: Array.from(request.generatedSourceBytes),
+        attemptSequence: request.attemptSequence,
+    };
+}
+
 /**
  * Builds the product boundary on top of the official Tauri invoke API.
  * The imports are made lazily (code-split out of the web build, exactly
@@ -137,6 +155,11 @@ export async function createTauriToolBoundary(): Promise<HostToolBoundary> {
             return materializeResult(wire);
         },
 
+        async previewHandshake(candidate: ToolCandidate): Promise<BoundaryResult> {
+            const wire = (await invoke("shader-tool-preview-handshake", { candidate })) as WireBoundaryResult;
+            return materializeResult(wire);
+        },
+
         async compile(candidate: ToolCandidate, request: NativeCompileRequest): Promise<CompileAttemptHandle> {
             // The service resolves the admission immediately with the
             // attempt's identity and delivers the settlement on a
@@ -153,6 +176,22 @@ export async function createTauriToolBoundary(): Promise<HostToolBoundary> {
             const id = (await invoke("shader-tool-compile", {
                 candidate,
                 request: compileRequestWire(request),
+                channel,
+            })) as { sequence: number };
+            return { buildId: { sequence: id.sequence }, result };
+        },
+
+        async buildPreview(candidate: ToolCandidate, request: NativePreviewBuildRequest) {
+            let resolveSettlement: (settlement: BoundaryResult) => void = () => undefined;
+            const result = new Promise<BoundaryResult>((resolve) => {
+                resolveSettlement = resolve;
+            });
+            const channel = new Channel<WireBoundaryResult>((message: WireBoundaryResult) =>
+                resolveSettlement(materializeResult(message)),
+            );
+            const id = (await invoke("shader-tool-build-preview", {
+                candidate,
+                request: previewBuildRequestWire(request),
                 channel,
             })) as { sequence: number };
             return { buildId: { sequence: id.sequence }, result };

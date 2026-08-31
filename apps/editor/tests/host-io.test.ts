@@ -215,15 +215,15 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         );
     });
 
-    it("exposes exactly the four sanctioned host-boundary commands, on top of the official plugins (EXACT set — any extra command fails)", async () => {
+    it("exposes exactly the six sanctioned host-boundary commands, on top of the official plugins (EXACT set — any extra command fails)", async () => {
         const libRs = await readFile(resolve(tauriDir, "src/lib.rs"), "utf8");
         const mainRs = await readFile(resolve(tauriDir, "src/main.rs"), "utf8");
         // The shell keeps the two official plugins — the access model.
         expect(libRs).toContain("tauri_plugin_dialog");
         expect(libRs).toContain("tauri_plugin_fs");
-        // The web-facing command surface is EXACTLY the four host-boundary
+        // The web-facing command surface is EXACTLY the six host-boundary
         // capabilities of the toolchain client (design section 9) — a
-        // fifth command is a surface violation.
+        // seventh command is a surface violation.
         // The attribute is `#[tauri::command(rename = "<id>")]` — the
         // `[` sits inside a character class here: a bare `[` in a regex
         // literal would start a class of its own and swallow the rest
@@ -231,10 +231,12 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         const commandPattern = /#[[]tauri::command\(rename = "([^"]+)"\)/g;
         const commands = [...libRs.matchAll(commandPattern)].map((m) => m[1] as string);
         expect(commands.sort()).toEqual([
+            "shader-tool-build-preview",
             "shader-tool-cancel",
             "shader-tool-compile",
             "shader-tool-discover",
             "shader-tool-handshake",
+            "shader-tool-preview-handshake",
         ]);
         // No raw arbitrary-path file access anywhere on the web-facing
         // host surface itself.

@@ -53,8 +53,9 @@ vi.mock("../src/toolchain-host.js", async () => {
         supportedTargets: ["gglab-dx12", "gglab-vulkan13"],
         diagnostics: [],
     });
-    // The boundary contract carries four capabilities, so the fake world
-    // provides a compile world too — dormant in these tests: the surface
+    // The boundary contract carries six capabilities; this ordinary-flow fake
+    // provides its compile world while the Preview scripts remain dormant.
+    // The compile path is dormant in these tests: the surface
     // no longer offers the native production path (2026-08-30 amendment),
     // so nothing here ever issues one.
     const compileOk = JSON.stringify({

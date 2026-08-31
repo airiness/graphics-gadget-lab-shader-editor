@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BoundaryResult, HostToolBoundary, ToolCandidate } from "../src/host-boundary.js";
 import type { NativeCompileRequest } from "../src/native-compile-request.js";
+import type { NativePreviewBuildRequest } from "../src/native-preview-build-request.js";
 import { utf8Encode } from "../src/utf8.js";
 import {
     FakeHostBoundary,
@@ -8,6 +9,11 @@ import {
     type FakeToolchainSpec,
 } from "../src/testing/fake-host-boundary.js";
 import { DESCRIBE_SUCCESS } from "./fixtures/envelope-goldens.js";
+import {
+    BUILD_PREVIEW_SUCCESS,
+    DESCRIBE_PREVIEW_SUCCESS,
+    PREVIEW_DESCRIPTOR_IDENTITY,
+} from "./fixtures/preview-envelope-goldens.js";
 
 const CANDIDATE: ToolCandidate = {
     rule: "sibling-build",
@@ -26,13 +32,27 @@ const REQUEST: NativeCompileRequest = {
     includes: [],
 };
 
+const PREVIEW_REQUEST: NativePreviewBuildRequest = {
+    sessionId: "12".repeat(16),
+    targetProfile: "gglab-dx12",
+    profileId: "gglab.surface",
+    profileVersion: 2,
+    previewInputContractId: "gglab.preview-input.surface.texture2d",
+    previewProgramDescriptorIdentity: PREVIEW_DESCRIPTOR_IDENTITY,
+    generatedSourceIdentity: "cd".repeat(32),
+    generatedSourceBytes: utf8Encode("void EvaluateSurface() { }"),
+    attemptSequence: 1,
+};
+
 const COMPILE_OK = `{"command":"compile","success":true,"status":"ok","exitCode":0,"recipeId":"${"3f".repeat(32)}","buildKey":"${"5e".repeat(32)}","binaryHash":"${"9c".repeat(32)}","binaryFormat":"dxil","target":"gglab-dx12","binaryPath":"C:/gglab/build/cache/${"9c".repeat(32)}.dxil","cacheRecordPath":"C:/gglab/build/cache/${"9c".repeat(32)}.dxil.json","fromCache":false,"diagnostics":[]}`;
 
 function spec(change: Partial<FakeToolchainSpec> = {}): FakeToolchainSpec {
     return {
         discovery: { kind: "resolved", candidate: CANDIDATE },
         handshake: { stdout: DESCRIBE_SUCCESS, exitCode: 0 },
+        previewHandshake: { stdout: DESCRIBE_PREVIEW_SUCCESS, exitCode: 0 },
         compile: [{ stdout: COMPILE_OK, exitCode: 0 }],
+        previewBuild: [{ stdout: BUILD_PREVIEW_SUCCESS, exitCode: 0 }],
         ...change,
     };
 }
@@ -53,7 +73,7 @@ function outputOf(result: BoundaryResult, what: string) {
 describe("the reference fake host boundary", () => {
     it("implements the declared boundary, with no argv surface at all", () => {
         const fake: HostToolBoundary = new FakeHostBoundary(spec());
-        // The four declared capabilities, plus the fake's own test-side
+        // The six declared capabilities, plus the fake's own test-side
         // controls (releasePending, settle bookkeeping) — and nothing
         // that takes an argument array.
         const surface = Object.getOwnPropertyNames(FakeHostBoundary.prototype).sort();
@@ -64,15 +84,24 @@ describe("the reference fake host boundary", () => {
                 "compileScriptFor",
                 "constructor",
                 "cancel",
+                "allocateBuildSequence",
+                "buildPreview",
                 "discover",
                 "discoverCalls",
                 "lastDiscoveryRequest",
+                "lastPreviewBuild",
+                "lastPreviewHandshakeCandidate",
                 "handshake",
                 "handshakeCalls",
                 "preSpawnRefusal",
+                "previewBuildCalls",
+                "previewBuildScriptFor",
+                "previewHandshake",
+                "previewHandshakeCalls",
                 "releaseDiscovery",
                 "releaseHandshake",
                 "releasePending",
+                "releasePreviewHandshake",
                 "toOutput",
             ].sort(),
         );
@@ -99,6 +128,18 @@ describe("the reference fake host boundary", () => {
         const refused = new FakeHostBoundary(spec({ keepHandshakePending: true, preSpawn: { refusal: "launch-failed" } }));
         await expect(refused.handshake(CANDIDATE)).resolves.toEqual({ kind: "launch-failed", candidate: CANDIDATE });
         expect(refused.releaseHandshake()).toBe(false);
+    });
+
+    it("keeps the Preview handshake candidate and settlement in one dedicated lane", async () => {
+        const fake = new FakeHostBoundary(spec({ keepPreviewHandshakePending: true }));
+        const pending = fake.previewHandshake(CANDIDATE);
+        expect(fake.previewHandshakeCalls).toBe(1);
+        expect(fake.lastPreviewHandshakeCandidate).toEqual(CANDIDATE);
+        expect(fake.handshakeCalls, "the ordinary handshake remains independent").toBe(0);
+        expect(fake.releasePreviewHandshake()).toBe(true);
+        const output = outputOf(await pending, "the Preview handshake");
+        expect(output.stdout).toEqual(utf8Encode(DESCRIBE_PREVIEW_SUCCESS));
+        expect(fake.releasePreviewHandshake()).toBe(false);
     });
 
     it("returns the scripted discovery world, resolved or per-rule failed", async () => {
@@ -200,6 +241,26 @@ describe("the reference fake host boundary", () => {
         const compile = new FakeHostBoundary(spec({ preSpawn: { refusal: "launch-failed" } }));
         const handle = await compile.compile(CANDIDATE, REQUEST);
         expect(await handle.result).toEqual({ kind: "launch-failed", candidate: CANDIDATE });
+        const previewHandshake = new FakeHostBoundary(spec({ preSpawn: { refusal: "launch-failed" } }));
+        await expect(previewHandshake.previewHandshake(CANDIDATE)).resolves.toEqual({
+            kind: "launch-failed",
+            candidate: CANDIDATE,
+        });
+        const previewBuild = new FakeHostBoundary(spec({ preSpawn: { refusal: "launch-failed" } }));
+        const previewHandle = await previewBuild.buildPreview(CANDIDATE, PREVIEW_REQUEST);
+        expect(await previewHandle.result).toEqual({ kind: "launch-failed", candidate: CANDIDATE });
+    });
+
+    it("keeps Preview build candidate/request values intact and shares the ordered build-id lane", async () => {
+        const fake = new FakeHostBoundary(spec());
+        const ordinary = await fake.compile(CANDIDATE, REQUEST);
+        const preview = await fake.buildPreview(CANDIDATE, PREVIEW_REQUEST);
+        expect(ordinary.buildId.sequence).toBe(1);
+        expect(preview.buildId.sequence).toBe(2);
+        expect(fake.previewBuildCalls).toBe(1);
+        expect(fake.lastPreviewBuild).toEqual({ candidate: CANDIDATE, request: PREVIEW_REQUEST });
+        const output = outputOf(await preview.result, "the Preview build");
+        expect(output.stdout).toEqual(utf8Encode(BUILD_PREVIEW_SUCCESS));
     });
 
     it("issues separate BuildIds and settles each spawn with its own script", async () => {

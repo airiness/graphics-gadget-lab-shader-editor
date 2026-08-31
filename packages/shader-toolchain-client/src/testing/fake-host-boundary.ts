@@ -8,7 +8,7 @@
  * refusal (changed / missing / unreadable) and the launch-failed fact.
  *
  * In-flight attempts are fully controllable: with `keepCompilePending`,
- * a compile attempt stays pending until `releasePending()` settles it
+ * an ordinary compile or Preview build stays pending until `releasePending()` settles it
  * with its scripted call or `cancel(buildId)` settles it as canceled —
  * no real time elapses in the script.
  *
@@ -28,9 +28,11 @@ import type {
     DiscoveryRuleFailure,
     DiscoverRequest,
     HostToolBoundary,
+    PreviewBuildAttemptHandle,
     ToolCandidate,
 } from "../host-boundary.js";
 import type { BuildId, NativeCompileRequest } from "../native-compile-request.js";
+import type { NativePreviewBuildRequest } from "../native-preview-build-request.js";
 import { utf8Encode } from "../utf8.js";
 
 /** One scripted execution: the whole output surface. */
@@ -51,9 +53,14 @@ export type FakeDiscovery =
 export interface FakeToolchainSpec {
     readonly discovery: FakeDiscovery;
     readonly handshake: FakeBoundaryCall;
+    /** Dedicated Preview scripts are optional so ordinary-flow fixtures do
+     *  not accidentally claim Preview support. Calling an unscripted Preview
+     *  operation is an explicit test error. */
+    readonly previewHandshake?: FakeBoundaryCall | undefined;
     /** The scripted compile settlements, consumed in issue order; the
      *  last entry repeats for further attempts. */
     readonly compile: readonly FakeBoundaryCall[];
+    readonly previewBuild?: readonly FakeBoundaryCall[] | undefined;
     /** When set, the fake's pre-spawn settlement REFUSES the spawn —
      *  the candidate-invalidated refusal (with its observation) or the
      *  launch-failed fact, exactly as the boundary contract requires
@@ -66,7 +73,7 @@ export interface FakeToolchainSpec {
           }
         | { readonly refusal: "launch-failed" }
         | undefined;
-    /** When true, spawn attempts stay in flight until settled by
+    /** When true, ordinary compile and Preview build attempts stay in flight until settled by
      *  `releasePending()` or `cancel(buildId)`. */
     readonly keepCompilePending?: boolean | undefined;
     /** When true, discoveries stay in flight until settled by
@@ -76,6 +83,7 @@ export interface FakeToolchainSpec {
     /** When true, handshake settlements stay in flight until settled by
      *  `releaseHandshake()` — refusals (pre-spawn) never queue. */
     readonly keepHandshakePending?: boolean | undefined;
+    readonly keepPreviewHandshakePending?: boolean | undefined;
 }
 
 interface PendingCompile {
@@ -86,12 +94,21 @@ interface PendingCompile {
 
 export class FakeHostBoundary implements HostToolBoundary {
     private readonly pending = new Map<number, PendingCompile>();
+    private nextBuildSequence = 1;
     private handshakeCallCount = 0;
+    private previewHandshakeCallCount = 0;
     private compileCallCount = 0;
+    private previewBuildCallCount = 0;
     private discoverCallCount = 0;
     private discoveryRequestRecord: DiscoverRequest | null = null;
     private pendingDiscovery: { resolve: (outcome: DiscoverOutcome) => void; outcome: DiscoverOutcome } | null = null;
     private pendingHandshake: { resolve: (result: BoundaryResult) => void } | null = null;
+    private pendingPreviewHandshake: { resolve: (result: BoundaryResult) => void } | null = null;
+    private previewHandshakeCandidateRecord: ToolCandidate | null = null;
+    private previewBuildRecord: {
+        readonly candidate: ToolCandidate;
+        readonly request: NativePreviewBuildRequest;
+    } | null = null;
 
     constructor(private readonly spec: FakeToolchainSpec) {}
 
@@ -105,6 +122,14 @@ export class FakeHostBoundary implements HostToolBoundary {
         return this.compileCallCount;
     }
 
+    get previewHandshakeCalls(): number {
+        return this.previewHandshakeCallCount;
+    }
+
+    get previewBuildCalls(): number {
+        return this.previewBuildCallCount;
+    }
+
     get discoverCalls(): number {
         return this.discoverCallCount;
     }
@@ -114,6 +139,21 @@ export class FakeHostBoundary implements HostToolBoundary {
      *  world and asked about another is caught here). */
     get lastDiscoveryRequest(): DiscoverRequest | null {
         return this.discoveryRequestRecord;
+    }
+
+    /** The exact candidate the dedicated Preview handshake was asked to
+     *  execute. This is test evidence for candidate binding, not tool state. */
+    get lastPreviewHandshakeCandidate(): ToolCandidate | null {
+        return this.previewHandshakeCandidateRecord;
+    }
+
+    /** The exact candidate/request pair delivered to the Preview build
+     *  boundary. The fake does not reinterpret either value. */
+    get lastPreviewBuild(): {
+        readonly candidate: ToolCandidate;
+        readonly request: NativePreviewBuildRequest;
+    } | null {
+        return this.previewBuildRecord;
     }
 
     async discover(request: DiscoverRequest): Promise<DiscoverOutcome> {
@@ -156,6 +196,26 @@ export class FakeHostBoundary implements HostToolBoundary {
         return settlement;
     }
 
+    async previewHandshake(candidate: ToolCandidate): Promise<BoundaryResult> {
+        this.previewHandshakeCallCount += 1;
+        this.previewHandshakeCandidateRecord = candidate;
+        const refusal = this.preSpawnRefusal(candidate);
+        if (refusal !== undefined) {
+            return refusal;
+        }
+        const script = this.spec.previewHandshake;
+        if (script === undefined) {
+            throw new Error("the fake toolchain has no Preview handshake script");
+        }
+        const settlement: BoundaryResult = { kind: "spawned", output: this.toOutput(script) };
+        if (this.spec.keepPreviewHandshakePending === true) {
+            return new Promise<BoundaryResult>((resolve) => {
+                this.pendingPreviewHandshake = { resolve };
+            });
+        }
+        return settlement;
+    }
+
     /** Settles the in-flight discovery with its own scripted outcome.
      *  Returns false when nothing is pending — an explicit fact, never a
      *  silent skip. */
@@ -182,14 +242,28 @@ export class FakeHostBoundary implements HostToolBoundary {
         return true;
     }
 
+    /** Settles the dedicated Preview handshake lane with its own script. */
+    releasePreviewHandshake(): boolean {
+        const pending = this.pendingPreviewHandshake;
+        if (pending === null) {
+            return false;
+        }
+        const script = this.spec.previewHandshake;
+        if (script === undefined) {
+            throw new Error("the fake toolchain has no Preview handshake script");
+        }
+        this.pendingPreviewHandshake = null;
+        pending.resolve({ kind: "spawned", output: this.toOutput(script) });
+        return true;
+    }
+
     async compile(candidate: ToolCandidate, request: NativeCompileRequest): Promise<CompileAttemptHandle> {
         // The boundary serializes and executes the approved request at
         // the candidate path, host-internal; the fake returns the
         // scripted settlement for the candidate given.
-        void candidate;
         void request;
         this.compileCallCount += 1;
-        const buildId: BuildId = { sequence: this.compileCallCount };
+        const buildId: BuildId = { sequence: this.allocateBuildSequence() };
         const refusal = this.preSpawnRefusal(candidate);
         if (refusal !== undefined) {
             // The provenance check runs BEFORE the spawn and refuses it:
@@ -200,6 +274,30 @@ export class FakeHostBoundary implements HostToolBoundary {
             };
         }
         const script = this.compileScriptFor(this.compileCallCount);
+        if (this.spec.keepCompilePending === true) {
+            let settle: (result: BoundaryResult) => void = () => undefined;
+            const result = new Promise<BoundaryResult>((resolve) => {
+                settle = resolve;
+            });
+            this.pending.set(buildId.sequence, { buildId, script, resolve: settle });
+            return { buildId, result };
+        }
+        await Promise.resolve();
+        return { buildId, result: Promise.resolve({ kind: "spawned", output: this.toOutput(script) }) };
+    }
+
+    async buildPreview(
+        candidate: ToolCandidate,
+        request: NativePreviewBuildRequest,
+    ): Promise<PreviewBuildAttemptHandle> {
+        this.previewBuildCallCount += 1;
+        this.previewBuildRecord = { candidate, request };
+        const buildId: BuildId = { sequence: this.allocateBuildSequence() };
+        const refusal = this.preSpawnRefusal(candidate);
+        if (refusal !== undefined) {
+            return { buildId, result: Promise.resolve(refusal) };
+        }
+        const script = this.previewBuildScriptFor(this.previewBuildCallCount);
         if (this.spec.keepCompilePending === true) {
             let settle: (result: BoundaryResult) => void = () => undefined;
             const result = new Promise<BoundaryResult>((resolve) => {
@@ -283,6 +381,25 @@ export class FakeHostBoundary implements HostToolBoundary {
             throw new Error(`the fake toolchain script ran past its compile calls (sequence ${sequence})`);
         }
         return script;
+    }
+
+    private previewBuildScriptFor(call: number): FakeBoundaryCall {
+        const list = this.spec.previewBuild;
+        if (list === undefined || list.length === 0) {
+            throw new Error("the fake toolchain script needs at least one Preview build call");
+        }
+        const index = Math.min(call - 1, list.length - 1);
+        const script = list[index];
+        if (script === undefined) {
+            throw new Error(`the fake toolchain script ran past its Preview build calls (call ${call})`);
+        }
+        return script;
+    }
+
+    private allocateBuildSequence(): number {
+        const sequence = this.nextBuildSequence;
+        this.nextBuildSequence += 1;
+        return sequence;
     }
 
     private toOutput(call: FakeBoundaryCall): BoundaryOutput {
