@@ -34,13 +34,16 @@ current / last-good) over those outcomes, and the Preview attempt-line rules
 publication), the strict main-owned 90-byte Runtime Preview observation reader,
 monotonic/transactional observation acceptance, and the cross-linked
 Current/LastGood/Stale/Rejected projection. Its compiler-free observation host
-boundary is distinct from the tool boundary. The host-boundary
+boundary is distinct from the tool boundary. A second compiler-free attached
+Runtime lifecycle boundary launches only by candidate/session identity, returns
+a host-issued Runtime identity plus an exit promise, and stops only by that
+Runtime identity; it has its own deterministic reference fake. The host-boundary
 contract (the six allowlisted capabilities — the ordinary four plus dedicated
 Preview handshake/build — and the pre-spawn provenance
 guarantee with its structured pre-spawn refusals — the candidate-invalidated
 fact (changed / missing / unreadable) and the launch-failed fact — and the
-request / result shapes) with its reference fake; the observation boundary has
-its own deterministic reference fake.
+request / result shapes) with its reference fake; no executable path, working
+directory, Lab ID, or argv enters the TypeScript vocabulary.
 
 Consumed by the editor composition and the CLI authoring frontend. The
 toolchain's wire contracts are published by the main GGLab repository; this

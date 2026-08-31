@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
     FakeHostBoundary,
     FakePreviewObservationBoundary,
+    FakePreviewRuntimeBoundary,
     type BoundaryResult,
     type ToolCandidate,
     type ToolCompatibilityState,
@@ -35,6 +36,13 @@ const CANDIDATE_B: ToolCandidate = {
     ...CANDIDATE_A,
     observationIdentity: "candidate-b",
     resolvedAt: 2,
+};
+
+const CANDIDATE_C: ToolCandidate = {
+    ...CANDIDATE_A,
+    toolPath: "D:/other/gglab-shaderc.exe",
+    observationIdentity: "candidate-c",
+    resolvedAt: 3,
 };
 
 const TOOL_FACTS: ToolFacts = {
@@ -219,15 +227,33 @@ function observations(
     return new FakePreviewObservationBoundary({ reads, keepPending });
 }
 
+function runtimes(
+    launches: ConstructorParameters<typeof FakePreviewRuntimeBoundary>[0]["launches"] = [
+        { kind: "launched" },
+    ],
+    keepLaunchPending = false,
+): FakePreviewRuntimeBoundary {
+    return new FakePreviewRuntimeBoundary({ launches, keepLaunchPending });
+}
+
 async function prove(flow: PreviewBuildFlow, input = composition()): Promise<void> {
     const record = await flow.previewHandshake(input);
     expect(record).toMatchObject({ kind: "settled", eligibility: { status: "eligible" }, stale: false });
 }
 
+async function publish(flow: PreviewBuildFlow, input = composition()): Promise<void> {
+    await prove(flow, input);
+    const launch = await flow.buildPreview(input);
+    if (!launch.issued) {
+        throw new Error("test Preview build must issue");
+    }
+    await expect(launch.outcome).resolves.toMatchObject({ kind: "published" });
+}
+
 describe("Preview handshake orchestration", () => {
     it("joins one candidate + requirement lane and closes it on settlement", async () => {
         const boundary = fake({ keepPreviewHandshakePending: true });
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations());
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), runtimes());
         const input = composition();
 
         const first = flow.previewHandshake(input);
@@ -243,7 +269,7 @@ describe("Preview handshake orchestration", () => {
     it("does not let proof for candidate A admit candidate B", async () => {
         const boundary = fake();
         const port = new TestToolPort();
-        const flow = new PreviewBuildFlow(boundary, port, SESSION_ID, observations());
+        const flow = new PreviewBuildFlow(boundary, port, SESSION_ID, observations(), runtimes());
         const input = composition();
         await prove(flow, input);
 
@@ -259,7 +285,7 @@ describe("Preview handshake orchestration", () => {
 
     it("refuses source-identity drift before the handshake or request boundary", async () => {
         const boundary = fake();
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations());
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), runtimes());
         const valid = emission();
         const changed: HlslEmission = {
             ...valid,
@@ -282,7 +308,7 @@ describe("Preview handshake orchestration", () => {
             },
         });
         const port = new TestToolPort();
-        const flow = new PreviewBuildFlow(boundary, port, SESSION_ID, observations());
+        const flow = new PreviewBuildFlow(boundary, port, SESSION_ID, observations(), runtimes());
 
         const record = await flow.previewHandshake(composition());
         expect(record).toMatchObject({
@@ -297,7 +323,7 @@ describe("Preview handshake orchestration", () => {
 describe("Preview build orchestration", () => {
     it("derives and issues the exact candidate-bound request after the gate", async () => {
         const boundary = fake();
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations());
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), runtimes());
         const input = composition();
         await prove(flow, input);
 
@@ -332,7 +358,7 @@ describe("Preview build orchestration", () => {
             ],
             keepCompilePending: true,
         });
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations());
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), runtimes());
         const input = composition();
         await prove(flow, input);
 
@@ -359,7 +385,7 @@ describe("Preview build orchestration", () => {
 
     it("coalesces synchronous duplicate launch requests before either can issue", async () => {
         const boundary = fake();
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations());
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), runtimes());
         const input = composition();
         await prove(flow, input);
 
@@ -382,7 +408,7 @@ describe("Preview build orchestration", () => {
                 { stdout: previewBuildFailed(2), exitCode: 4 },
             ],
         });
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations());
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), runtimes());
         const input = composition();
         await prove(flow, input);
 
@@ -405,7 +431,7 @@ describe("Preview build orchestration", () => {
 
     it("turns a mismatched result AttemptSequence into a failed binding, never a publication", async () => {
         const boundary = fake({ previewBuild: [{ stdout: previewBuildOk(9), exitCode: 0 }] });
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations());
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), runtimes());
         const input = composition();
         await prove(flow, input);
 
@@ -428,7 +454,7 @@ describe("Preview Runtime observation orchestration", () => {
             [{ kind: "read", bytes: observationBytes(1, PUBLICATION_ID) }],
             true,
         );
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observation);
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observation, runtimes());
         const input = composition();
         await prove(flow, input);
         const launch = await flow.buildPreview(input);
@@ -462,7 +488,7 @@ describe("Preview Runtime observation orchestration", () => {
             ],
         });
         const observation = observations([{ kind: "read", bytes: observationBytes(1, PUBLICATION_ID) }]);
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observation);
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observation, runtimes());
         const input = composition();
         await prove(flow, input);
         const first = await flow.buildPreview(input);
@@ -492,7 +518,7 @@ describe("Preview Runtime observation orchestration", () => {
             { kind: "read", bytes: observationBytes(1, PUBLICATION_ID) },
             { kind: "read", bytes: observationBytes(2, unknownPublication) },
         ]);
-        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observation);
+        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observation, runtimes());
         const input = composition();
         await prove(flow, input);
         const launch = await flow.buildPreview(input);
@@ -519,7 +545,7 @@ describe("Preview Runtime observation orchestration", () => {
                 observedIdentity: "candidate-b",
             },
         ]);
-        const flow = new PreviewBuildFlow(fake(), port, SESSION_ID, observation);
+        const flow = new PreviewBuildFlow(fake(), port, SESSION_ID, observation, runtimes());
         const input = composition();
         await prove(flow, input);
         const launch = await flow.buildPreview(input);
@@ -532,5 +558,129 @@ describe("Preview Runtime observation orchestration", () => {
         expect(port.invalidations).toHaveLength(1);
         expect(port.state).toEqual({ status: "unavailable" });
         expect(flow.acceptedObservation).toBeNull();
+    });
+});
+
+describe("Attached Preview Runtime lifecycle", () => {
+    it("requires an initial successful publication before launch", async () => {
+        const runtime = runtimes();
+        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), runtime);
+
+        await expect(flow.launchAttachedPreview()).resolves.toEqual({
+            launched: false,
+            reason: "initial-publication-unavailable",
+        });
+        expect(runtime.launchCalls).toBe(0);
+        expect(flow.runtimeState).toEqual({ kind: "idle" });
+    });
+
+    it("joins one candidate/session launch and observes a clean process exit", async () => {
+        const runtime = runtimes([{ kind: "launched", runtimeIdentity: "runtime-a" }], true);
+        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), runtime);
+        await publish(flow);
+
+        const first = flow.launchAttachedPreview();
+        const second = flow.launchAttachedPreview();
+        expect(second).toBe(first);
+        expect(flow.runtimeState).toEqual({ kind: "launching" });
+        expect(runtime.launchCalls).toBe(1);
+        expect(runtime.lastLaunch).toEqual({ candidate: CANDIDATE_A, sessionId: SESSION_ID });
+        expect(runtime.releaseLaunch()).toBe(true);
+        const launched = await first;
+        expect(launched).toMatchObject({
+            launched: true,
+            runtimeId: { sequence: 1 },
+            runtimeIdentity: "runtime-a",
+        });
+        expect(flow.runtimeState).toEqual({
+            kind: "running",
+            runtimeId: { sequence: 1 },
+            runtimeIdentity: "runtime-a",
+        });
+        expect(runtime.exit({ sequence: 1 }, 0)).toBe(true);
+        if (launched.launched) {
+            await launched.exited;
+        }
+        expect(flow.runtimeState).toEqual({
+            kind: "exited",
+            runtimeIdentity: "runtime-a",
+            exit: { runtimeId: { sequence: 1 }, kind: "exited", exitCode: 0 },
+        });
+    });
+
+    it("stops only the host-issued runtime and transitions through stopping", async () => {
+        const runtime = runtimes();
+        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), runtime);
+        await publish(flow);
+        const launched = await flow.launchAttachedPreview();
+        if (!launched.launched) {
+            throw new Error("test Preview Runtime must launch");
+        }
+
+        const stop = flow.stopAttachedPreview();
+        expect(flow.runtimeState).toEqual({
+            kind: "stopping",
+            runtimeId: launched.runtimeId,
+            runtimeIdentity: launched.runtimeIdentity,
+        });
+        await expect(stop).resolves.toEqual({
+            runtimeId: launched.runtimeId,
+            stopRequested: true,
+            alreadySettled: false,
+        });
+        await launched.exited;
+        expect(flow.runtimeState).toEqual({
+            kind: "exited",
+            runtimeIdentity: launched.runtimeIdentity,
+            exit: { runtimeId: launched.runtimeId, kind: "stopped", exitCode: null },
+        });
+    });
+
+    it("routes launch-time candidate invalidation to the ordinary tool owner", async () => {
+        const port = new TestToolPort();
+        const runtime = runtimes([
+            {
+                kind: "candidate-invalidated",
+                candidate: CANDIDATE_A,
+                observation: "changed",
+                observedIdentity: "candidate-b",
+            },
+        ]);
+        const flow = new PreviewBuildFlow(fake(), port, SESSION_ID, observations(), runtime);
+        await publish(flow);
+
+        await expect(flow.launchAttachedPreview()).resolves.toMatchObject({
+            launched: false,
+            reason: "host-refused",
+            result: { kind: "candidate-invalidated" },
+        });
+        expect(port.invalidations).toHaveLength(1);
+        expect(port.state).toEqual({ status: "unavailable" });
+        expect(flow.runtimeState).toMatchObject({
+            kind: "launch-refused",
+            result: { kind: "candidate-invalidated" },
+        });
+    });
+
+    it("keeps a live session on its launch deployment and refuses cross-deployment updates", async () => {
+        const port = new TestToolPort();
+        const observation = observations([{ kind: "read", bytes: observationBytes(1, PUBLICATION_ID) }]);
+        const flow = new PreviewBuildFlow(fake(), port, SESSION_ID, observation, runtimes());
+        const input = composition();
+        await publish(flow, input);
+        const launched = await flow.launchAttachedPreview();
+        if (!launched.launched) {
+            throw new Error("test Preview Runtime must launch");
+        }
+
+        port.state = compatible(CANDIDATE_C);
+        expect(flow.buildGate(input)).toMatchObject({
+            admitted: false,
+            reasons: [{ reason: "attached-runtime-deployment-mismatch" }],
+        });
+        await expect(flow.refreshObservation()).resolves.toMatchObject({ kind: "accepted" });
+        expect(observation.lastRead).toEqual({ candidate: CANDIDATE_A, sessionId: SESSION_ID });
+        await flow.stopAttachedPreview();
+        await launched.exited;
     });
 });

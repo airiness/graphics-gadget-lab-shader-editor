@@ -1540,8 +1540,16 @@ approved and completed in Milestone A (GraphicsGadgetLab PR #175, merge
 `d6a2b75d`). Q4, Q5, and Q7 are now approved for Milestone B by
 `GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md`. The main repository has
 published the Preview handshake, `build-preview`, immutable publication/session
-coordination, and attached Runtime observation path; Editor consumption is the
-current ordered implementation step. Material Programs remain separate.
+coordination, and attached Runtime observation path. The Editor now consumes
+that line through an identity-only Tauri boundary: a successful initial
+publication admits candidate/session-scoped Runtime launch, live processes own
+host-issued identities, observation polling runs only while attached, and
+explicit/editor/service teardown stops the child. The surface presents the
+cross-linked Current/LastGood/Stale/Rejected state; cross-repository live
+success/failure/recovery qualification is the remaining Milestone B step. A
+live session cannot silently cross artifact roots: switching to another tool
+deployment requires the attached Runtime to exit before a new build is issued.
+Material Programs remain separate.
 
 It must follow normal GGLab Lab/runtime discipline:
 
@@ -1989,11 +1997,11 @@ compatible toolchain + compatible selected surface profile
 → no native request / BuildId / artifact claim
 ```
 
-The current implementation does not yet satisfy this corrected acceptance
-chain; Slice 2 correctness closure is reopened. After closure, product progress
-moves to standalone Preview Lab Milestone A and then live Editor Preview
-Milestone B. The permanent main-repository generated-function gate remains the
-native qualification authority meanwhile.
+The implementation satisfies this corrected acceptance chain: the ordinary
+generated-function-only path remains visibly
+`NotReady[ProgramCompositionUnavailable]` and cannot issue a native request.
+The permanent main-repository generated-function gate remains the native
+qualification authority.
 
 ## Slice 3 — Compiler diagnostics → graph navigation
 
@@ -2008,6 +2016,11 @@ native compile diagnostic
 ```
 
 ## Slice 4 — GGLab Shader Graph Preview Lab
+
+Milestone A and the code portions of Milestone B are implemented across the
+main and Editor repositories. Remaining acceptance is the cross-repository
+live success/failure/recovery qualification; it does not broaden the Material
+Program scope.
 
 Deliver:
 

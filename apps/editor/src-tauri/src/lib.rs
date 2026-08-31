@@ -2,8 +2,8 @@
 //!
 //! Two layers in one crate (see the crate-level note in `Cargo.toml`):
 //! the thin shell (the two official plugins — dialog and scoped fs),
-//! and the six tool commands plus one compiler-free observation command. The
-//! thin layer of commands below owns
+//! and the six tool commands plus compiler-free observation and attached
+//! Runtime lifecycle commands. The thin layer of commands below owns
 //! no logic of its own: it takes the client's values in, hands them to
 //! the service, and returns the service's values back — the service is
 //! the only place where host internals live.
@@ -176,26 +176,61 @@ async fn shader_preview_read_observation(
     })?
 }
 
-/// The production entry: the two official plugins (the access model)
-/// plus the six tool commands and compiler-free observation read, and nothing else
-/// in the web-facing surface.
-/// The boundary's public surface — the host-side contract that the
-/// toolchain client declares (and its tests implement as a fake).
+#[tauri::command(rename = "shader-preview-launch-runtime")]
+async fn shader_preview_launch_runtime(
+    state: tauri::State<'_, ServiceShared>,
+    candidate: ToolCandidate,
+    session_id: String,
+    channel: tauri::ipc::Channel<PreviewRuntimeExit>,
+) -> Result<PreviewRuntimeLaunchResult, ServiceError> {
+    let service = Arc::clone(&state.0);
+    let admission = tauri::async_runtime::spawn_blocking(move || {
+        service.launch_preview_runtime(&candidate, &session_id)
+    })
+    .await
+    .map_err(|err| ServiceError::Host {
+        detail: format!("the host task ended: {err}"),
+    })??;
+    if let Some(settle) = admission.settle {
+        std::thread::spawn(move || {
+            if let Ok(exit) = settle.join() {
+                let _ = channel.send(exit);
+            }
+        });
+    }
+    Ok(admission.result)
+}
+
+#[tauri::command(rename = "shader-preview-stop-runtime")]
+fn shader_preview_stop_runtime(
+    state: tauri::State<'_, ServiceShared>,
+    runtime_id: PreviewRuntimeId,
+) -> Result<PreviewRuntimeStopOutcome, ServiceError> {
+    Ok(state.service().stop_preview_runtime(runtime_id))
+}
+
+/// The boundary's public surface: six tool operations plus compiler-free
+/// observation and attached Runtime lifecycle capabilities. This is the
+/// host-side contract that the toolchain client declares and tests with its
+/// reference fakes.
 pub use shader_tool::discovery::discover;
 pub use shader_tool::error::ServiceError;
 pub use shader_tool::execution::ExecutionBudget;
 pub use shader_tool::identity::{hash_bytes, hash_file};
-pub use shader_tool::service::{CompileAttempt, ShaderToolService};
+pub use shader_tool::service::{CompileAttempt, PreviewRuntimeLaunchAdmission, ShaderToolService};
 pub use shader_tool::staging::ToolchainRoots;
 pub use shader_tool::types::{
     BoundaryOutput, BoundaryResult, BuildId, CancelOutcome, CandidateObservation, CompileDefine,
     DiscoverOutcome, DiscoverRequest, DiscoveryRule, DiscoveryRuleFailure, NativeCompileRequest,
-    NativePreviewBuildRequest, PreviewObservationHostReadResult, ToolCandidate,
+    NativePreviewBuildRequest, PreviewObservationHostReadResult,
+    PreviewRuntimeAvailabilityObservation, PreviewRuntimeExit, PreviewRuntimeExitKind,
+    PreviewRuntimeId, PreviewRuntimeLaunchResult, PreviewRuntimeStopOutcome, ToolCandidate,
 };
 
 /// The production entry: the two official plugins (the access model)
-/// plus the six tool commands and compiler-free observation read, and nothing else
-/// in the web-facing surface.
+/// plus the six tool commands and the compiler-free Preview observation /
+/// attached-process lifecycle commands, and nothing else in the web-facing
+/// surface.
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -208,7 +243,9 @@ pub fn run() {
             shader_tool_compile,
             shader_tool_build_preview,
             shader_tool_cancel,
-            shader_preview_read_observation
+            shader_preview_read_observation,
+            shader_preview_launch_runtime,
+            shader_preview_stop_runtime
         ])
         .run(tauri::generate_context!())
         .expect("error while running the GGLab Shader Graph Editor desktop shell");

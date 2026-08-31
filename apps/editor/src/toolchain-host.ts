@@ -5,7 +5,7 @@
  *
  * The two implementations are independent and never import each other:
  * this one runs the service's six allowlisted tool commands and the
- * separate compiler-free observation read; the reference
+ * separate compiler-free observation/process lifecycle boundaries; the reference
  * fake (client package) runs the scripted world. Both deliver the same
  * declared settlement surface, so the client's readers, state machine,
  * and build-line rules are written once against the CONTRACT, not
@@ -39,6 +39,10 @@ import type {
     NativePreviewBuildRequest,
     PreviewObservationBoundary,
     PreviewObservationHostReadResult,
+    PreviewRuntimeBoundary,
+    PreviewRuntimeExit,
+    PreviewRuntimeLaunchResult,
+    PreviewRuntimeStopOutcome,
     ToolCandidate,
 } from "@gglab/shader-toolchain-client";
 import { isDesktopHost } from "./host-io.js";
@@ -79,6 +83,25 @@ type WirePreviewObservationHostReadResult =
           readonly observation: "changed" | "missing" | "unreadable";
           readonly observedIdentity: string | null;
       };
+
+type WirePreviewRuntimeLaunchResult =
+    | {
+          readonly kind: "launched";
+          readonly runtimeId: { readonly sequence: number };
+          readonly runtimeIdentity: string;
+      }
+    | {
+          readonly kind: "session-already-running";
+          readonly runtimeId: { readonly sequence: number };
+      }
+    | {
+          readonly kind: "candidate-invalidated";
+          readonly candidate: ToolCandidate;
+          readonly observation: "changed" | "missing" | "unreadable";
+          readonly observedIdentity: string | null;
+      }
+    | { readonly kind: "runtime-unavailable"; readonly observation: "missing" | "unreadable" }
+    | { readonly kind: "launch-failed" };
 
 function materializeOutput(output: WireBoundaryOutput): BoundaryOutput {
     return {
@@ -240,6 +263,37 @@ export async function createTauriPreviewObservationBoundary(): Promise<PreviewOb
                 sessionId,
             })) as WirePreviewObservationHostReadResult;
             return materializePreviewObservationResult(wire);
+        },
+    };
+}
+
+/** The attached GGLab process boundary. The WebView supplies no executable,
+ *  working directory, Lab ID, or argv; Rust derives the complete launch from
+ *  the validated candidate deployment and the opaque SessionId. */
+export async function createTauriPreviewRuntimeBoundary(): Promise<PreviewRuntimeBoundary> {
+    const { invoke, Channel } = await import("@tauri-apps/api/core");
+    return {
+        async launchAttachedPreview(
+            candidate: ToolCandidate,
+            sessionId: string,
+        ): Promise<PreviewRuntimeLaunchResult> {
+            let resolveExit: (exit: PreviewRuntimeExit) => void = () => undefined;
+            const exited = new Promise<PreviewRuntimeExit>((resolve) => {
+                resolveExit = resolve;
+            });
+            const channel = new Channel<PreviewRuntimeExit>((exit) => resolveExit(exit));
+            const wire = (await invoke("shader-preview-launch-runtime", {
+                candidate,
+                sessionId,
+                channel,
+            })) as WirePreviewRuntimeLaunchResult;
+            return wire.kind === "launched" ? { ...wire, exited } : wire;
+        },
+
+        async stopAttachedPreview(runtimeId: { readonly sequence: number }): Promise<PreviewRuntimeStopOutcome> {
+            return (await invoke("shader-preview-stop-runtime", {
+                runtimeId,
+            })) as PreviewRuntimeStopOutcome;
         },
     };
 }

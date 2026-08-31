@@ -62,6 +62,21 @@ pub fn verify_and_hold(
     path: &str,
     expected_identity: &str,
 ) -> Result<ProvenanceGuard, GuardRefusal> {
+    let (guard, observed) = observe_and_hold(path)?;
+    if observed != expected_identity {
+        return Err(GuardRefusal::Changed {
+            current_identity: observed,
+        });
+    }
+    Ok(guard)
+}
+
+/// Observe a host-owned executable and hold its exact file fixed until the
+/// caller completes process creation. This is used for the sibling WinApp:
+/// unlike a discovered tool candidate it has no caller-supplied expected
+/// digest, so the host reports the digest it observed under the same live
+/// guard instead of performing a look-then-launch sequence.
+pub fn observe_and_hold(path: &str) -> Result<(ProvenanceGuard, String), GuardRefusal> {
     #[cfg(windows)]
     {
         let mut wide: Vec<u16> = path.encode_utf16().collect();
@@ -99,19 +114,11 @@ pub fn verify_and_hold(
                 return Err(err);
             }
         };
-        if observed != expected_identity {
-            unsafe {
-                let _ = win32::CloseHandle(handle);
-            }
-            return Err(GuardRefusal::Changed {
-                current_identity: observed,
-            });
-        }
-        Ok(ProvenanceGuard { handle })
+        Ok((ProvenanceGuard { handle }, observed))
     }
     #[cfg(not(windows))]
     {
-        let _ = (path, expected_identity);
+        let _ = path;
         Err(GuardRefusal::Unsupported)
     }
 }

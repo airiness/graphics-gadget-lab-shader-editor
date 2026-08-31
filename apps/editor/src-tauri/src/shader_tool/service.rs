@@ -1,7 +1,7 @@
 //! The ShaderToolService — the product implementation of the declared
 //! host boundary (design §9 plus the approved Preview Milestone B extension),
-//! exactly six tool capabilities, plus one compiler-free Runtime observation
-//! read:
+//! exactly six tool capabilities, plus the compiler-free Runtime observation
+//! and attached-process lifecycle boundaries:
 //!
 //! ```text
 //! discover(config)            → candidate facts + per-rule failure reasons
@@ -13,6 +13,8 @@
 //! build_preview(candidate, request) → buildId + Preview settlement
 //! cancel(buildId)             → the explicit canceled state of that build
 //! read_preview_observation(candidate, session_id) → bounded raw observation
+//! launch_preview_runtime(candidate, session_id) → attached Runtime admission
+//! stop_preview_runtime(runtime_id) → bounded process stop request
 //! ```
 //!
 //! and the host-internal work behind them, in order:
@@ -46,12 +48,13 @@ use std::sync::Arc;
 use super::discovery::discover as discover_core;
 use super::error::ServiceError;
 use super::execution::{spawn, ExecutionBudget, SpawnError};
-use super::provenance::{verify_and_hold, GuardRefusal};
+use super::provenance::{observe_and_hold, verify_and_hold, GuardRefusal};
 use super::staging::ToolchainRoots;
 use super::types::{
     BoundaryResult, BuildId, CancelOutcome, CandidateObservation, DiscoverOutcome, DiscoverRequest,
     NativeCompileRequest, NativePreviewBuildRequest, PreviewObservationHostReadResult,
-    ToolCandidate,
+    PreviewRuntimeAvailabilityObservation, PreviewRuntimeExit, PreviewRuntimeExitKind,
+    PreviewRuntimeId, PreviewRuntimeLaunchResult, PreviewRuntimeStopOutcome, ToolCandidate,
 };
 
 /// The service state, shared across the (few) async command tasks:
@@ -63,6 +66,7 @@ pub struct ShaderToolService {
     compile_budget: ExecutionBudget,
     service_executable_dir: Option<std::path::PathBuf>,
     next_build_id: AtomicU64,
+    next_runtime_id: AtomicU64,
     /// Single-flight for discovery: held for the (cheap) discovery walk,
     /// released after — the rule, not a scheduler.
     discovery_gate: std::sync::Mutex<()>,
@@ -70,6 +74,11 @@ pub struct ShaderToolService {
     /// with the settlement threads by an owned `Arc`; every access is a
     /// short synchronous step.
     in_flight: Arc<std::sync::Mutex<std::collections::HashMap<u64, Arc<AtomicBool>>>>,
+    /// Live attached processes, keyed by the opaque session identity. The
+    /// monitor thread removes its own entry after reaping the child.
+    preview_runtimes: Arc<
+        std::sync::Mutex<std::collections::HashMap<String, (PreviewRuntimeId, Arc<AtomicBool>)>>,
+    >,
 }
 
 /// A compile attempt admitted by the service: its identity, and the
@@ -78,6 +87,11 @@ pub struct ShaderToolService {
 pub struct CompileAttempt {
     pub build_id: BuildId,
     pub settle: std::thread::JoinHandle<BoundaryResult>,
+}
+
+pub struct PreviewRuntimeLaunchAdmission {
+    pub result: PreviewRuntimeLaunchResult,
+    pub settle: Option<std::thread::JoinHandle<PreviewRuntimeExit>>,
 }
 
 impl std::fmt::Debug for CompileAttempt {
@@ -89,6 +103,31 @@ impl std::fmt::Debug for CompileAttempt {
             .field("build_id", &self.build_id)
             .field("settle", &std::thread::current().id())
             .finish()
+    }
+}
+
+impl Drop for ShaderToolService {
+    fn drop(&mut self) {
+        if let Ok(runtimes) = self.preview_runtimes.lock() {
+            for (_, stop) in runtimes.values() {
+                stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        // Window teardown cannot rely solely on the WebView's asynchronous
+        // cleanup command. Give every monitor a bounded opportunity to kill,
+        // reap, and unregister its child before the host exits.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            if self
+                .preview_runtimes
+                .lock()
+                .map(|runtimes| runtimes.is_empty())
+                .unwrap_or(true)
+            {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 }
 
@@ -126,8 +165,10 @@ impl ShaderToolService {
             compile_budget,
             service_executable_dir,
             next_build_id: AtomicU64::new(1),
+            next_runtime_id: AtomicU64::new(1),
             discovery_gate: std::sync::Mutex::new(()),
             in_flight: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            preview_runtimes: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -148,8 +189,10 @@ impl ShaderToolService {
             compile_budget,
             service_executable_dir,
             next_build_id: AtomicU64::new(1),
+            next_runtime_id: AtomicU64::new(1),
             discovery_gate: std::sync::Mutex::new(()),
             in_flight: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            preview_runtimes: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -229,6 +272,138 @@ impl ShaderToolService {
             return Ok(PreviewObservationHostReadResult::TooLarge);
         }
         Ok(PreviewObservationHostReadResult::Read { bytes })
+    }
+
+    /// Launch the main application's attached Shader Graph Preview Lab from
+    /// the selected candidate's deployment closure. The stable executable,
+    /// working directory, Lab ID, and argv are host-owned. Both the candidate
+    /// and WinApp executable are held against replacement until process
+    /// creation settles, and one SessionId can own at most one live process.
+    pub fn launch_preview_runtime(
+        &self,
+        candidate: &ToolCandidate,
+        session_id: &str,
+    ) -> Result<PreviewRuntimeLaunchAdmission, ServiceError> {
+        validate_preview_session_id(session_id)?;
+        let mut runtimes = self
+            .preview_runtimes
+            .lock()
+            .expect("no panic path holds the Preview Runtime registry");
+        if let Some((runtime_id, _)) = runtimes.get(session_id) {
+            return Ok(PreviewRuntimeLaunchAdmission {
+                result: PreviewRuntimeLaunchResult::SessionAlreadyRunning {
+                    runtime_id: *runtime_id,
+                },
+                settle: None,
+            });
+        }
+
+        let candidate_guard =
+            match verify_and_hold(&candidate.tool_path, &candidate.observation_identity) {
+                Ok(guard) => guard,
+                Err(refusal) => {
+                    return Ok(PreviewRuntimeLaunchAdmission {
+                        result: preview_runtime_candidate_refusal(refusal, candidate),
+                        settle: None,
+                    });
+                }
+            };
+        let executable = std::path::Path::new(&candidate.tool_path);
+        let Some(deployment_root) = executable.parent() else {
+            return Ok(PreviewRuntimeLaunchAdmission {
+                result: PreviewRuntimeLaunchResult::RuntimeUnavailable {
+                    observation: PreviewRuntimeAvailabilityObservation::Unreadable,
+                },
+                settle: None,
+            });
+        };
+        let runtime_path = deployment_root.join("GraphicsGadgetLab.exe");
+        let runtime_path_text = runtime_path.to_string_lossy().into_owned();
+        let (runtime_guard, runtime_identity) = match observe_and_hold(&runtime_path_text) {
+            Ok(observation) => observation,
+            Err(refusal) => {
+                return Ok(PreviewRuntimeLaunchAdmission {
+                    result: preview_runtime_unavailable(refusal),
+                    settle: None,
+                });
+            }
+        };
+        let child = std::process::Command::new(&runtime_path)
+            .args([
+                "--lab",
+                "gglab.lab.shader_graph_preview",
+                "--shader-preview-session",
+                session_id,
+                "--absolute-mouse",
+            ])
+            .current_dir(deployment_root)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        let child = match child {
+            Ok(child) => child,
+            Err(_) => {
+                return Ok(PreviewRuntimeLaunchAdmission {
+                    result: PreviewRuntimeLaunchResult::LaunchFailed,
+                    settle: None,
+                });
+            }
+        };
+        drop(runtime_guard);
+        drop(candidate_guard);
+
+        let runtime_id = PreviewRuntimeId {
+            sequence: self
+                .next_runtime_id
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        runtimes.insert(session_id.to_string(), (runtime_id, Arc::clone(&stop)));
+        drop(runtimes);
+
+        let session_id = session_id.to_string();
+        let runtime_registry = Arc::clone(&self.preview_runtimes);
+        let settle = std::thread::spawn(move || {
+            let exit = settle_preview_runtime(child, runtime_id, Arc::clone(&stop));
+            let mut registry = runtime_registry
+                .lock()
+                .expect("no panic path holds the Preview Runtime registry");
+            if registry
+                .get(&session_id)
+                .is_some_and(|(current, _)| *current == runtime_id)
+            {
+                registry.remove(&session_id);
+            }
+            exit
+        });
+        Ok(PreviewRuntimeLaunchAdmission {
+            result: PreviewRuntimeLaunchResult::Launched {
+                runtime_id,
+                runtime_identity,
+            },
+            settle: Some(settle),
+        })
+    }
+
+    pub fn stop_preview_runtime(&self, runtime_id: PreviewRuntimeId) -> PreviewRuntimeStopOutcome {
+        let runtimes = self
+            .preview_runtimes
+            .lock()
+            .expect("no panic path holds the Preview Runtime registry");
+        if let Some((_, stop)) = runtimes.values().find(|(id, _)| *id == runtime_id) {
+            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            return PreviewRuntimeStopOutcome {
+                runtime_id,
+                stop_requested: true,
+                already_settled: false,
+            };
+        }
+        PreviewRuntimeStopOutcome {
+            runtime_id,
+            stop_requested: false,
+            already_settled: true,
+        }
     }
 
     fn execute_handshake(&self, candidate: &ToolCandidate, command: &str) -> BoundaryResult {
@@ -748,5 +923,78 @@ fn observation_guard_refusal(
             observed_identity: None,
         },
         GuardRefusal::Unsupported => PreviewObservationHostReadResult::ReadFailed,
+    }
+}
+
+fn preview_runtime_candidate_refusal(
+    refusal: GuardRefusal,
+    candidate: &ToolCandidate,
+) -> PreviewRuntimeLaunchResult {
+    match refusal {
+        GuardRefusal::Changed { current_identity } => {
+            PreviewRuntimeLaunchResult::CandidateInvalidated {
+                candidate: candidate.clone(),
+                observation: CandidateObservation::Changed,
+                observed_identity: Some(current_identity),
+            }
+        }
+        GuardRefusal::Missing => PreviewRuntimeLaunchResult::CandidateInvalidated {
+            candidate: candidate.clone(),
+            observation: CandidateObservation::Missing,
+            observed_identity: None,
+        },
+        GuardRefusal::Unreadable => PreviewRuntimeLaunchResult::CandidateInvalidated {
+            candidate: candidate.clone(),
+            observation: CandidateObservation::Unreadable,
+            observed_identity: None,
+        },
+        GuardRefusal::Unsupported => PreviewRuntimeLaunchResult::LaunchFailed,
+    }
+}
+
+fn preview_runtime_unavailable(refusal: GuardRefusal) -> PreviewRuntimeLaunchResult {
+    let observation = match refusal {
+        GuardRefusal::Missing => PreviewRuntimeAvailabilityObservation::Missing,
+        GuardRefusal::Unreadable | GuardRefusal::Changed { .. } | GuardRefusal::Unsupported => {
+            PreviewRuntimeAvailabilityObservation::Unreadable
+        }
+    };
+    PreviewRuntimeLaunchResult::RuntimeUnavailable { observation }
+}
+
+fn settle_preview_runtime(
+    mut child: std::process::Child,
+    runtime_id: PreviewRuntimeId,
+    stop: Arc<AtomicBool>,
+) -> PreviewRuntimeExit {
+    loop {
+        if stop.load(std::sync::atomic::Ordering::SeqCst) {
+            let _ = child.kill();
+            let exit_code = child.wait().ok().and_then(|status| status.code());
+            return PreviewRuntimeExit {
+                runtime_id,
+                kind: PreviewRuntimeExitKind::Stopped,
+                exit_code,
+            };
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return PreviewRuntimeExit {
+                    runtime_id,
+                    kind: PreviewRuntimeExitKind::Exited,
+                    exit_code: status.code(),
+                };
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return PreviewRuntimeExit {
+                    runtime_id,
+                    kind: PreviewRuntimeExitKind::WaitFailed,
+                    exit_code: None,
+                };
+            }
+        }
     }
 }

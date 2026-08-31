@@ -998,8 +998,15 @@ The Runtime-observation consumption slice now strictly reads the main-owned
 refs against the session build line, and applies monotonic/transactional
 last-good rules before projecting `Current` / `LastGood` / `Stale` / `Rejected`.
 Concurrent refreshes join one candidate/session read; malformed, unbound, or
-non-monotonic records cannot replace the accepted observation. UI polling and
-the attached Preview surface consume this state in the following slice.
+non-monotonic records cannot replace the accepted observation. The attached
+surface now creates a 128-bit SessionId, requires a successful initial
+publication, launches the candidate deployment's main Runtime through a
+separate host-owned process boundary, polls only while that Runtime is live,
+and presents the accepted Current/LastGood/Stale/Rejected projection. Runtime
+exit and explicit/editor teardown stop polling; service teardown requests and
+boundedly waits for child cleanup. While a Runtime is live, observations stay
+bound to its launch deployment and a build through a different candidate
+deployment is explicitly refused until the attached process exits.
 
 **Step 4 — editor composition and surface.** The `NativeBuildReadiness`
 composer (ToolCompatibility + core's descriptor verdict + host capability +
@@ -1029,8 +1036,11 @@ Preview Lab is complete (GraphicsGadgetLab PR #175, merge `d6a2b75d`) and
 Q4/Q5/Q7 have final owner approval. Main-repository Milestone B Steps 1–4 now
 publish the dedicated Preview handshake, `build-preview`, immutable publication
 handoff, session pointer, attached launch, and Runtime observation contracts.
-The active step is their strict Editor Toolchain Client/Tauri consumption,
-same-session single-flight orchestration, and honest current/last-good/stale UI.
+The Editor now consumes those contracts through strict Toolchain Client/Tauri
+boundaries, same-session single-flight orchestration, success-first attached
+startup, and honest current/last-good/stale UI. The next step is Milestone B
+cross-repository success/failure/recovery qualification on DX12, followed by
+Vulkan only when its production backend is enabled.
 
 **Global exit criteria for the stage:**
 

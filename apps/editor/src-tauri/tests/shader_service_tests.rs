@@ -15,8 +15,9 @@ use std::time::Duration;
 
 use gglab_shader_graph_editor::{
     hash_bytes, BoundaryResult, BuildId, CandidateObservation, DiscoveryRule, NativeCompileRequest,
-    NativePreviewBuildRequest, PreviewObservationHostReadResult, ServiceError, ShaderToolService,
-    ToolCandidate, ToolchainRoots,
+    NativePreviewBuildRequest, PreviewObservationHostReadResult,
+    PreviewRuntimeAvailabilityObservation, PreviewRuntimeExitKind, PreviewRuntimeLaunchResult,
+    ServiceError, ShaderToolService, ToolCandidate, ToolchainRoots,
 };
 
 fn temp_base(name: &str) -> PathBuf {
@@ -28,14 +29,35 @@ fn temp_base(name: &str) -> PathBuf {
 
 /// Compile the dummy tool with plain rustc and return the executable.
 fn build_dummy(dir: &Path, name: &str) -> PathBuf {
+    build_fixture(dir, name, "dummy_tool.rs")
+}
+
+fn build_fixture(dir: &Path, name: &str, fixture: &str) -> PathBuf {
     let out = dir.join(name);
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixture").join("dummy_tool.rs");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixture")
+        .join(fixture);
     let status = std::process::Command::new("rustc")
-        .args(["--edition", "2021", "-O", "-o", out.to_str().unwrap(), source.to_str().unwrap()])
+        .args([
+            "--edition",
+            "2021",
+            "-O",
+            "-o",
+            out.to_str().unwrap(),
+            source.to_str().unwrap(),
+        ])
         .status()
         .expect("rustc must be available to build the dummy tool");
-    assert!(status.success(), "the dummy tool must compile (status {status:?})");
+    assert!(
+        status.success(),
+        "the dummy tool must compile (status {status:?})"
+    );
     out
+}
+
+fn build_preview_runtime(dir: &Path) -> PathBuf {
+    build_fixture(dir, "GraphicsGadgetLab.exe", "dummy_preview_runtime.rs")
 }
 
 fn service(dir: &Path, budget_ms: u64) -> ShaderToolService {
@@ -193,6 +215,134 @@ fn preview_observation_read_never_uses_a_changed_candidate_deployment() {
         }
         other => panic!("expected changed-candidate refusal, got {other:?}"),
     }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn attached_preview_runtime_launch_is_candidate_scoped_exact_and_single_flight() {
+    let base = temp_base("preview-runtime-launch");
+    let tool = build_dummy(&base, "gglab-shaderc.exe");
+    let runtime = build_preview_runtime(&base);
+    let tool_content = std::fs::read(&tool).unwrap();
+    let runtime_content = std::fs::read(&runtime).unwrap();
+    let bound_candidate = candidate(&tool, &tool_content);
+    let svc = service(&base, 5_000);
+    let session_id = "78".repeat(16);
+
+    let admission = svc
+        .launch_preview_runtime(&bound_candidate, &session_id)
+        .unwrap();
+    let (runtime_id, settle) = match (admission.result, admission.settle) {
+        (
+            PreviewRuntimeLaunchResult::Launched {
+                runtime_id,
+                runtime_identity,
+            },
+            Some(settle),
+        ) => {
+            assert_eq!(runtime_identity, hash_bytes(&runtime_content));
+            (runtime_id, settle)
+        }
+        other => panic!("expected one launched Runtime, got {other:?}"),
+    };
+
+    let record_path = base.join("preview-runtime-launch.txt");
+    for _ in 0..100 {
+        if record_path.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let record = std::fs::read_to_string(record_path).unwrap();
+    let mut lines = record.lines();
+    let expected_args = [
+        "--lab",
+        "gglab.lab.shader_graph_preview",
+        "--shader-preview-session",
+        session_id.as_str(),
+        "--absolute-mouse",
+    ]
+    .join("\u{1}");
+    assert_eq!(lines.next(), Some(expected_args.as_str()));
+    assert_eq!(
+        PathBuf::from(lines.next().unwrap()).canonicalize().unwrap(),
+        base.canonicalize().unwrap()
+    );
+
+    let duplicate = svc
+        .launch_preview_runtime(&bound_candidate, &session_id)
+        .unwrap();
+    assert_eq!(
+        duplicate.result,
+        PreviewRuntimeLaunchResult::SessionAlreadyRunning { runtime_id }
+    );
+    assert!(duplicate.settle.is_none());
+
+    let stopped = svc.stop_preview_runtime(runtime_id);
+    assert!(stopped.stop_requested && !stopped.already_settled);
+    let exit = settle.join().unwrap();
+    assert_eq!(exit.runtime_id, runtime_id);
+    assert_eq!(exit.kind, PreviewRuntimeExitKind::Stopped);
+    assert!(svc.stop_preview_runtime(runtime_id).already_settled);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn attached_preview_runtime_refuses_missing_runtime_and_changed_candidate() {
+    let base = temp_base("preview-runtime-refusals");
+    let tool = build_dummy(&base, "gglab-shaderc.exe");
+    let tool_content = std::fs::read(&tool).unwrap();
+    let bound_candidate = candidate(&tool, &tool_content);
+    let svc = service(&base, 5_000);
+    let session_id = "9a".repeat(16);
+
+    let missing = svc
+        .launch_preview_runtime(&bound_candidate, &session_id)
+        .unwrap();
+    assert_eq!(
+        missing.result,
+        PreviewRuntimeLaunchResult::RuntimeUnavailable {
+            observation: PreviewRuntimeAvailabilityObservation::Missing
+        }
+    );
+    assert!(missing.settle.is_none());
+
+    std::fs::write(&tool, b"changed candidate").unwrap();
+    let changed = svc
+        .launch_preview_runtime(&bound_candidate, &session_id)
+        .unwrap();
+    assert!(matches!(
+        changed.result,
+        PreviewRuntimeLaunchResult::CandidateInvalidated {
+            observation: CandidateObservation::Changed,
+            ..
+        }
+    ));
+    assert!(changed.settle.is_none());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn dropping_the_host_service_stops_and_reaps_an_attached_preview_runtime() {
+    let base = temp_base("preview-runtime-service-drop");
+    let tool = build_dummy(&base, "gglab-shaderc.exe");
+    let _runtime = build_preview_runtime(&base);
+    let tool_content = std::fs::read(&tool).unwrap();
+    let bound_candidate = candidate(&tool, &tool_content);
+    let svc = service(&base, 5_000);
+
+    let admission = svc
+        .launch_preview_runtime(&bound_candidate, &"ab".repeat(16))
+        .unwrap();
+    let settle = admission.settle.expect("the attached Runtime must launch");
+    assert!(matches!(
+        admission.result,
+        PreviewRuntimeLaunchResult::Launched { .. }
+    ));
+
+    drop(svc);
+    let exit = settle.join().unwrap();
+    assert_eq!(exit.kind, PreviewRuntimeExitKind::Stopped);
     let _ = std::fs::remove_dir_all(&base);
 }
 

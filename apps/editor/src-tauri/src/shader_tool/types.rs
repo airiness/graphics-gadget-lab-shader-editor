@@ -186,6 +186,77 @@ pub enum PreviewObservationHostReadResult {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PreviewRuntimeId {
+    pub sequence: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PreviewRuntimeAvailabilityObservation {
+    #[serde(rename = "missing")]
+    Missing,
+    #[serde(rename = "unreadable")]
+    Unreadable,
+}
+
+/// Admission result for the host-owned attached Preview Runtime launch. The
+/// runtime executable and argv never cross the web boundary.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind")]
+pub enum PreviewRuntimeLaunchResult {
+    #[serde(rename = "launched")]
+    Launched {
+        #[serde(rename = "runtimeId")]
+        runtime_id: PreviewRuntimeId,
+        #[serde(rename = "runtimeIdentity")]
+        runtime_identity: String,
+    },
+    #[serde(rename = "session-already-running")]
+    SessionAlreadyRunning {
+        #[serde(rename = "runtimeId")]
+        runtime_id: PreviewRuntimeId,
+    },
+    #[serde(rename = "candidate-invalidated")]
+    CandidateInvalidated {
+        candidate: ToolCandidate,
+        observation: CandidateObservation,
+        #[serde(default, rename = "observedIdentity")]
+        observed_identity: Option<String>,
+    },
+    #[serde(rename = "runtime-unavailable")]
+    RuntimeUnavailable {
+        observation: PreviewRuntimeAvailabilityObservation,
+    },
+    #[serde(rename = "launch-failed")]
+    LaunchFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PreviewRuntimeExitKind {
+    #[serde(rename = "exited")]
+    Exited,
+    #[serde(rename = "stopped")]
+    Stopped,
+    #[serde(rename = "wait-failed")]
+    WaitFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewRuntimeExit {
+    pub runtime_id: PreviewRuntimeId,
+    pub kind: PreviewRuntimeExitKind,
+    pub exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewRuntimeStopOutcome {
+    pub runtime_id: PreviewRuntimeId,
+    pub stop_requested: bool,
+    pub already_settled: bool,
+}
+
 /// `cancel(buildId)` outcome — always a value: the attempt was in flight
 /// and is now canceled, or it had already settled (cancel reports that and
 /// changes nothing).
@@ -346,6 +417,28 @@ mod wire_shape_tests {
         assert_eq!(value["observation"], "changed");
         assert_eq!(value["observedIdentity"], "b".repeat(64));
         assert_eq!(value["candidate"]["toolPath"], "C:/tools/gglab-shaderc.exe");
+    }
+
+    #[test]
+    fn the_preview_runtime_wire_shapes_keep_ids_identities_and_exit_facts() {
+        let launched = PreviewRuntimeLaunchResult::Launched {
+            runtime_id: PreviewRuntimeId { sequence: 9 },
+            runtime_identity: "c".repeat(64),
+        };
+        let value = serde_json::to_value(launched).unwrap();
+        assert_eq!(value["kind"], "launched");
+        assert_eq!(value["runtimeId"]["sequence"], 9);
+        assert_eq!(value["runtimeIdentity"], "c".repeat(64));
+
+        let exit = PreviewRuntimeExit {
+            runtime_id: PreviewRuntimeId { sequence: 9 },
+            kind: PreviewRuntimeExitKind::Stopped,
+            exit_code: None,
+        };
+        let value = serde_json::to_value(exit).unwrap();
+        assert_eq!(value["runtimeId"]["sequence"], 9);
+        assert_eq!(value["kind"], "stopped");
+        assert!(value["exitCode"].is_null());
     }
 
     #[test]

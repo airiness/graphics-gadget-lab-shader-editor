@@ -12,7 +12,9 @@
  * - settlements enter the client's Pending/Published/Failed/Canceled line;
  * - candidate/session-scoped Runtime observations are read single-flight,
  *   strictly decoded, cross-linked, and monotonically accepted before they
- *   can project Current/LastGood/Stale/Rejected.
+ *   can project Current/LastGood/Stale/Rejected;
+ * - attached Runtime startup is success-first, candidate/session-bound, and
+ *   single-flight, with host-issued process identity and explicit teardown.
  */
 import {
     admitPreviewBuild,
@@ -40,6 +42,11 @@ import {
     type PreviewObservationOrderingRejection,
     type PreviewObservationReadRejection,
     type PreviewRuntimeProjection,
+    type PreviewRuntimeBoundary,
+    type PreviewRuntimeExit,
+    type PreviewRuntimeId,
+    type PreviewRuntimeLaunchResult,
+    type PreviewRuntimeStopOutcome,
     type PreviewRequestWellFormed,
     type ToolCandidate,
     type ToolCompatibilityState,
@@ -140,6 +147,7 @@ export type PreviewHandshakeAttemptRecord =
 export type PreviewBuildGateReason =
     | PreviewCompositionRefusal
     | { readonly reason: "ordinary-tool-not-compatible"; readonly toolStatus: ToolCompatibilityState["status"] }
+    | { readonly reason: "attached-runtime-deployment-mismatch" }
     | { readonly reason: "preview-proof-missing" }
     | { readonly reason: "preview-ineligible"; readonly eligibility: PreviewEligibility }
     | { readonly reason: "request-not-well-formed"; readonly verdict: Exclude<PreviewRequestWellFormed, { ok: true }> };
@@ -180,6 +188,44 @@ export type PreviewObservationRefresh =
       }
     | { readonly kind: "ordering-rejected"; readonly rejection: PreviewObservationOrderingRejection }
     | { readonly kind: "accepted"; readonly changed: boolean; readonly observation: PreviewObservation };
+
+export type AttachedPreviewRuntimeState =
+    | { readonly kind: "idle" }
+    | { readonly kind: "launching" }
+    | {
+          readonly kind: "running";
+          readonly runtimeId: PreviewRuntimeId;
+          readonly runtimeIdentity: string;
+      }
+    | {
+          readonly kind: "stopping";
+          readonly runtimeId: PreviewRuntimeId;
+          readonly runtimeIdentity: string;
+      }
+    | {
+          readonly kind: "exited";
+          readonly runtimeIdentity: string;
+          readonly exit: PreviewRuntimeExit;
+      }
+    | {
+          readonly kind: "launch-refused";
+          readonly result: Exclude<PreviewRuntimeLaunchResult, { readonly kind: "launched" }>;
+      };
+
+export type AttachedPreviewLaunch =
+    | { readonly launched: false; readonly reason: "initial-publication-unavailable" }
+    | { readonly launched: false; readonly reason: "already-running"; readonly runtimeId: PreviewRuntimeId }
+    | {
+          readonly launched: false;
+          readonly reason: "host-refused";
+          readonly result: Exclude<PreviewRuntimeLaunchResult, { readonly kind: "launched" }>;
+      }
+    | {
+          readonly launched: true;
+          readonly runtimeId: PreviewRuntimeId;
+          readonly runtimeIdentity: string;
+          readonly exited: Promise<PreviewRuntimeExit>;
+      };
 
 function requirementsEqual(left: PreviewEligibilityRequirement, right: PreviewEligibilityRequirement): boolean {
     return (
@@ -244,12 +290,16 @@ export class PreviewBuildFlow {
     private acceptedObservationState: PreviewObservation | null = null;
     private lastObservationRefreshState: PreviewObservationRefresh | null = null;
     private observationLane: Promise<PreviewObservationRefresh> | null = null;
+    private runtimeStateValue: AttachedPreviewRuntimeState = { kind: "idle" };
+    private runtimeLaunchLane: Promise<AttachedPreviewLaunch> | null = null;
+    private runtimeCandidateValue: ToolCandidate | null = null;
 
     constructor(
         private readonly boundary: HostToolBoundary,
         private readonly toolPort: PreviewToolStatePort,
         sessionId: string,
         private readonly observationBoundary: PreviewObservationBoundary,
+        private readonly runtimeBoundary: PreviewRuntimeBoundary,
     ) {
         this.sessionState = createPreviewBuildSession(sessionId);
     }
@@ -276,6 +326,10 @@ export class PreviewBuildFlow {
 
     get lastObservationRefresh(): PreviewObservationRefresh | null {
         return this.lastObservationRefreshState;
+    }
+
+    get runtimeState(): AttachedPreviewRuntimeState {
+        return this.runtimeStateValue;
     }
 
     private compose(input: PreviewCompositionInput): PreviewComposition {
@@ -419,6 +473,17 @@ export class PreviewBuildFlow {
             return {
                 admitted: false,
                 reasons: [{ reason: "ordinary-tool-not-compatible", toolStatus: tool.status }],
+                request: null,
+                eligibility: null,
+            };
+        }
+        if (
+            this.runtimeCandidateValue !== null &&
+            this.runtimeCandidateValue.toolPath !== tool.candidate.toolPath
+        ) {
+            return {
+                admitted: false,
+                reasons: [{ reason: "attached-runtime-deployment-mismatch" }],
                 request: null,
                 eligibility: null,
             };
@@ -572,7 +637,8 @@ export class PreviewBuildFlow {
         return { canceled: outcome.canceled, alreadySettled: outcome.alreadySettled };
     }
 
-    /** Reads one observation for the deployment that owns the newest issued
+    /** Reads one observation from the attached Runtime's deployment while it
+     *  is live, otherwise from the deployment that owns the newest issued
      *  attempt. Concurrent callers join one host read. A malformed, unbound,
      *  or non-monotonic record never replaces the accepted last-good fact. */
     refreshObservation(): Promise<PreviewObservationRefresh> {
@@ -587,13 +653,28 @@ export class PreviewBuildFlow {
             this.lastObservationRefreshState = record;
             return Promise.resolve(record);
         }
-        const promise = this.runObservationRefresh(latest.candidate).finally(() => {
+        const promise = this.runObservationRefresh(this.observationCandidate(latest.candidate)).finally(() => {
             if (this.observationLane === promise) {
                 this.observationLane = null;
             }
         });
         this.observationLane = promise;
         return promise;
+    }
+
+    private observationCandidate(latestAttemptCandidate: ToolCandidate): ToolCandidate {
+        const runtimeCandidate = this.runtimeCandidateValue;
+        if (runtimeCandidate === null) {
+            return latestAttemptCandidate;
+        }
+        const currentTool = this.toolPort.current();
+        if (
+            "candidate" in currentTool &&
+            currentTool.candidate.toolPath === runtimeCandidate.toolPath
+        ) {
+            return currentTool.candidate;
+        }
+        return runtimeCandidate;
     }
 
     private async runObservationRefresh(candidate: ToolCandidate): Promise<PreviewObservationRefresh> {
@@ -650,5 +731,112 @@ export class PreviewBuildFlow {
                 ? previewBuildIntentOf(gate.request, gate.eligibility.facts)
                 : null;
         return projectPreviewRuntime(this.sessionState.line, intent, this.acceptedObservationState);
+    }
+
+    /** Success-first attached launch. A strict Preview build result is the
+     *  only way a publication enters the line, so latestPublished is the
+     *  initial-publication proof. Later failed attempts do not erase that
+     *  active last-good pointer and therefore do not block a relaunch. */
+    launchAttachedPreview(): Promise<AttachedPreviewLaunch> {
+        if (this.runtimeLaunchLane !== null) {
+            return this.runtimeLaunchLane;
+        }
+        if (this.runtimeStateValue.kind === "running" || this.runtimeStateValue.kind === "stopping") {
+            return Promise.resolve({
+                launched: false,
+                reason: "already-running",
+                runtimeId: this.runtimeStateValue.runtimeId,
+            });
+        }
+        const published = [...this.sessionState.line.attempts]
+            .sort((left, right) => right.attemptSequence - left.attemptSequence)
+            .find(
+                (attempt) =>
+                    attempt.state === "settled" && attempt.outcome.kind === "published",
+            );
+        if (published === undefined) {
+            return Promise.resolve({ launched: false, reason: "initial-publication-unavailable" });
+        }
+        this.runtimeStateValue = { kind: "launching" };
+        this.runtimeCandidateValue = published.candidate;
+        const promise = this.runAttachedLaunch(published.candidate).finally(() => {
+            if (this.runtimeLaunchLane === promise) {
+                this.runtimeLaunchLane = null;
+            }
+        });
+        this.runtimeLaunchLane = promise;
+        return promise;
+    }
+
+    private async runAttachedLaunch(candidate: ToolCandidate): Promise<AttachedPreviewLaunch> {
+        let result: PreviewRuntimeLaunchResult;
+        try {
+            result = await this.runtimeBoundary.launchAttachedPreview(
+                candidate,
+                this.sessionState.sessionId,
+            );
+        } catch (error) {
+            this.runtimeCandidateValue = null;
+            this.runtimeStateValue = { kind: "idle" };
+            throw error;
+        }
+        if (result.kind !== "launched") {
+            if (result.kind === "candidate-invalidated") {
+                this.toolPort.candidateInvalidated(result);
+            }
+            this.runtimeCandidateValue = null;
+            this.runtimeStateValue = { kind: "launch-refused", result };
+            return { launched: false, reason: "host-refused", result };
+        }
+        this.runtimeStateValue = {
+            kind: "running",
+            runtimeId: result.runtimeId,
+            runtimeIdentity: result.runtimeIdentity,
+        };
+        void result.exited.then((exit) => {
+            const state = this.runtimeStateValue;
+            if (
+                (state.kind === "running" || state.kind === "stopping") &&
+                state.runtimeId.sequence === exit.runtimeId.sequence
+            ) {
+                this.runtimeCandidateValue = null;
+                this.runtimeStateValue = {
+                    kind: "exited",
+                    runtimeIdentity: state.runtimeIdentity,
+                    exit,
+                };
+            }
+        });
+        return {
+            launched: true,
+            runtimeId: result.runtimeId,
+            runtimeIdentity: result.runtimeIdentity,
+            exited: result.exited,
+        };
+    }
+
+    async stopAttachedPreview(): Promise<PreviewRuntimeStopOutcome | null> {
+        const state = this.runtimeStateValue;
+        if (state.kind !== "running" && state.kind !== "stopping") {
+            return null;
+        }
+        this.runtimeStateValue = {
+            kind: "stopping",
+            runtimeId: state.runtimeId,
+            runtimeIdentity: state.runtimeIdentity,
+        };
+        try {
+            return await this.runtimeBoundary.stopAttachedPreview(state.runtimeId);
+        } catch (error) {
+            const current = this.runtimeStateValue;
+            if (current.kind === "stopping" && current.runtimeId.sequence === state.runtimeId.sequence) {
+                this.runtimeStateValue = {
+                    kind: "running",
+                    runtimeId: state.runtimeId,
+                    runtimeIdentity: state.runtimeIdentity,
+                };
+            }
+            throw error;
+        }
     }
 }

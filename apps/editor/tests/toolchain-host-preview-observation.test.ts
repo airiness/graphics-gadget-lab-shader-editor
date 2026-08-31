@@ -5,10 +5,15 @@ const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 
 vi.mock("@tauri-apps/api/core", () => ({
     invoke,
-    Channel: class {},
+    Channel: class<T> {
+        constructor(readonly onmessage: (message: T) => void) {}
+    },
 }));
 
-import { createTauriPreviewObservationBoundary } from "../src/toolchain-host.js";
+import {
+    createTauriPreviewObservationBoundary,
+    createTauriPreviewRuntimeBoundary,
+} from "../src/toolchain-host.js";
 
 const CANDIDATE: ToolCandidate = {
     rule: "explicit-config",
@@ -49,6 +54,51 @@ describe("Tauri Preview observation boundary", () => {
             candidate: CANDIDATE,
             observation: "missing",
             observedIdentity: null,
+        });
+    });
+});
+
+describe("Tauri attached Preview Runtime boundary", () => {
+    beforeEach(() => invoke.mockReset());
+
+    it("launches by candidate/session identity and binds the exit channel", async () => {
+        invoke.mockResolvedValue({
+            kind: "launched",
+            runtimeId: { sequence: 4 },
+            runtimeIdentity: "c".repeat(64),
+        });
+        const boundary = await createTauriPreviewRuntimeBoundary();
+        const launch = await boundary.launchAttachedPreview(CANDIDATE, "56".repeat(16));
+        expect(invoke).toHaveBeenCalledOnce();
+        const call = invoke.mock.calls[0];
+        expect(call?.[0]).toBe("shader-preview-launch-runtime");
+        expect(call?.[1]).toMatchObject({ candidate: CANDIDATE, sessionId: "56".repeat(16) });
+        if (launch.kind !== "launched") {
+            throw new Error("the host script must launch");
+        }
+        const channel = (call?.[1] as { channel: { onmessage: (value: unknown) => void } }).channel;
+        channel.onmessage({ runtimeId: { sequence: 4 }, kind: "exited", exitCode: 0 });
+        await expect(launch.exited).resolves.toEqual({
+            runtimeId: { sequence: 4 },
+            kind: "exited",
+            exitCode: 0,
+        });
+    });
+
+    it("stops by host-issued RuntimeId only", async () => {
+        invoke.mockResolvedValue({
+            runtimeId: { sequence: 7 },
+            stopRequested: true,
+            alreadySettled: false,
+        });
+        const boundary = await createTauriPreviewRuntimeBoundary();
+        await expect(boundary.stopAttachedPreview({ sequence: 7 })).resolves.toEqual({
+            runtimeId: { sequence: 7 },
+            stopRequested: true,
+            alreadySettled: false,
+        });
+        expect(invoke).toHaveBeenCalledWith("shader-preview-stop-runtime", {
+            runtimeId: { sequence: 7 },
         });
     });
 });

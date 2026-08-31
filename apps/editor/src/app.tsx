@@ -67,6 +67,7 @@ import { DEFAULT_BUILD_TARGET } from "./build-target-config.js";
 import type { BuildInspectorRow } from "./build-inspector.js";
 import { createDesktopFileChannel, isDesktopHost, type FileChannel } from "./host-io.js";
 import { useNativeBuild } from "./useNativeBuild.js";
+import { useShaderPreview } from "./useShaderPreview.js";
 import type { NativeBuildReadiness } from "./native-build-readiness.js";
 import { basenameOf, closeAction, createSession, isDirty, provenanceFromImport, provenanceFromFile, saveTarget, sessionSaved, sessionTitle, type CloseChoice, type DocumentProvenance, type DocumentSession } from "./document-session.js";
 import { saveShortcutOf } from "./shortcuts.js";
@@ -912,6 +913,14 @@ export function App() {
         descriptorDetail,
         emission,
     });
+    const preview = useShaderPreview({
+        document,
+        descriptor,
+        descriptorCompatible: profileCompatibility !== null && profileCompatibility.verdict.ok,
+        emission,
+        configuredTarget: native.target.target,
+        nativeFlow: native.flow,
+    });
 
     const nativeTargetOptions = useMemo(() => {
         const supported = native.flow?.supportedTargets ?? null;
@@ -1383,6 +1392,118 @@ export function App() {
                             </>
                         )}
                         {native.notes.length > 0 && <ul className="gglab-native-notes">{renderNativeNotes(native.notes)}</ul>}
+                    </section>
+                    <section className="gglab-panel gglab-panel-native-build" aria-label="Shader Graph Preview">
+                        <h2 className="gglab-panel-title">Shader Graph Preview</h2>
+                        <p className="gglab-panel-hint">
+                            Authoritative attached preview through the main-owned Preview Program and GGLab Runtime. Launch is success-first: no Runtime process starts before a valid publication exists.
+                        </p>
+                        <Badge
+                            variant={
+                                preview.projection?.freshness === "current"
+                                    ? "ok"
+                                    : preview.projection?.freshness === "rejected"
+                                      ? "error"
+                                      : preview.projection?.freshness === "stale"
+                                        ? "warn"
+                                        : "accent"
+                            }
+                        >
+                            <BadgeDot />
+                            {preview.projection?.freshness ?? "idle"}
+                        </Badge>
+                        <dl className="gglab-facts" style={{ marginTop: 10 }}>
+                            <div className="gglab-fact">
+                                <dt>Session</dt>
+                                <dd className="mono">{preview.sessionId ?? "(desktop Preview host unavailable)"}</dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Runtime</dt>
+                                <dd className="mono">
+                                    {preview.runtime.kind}
+                                    {"runtimeId" in preview.runtime
+                                        ? ` · #${preview.runtime.runtimeId.sequence}`
+                                        : preview.runtime.kind === "exited"
+                                          ? ` · ${preview.runtime.exit.kind}`
+                                          : preview.runtime.kind === "launch-refused"
+                                            ? ` · ${preview.runtime.result.kind}`
+                                            : ""}
+                                </dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Runtime executable identity</dt>
+                                <dd className="mono">
+                                    {"runtimeIdentity" in preview.runtime ? preview.runtime.runtimeIdentity : "—"}
+                                </dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Target</dt>
+                                <dd className="mono">{native.target.target}</dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Current publication</dt>
+                                <dd className="mono">{preview.projection?.currentPublicationId ?? "—"}</dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Last-good publication</dt>
+                                <dd className="mono">{preview.projection?.lastGoodPublicationId ?? "—"}</dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Observation</dt>
+                                <dd className="mono">
+                                    {preview.lastObservationRefresh?.kind ?? "not read"}
+                                    {preview.projection?.rejectionCode !== null && preview.projection?.rejectionCode !== undefined
+                                        ? ` · ${preview.projection.rejectionCode}`
+                                        : ""}
+                                </dd>
+                            </div>
+                        </dl>
+                        {preview.gate !== null && !preview.gate.admitted && (
+                            <ul className="gglab-native-reasons">
+                                {preview.gate.reasons.map((reason, index) => (
+                                    <li key={`${reason.reason}-${index}`}>
+                                        <code className="gglab-panel-code">{reason.reason}</code>
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                        <ButtonGroup role="toolbar" aria-label="Shader Graph Preview actions">
+                            <Button
+                                variant="ghost"
+                                onClick={() => void preview.previewHandshake()}
+                                disabled={preview.flow === null || preview.handshakeInFlight}
+                            >
+                                {preview.handshakeInFlight ? "Proving Preview…" : "Prove Preview compatibility"}
+                            </Button>
+                            <Button
+                                variant="primary"
+                                onClick={() => void preview.buildPreview()}
+                                disabled={preview.flow === null || preview.buildInFlight || preview.gate?.admitted !== true}
+                            >
+                                {preview.buildInFlight ? "Building Preview…" : "Build / Update Preview"}
+                            </Button>
+                            <Button
+                                variant="secondary"
+                                onClick={() => void preview.launchPreview()}
+                                disabled={
+                                    preview.flow === null ||
+                                    preview.launchInFlight ||
+                                    !preview.initialPublicationAvailable ||
+                                    preview.runtime.kind === "running" ||
+                                    preview.runtime.kind === "stopping"
+                                }
+                            >
+                                {preview.launchInFlight ? "Launching…" : "Launch attached Lab"}
+                            </Button>
+                            <Button
+                                variant="ghost"
+                                onClick={() => void preview.stopPreview()}
+                                disabled={preview.runtime.kind !== "running" && preview.runtime.kind !== "stopping"}
+                            >
+                                Stop attached Lab
+                            </Button>
+                        </ButtonGroup>
+                        {preview.notes.length > 0 && <ul className="gglab-native-notes">{renderNativeNotes(preview.notes)}</ul>}
                     </section>
                         </>
                     )}
