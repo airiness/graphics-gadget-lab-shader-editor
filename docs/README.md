@@ -4,13 +4,19 @@ This repository owns the design documents of the GGLab shader editor.
 Documents here are authored and revised in this repository; this location is
 the normative home for the shader editor's architecture.
 
-## Normative document (this repository)
+## Normative documents (this repository)
 
 - `GGLab_Shader_Graph_Editor_Architecture.md` — authoring architecture
   baseline for the shader graph editor: ownership split across the GUI and
   CLI frontends, graph document model, type system, deterministic HLSL
   generation, descriptor contract, diagnostics, preview boundary, and
   invariants.
+
+- `GGLab_Shader_Toolchain_Integration_Design.md` — construction-level
+  design for the toolchain integration stage: discovery and the strict
+  readiness gate, the toolchain-client package boundary, the narrow
+  `ShaderToolService`, generated-source staging, revisioned build state,
+  the Build Inspector model, and the fake-process test model.
 
 This document originated in the GGLab docs repository and was transferred
 into this repository when the shader editor began owning its own

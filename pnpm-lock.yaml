@@ -51,6 +51,9 @@ importers:
       '@gglab/shader-graph-core':
         specifier: workspace:*
         version: link:../../packages/shader-graph-core
+      '@gglab/shader-toolchain-client':
+        specifier: workspace:*
+        version: link:../../packages/shader-toolchain-client
       '@tauri-apps/api':
         specifier: ^2.11.1
         version: 2.11.1
@@ -139,6 +142,18 @@ importers:
         version: 6.0.3
 
   packages/shader-graph-core:
+    devDependencies:
+      '@types/node':
+        specifier: ^26.0.0
+        version: 26.2.0
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.2.0)(jsdom@26.1.0)(vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12))
+
+  packages/shader-toolchain-client:
     devDependencies:
       '@types/node':
         specifier: ^26.0.0

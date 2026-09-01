@@ -1,0 +1,177 @@
+{
+  "name": "NativeCompileRequest well-formedness conformance cases",
+  "note": "Shared by BOTH sides of the host boundary: the client package's isWellFormedRequest (its authority) and the host service's request-shape validation (its mirror). Every case must be judged identically on both sides, naming the same field for the same refusal. If a new rule is wanted, change the client's declaration first, extend the cases here, and only then mirror it in the host.",
+  "cases": [
+    {
+      "name": "valid-minimal",
+      "request": {
+        "source": [104, 108, 115],
+        "sourceIdentity": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "target": "gglab-dx12",
+        "stage": "vertex",
+        "entry": "main",
+        "defines": [],
+        "includes": []
+      },
+      "expectWellFormed": true
+    },
+    {
+      "name": "empty-source-is-legal-per-declaration",
+      "request": {
+        "source": [],
+        "sourceIdentity": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "target": "gglab-dx12",
+        "stage": "vertex",
+        "entry": "main",
+        "defines": [],
+        "includes": []
+      },
+      "expectWellFormed": true
+    },
+    {
+      "name": "whitespace-only-target-is-legal-per-declaration",
+      "request": {
+        "source": [1],
+        "sourceIdentity": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "target": "   ",
+        "stage": "vertex",
+        "entry": "main",
+        "defines": [],
+        "includes": []
+      },
+      "expectWellFormed": true
+    },
+    {
+      "name": "empty-target",
+      "request": {
+        "source": [1],
+        "sourceIdentity": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "target": "",
+        "stage": "vertex",
+        "entry": "main",
+        "defines": [],
+        "includes": []
+      },
+      "expectWellFormed": false,
+      "expectReason": "target"
+    },
+    {
+      "name": "empty-stage",
+      "request": {
+        "source": [1],
+        "sourceIdentity": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "target": "gglab-dx12",
+        "stage": "",
+        "entry": "main",
+        "defines": [],
+        "includes": []
+      },
+      "expectWellFormed": false,
+      "expectReason": "stage"
+    },
+    {
+      "name": "empty-entry",
+      "request": {
+        "source": [1],
+        "sourceIdentity": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "target": "gglab-dx12",
+        "stage": "vertex",
+        "entry": "",
+        "defines": [],
+        "includes": []
+      },
+      "expectWellFormed": false,
+      "expectReason": "entry"
+    },
+    {
+      "name": "digest-wrong-length",
+      "request": {
+        "source": [1],
+        "sourceIdentity": "abcdef0123456789",
+        "target": "gglab-dx12",
+        "stage": "vertex",
+        "entry": "main",
+        "defines": [],
+        "includes": []
+      },
+      "expectWellFormed": false,
+      "expectReason": "sourceIdentity"
+    },
+    {
+      "name": "digest-wrong-alphabet",
+      "request": {
+        "source": [1],
+        "sourceIdentity": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdefg",
+        "target": "gglab-dx12",
+        "stage": "vertex",
+        "entry": "main",
+        "defines": [],
+        "includes": []
+      },
+      "expectWellFormed": false,
+      "expectReason": "sourceIdentity"
+    },
+    {
+      "name": "empty-define-name",
+      "request": {
+        "source": [1],
+        "sourceIdentity": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "target": "gglab-dx12",
+        "stage": "vertex",
+        "entry": "main",
+        "defines": [{ "name": "", "value": "1" }],
+        "includes": []
+      },
+      "expectWellFormed": false,
+      "expectReason": "defines"
+    },
+    {
+      "name": "unsorted-defines",
+      "request": {
+        "source": [1],
+        "sourceIdentity": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "target": "gglab-dx12",
+        "stage": "vertex",
+        "entry": "main",
+        "defines": [
+          { "name": "B", "value": "1" },
+          { "name": "A", "value": "2" }
+        ],
+        "includes": []
+      },
+      "expectWellFormed": false,
+      "expectReason": "defines"
+    },
+    {
+      "name": "duplicate-defines",
+      "request": {
+        "source": [1],
+        "sourceIdentity": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "target": "gglab-dx12",
+        "stage": "vertex",
+        "entry": "main",
+        "defines": [
+          { "name": "A", "value": "1" },
+          { "name": "A", "value": "2" }
+        ],
+        "includes": []
+      },
+      "expectWellFormed": false,
+      "expectReason": "defines"
+    },
+    {
+      "name": "empty-include",
+      "request": {
+        "source": [1],
+        "sourceIdentity": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "target": "gglab-dx12",
+        "stage": "vertex",
+        "entry": "main",
+        "defines": [],
+        "includes": [""]
+      },
+      "expectWellFormed": false,
+      "expectReason": "includes"
+    }
+  ]
+}

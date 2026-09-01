@@ -133,6 +133,34 @@ describe("host/file abstraction (native document I/O)", () => {
         }
     });
 
+    it("picks the tool executable as a FILE with the exe-first filter; cancel is null", async () => {
+        const { host, opens } = fakeHost({
+            openDialog: async () => "C:\\tools\\gglab-shaderc.exe",
+        });
+        const channel = createDesktopFileChannel(host);
+        expect(await channel.pickToolExecutablePath()).toBe("C:\\tools\\gglab-shaderc.exe");
+        expect(opens).toHaveLength(1);
+        const opts = opens[0] as { directory?: boolean; multiple?: boolean; filters?: Array<{ name?: string; extensions?: readonly string[] }> };
+        expect(opts.directory).toBe(false);
+        expect(opts.multiple).toBe(false);
+        expect(opts.filters?.[0]?.extensions).toEqual(["exe"]);
+        expect(opts.filters?.[1]?.extensions).toEqual([]); // the honest "all files" escape
+    });
+
+    it("picks the sibling build-output location as a DIRECTORY (single pick); cancel is null", async () => {
+        const { host, opens } = fakeHost({
+            openDialog: async () => "C:\\Projects\\GGLab\\Build\\Output",
+        });
+        const channel = createDesktopFileChannel(host);
+        expect(await channel.pickSiblingBuildOutputDirectory()).toBe("C:\\Projects\\GGLab\\Build\\Output");
+        const opts = opens[0] as { directory?: boolean; multiple?: boolean };
+        expect(opts.directory).toBe(true);
+        expect(opts.multiple).toBe(false);
+
+        const { host: cancelHost } = fakeHost({ openDialog: async () => null });
+        expect(await createDesktopFileChannel(cancelHost).pickSiblingBuildOutputDirectory()).toBeNull();
+    });
+
     it("picks save destinations through the save dialog, passing a default name", async () => {
         const { host, saves } = fakeHost();
         const channel = createDesktopFileChannel(host);
@@ -187,15 +215,41 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         );
     });
 
-    it("keeps the host custom-command-free (official plugins only, no arbitrary-path commands)", async () => {
+    it("exposes exactly six tool commands plus the bounded Preview observation/process surface (EXACT set)", async () => {
+        const libRs = await readFile(resolve(tauriDir, "src/lib.rs"), "utf8");
         const mainRs = await readFile(resolve(tauriDir, "src/main.rs"), "utf8");
-        expect(mainRs).toContain("tauri_plugin_dialog");
-        expect(mainRs).toContain("tauri_plugin_fs");
-        // No hand-written IPC surface, no raw arbitrary-path fs access.
+        // The shell keeps the two official plugins — the access model.
+        expect(libRs).toContain("tauri_plugin_dialog");
+        expect(libRs).toContain("tauri_plugin_fs");
+        // The web-facing command surface is EXACTLY the six tool operations
+        // plus the separately declared, compiler-free observation read and
+        // bounded attached Runtime launch/stop pair. Any additional command
+        // is a surface violation.
+        // The attribute is `#[tauri::command(rename = "<id>")]` — the
+        // `[` sits inside a character class here: a bare `[` in a regex
+        // literal would start a class of its own and swallow the rest
+        // of the pattern. The rename value is the web-facing invoke id.
+        const commandPattern = /#[[]tauri::command\(rename = "([^"]+)"\)/g;
+        const commands = [...libRs.matchAll(commandPattern)].map((m) => m[1] as string);
+        expect(commands.sort()).toEqual([
+            "shader-preview-launch-runtime",
+            "shader-preview-read-observation",
+            "shader-preview-stop-runtime",
+            "shader-tool-build-preview",
+            "shader-tool-cancel",
+            "shader-tool-compile",
+            "shader-tool-discover",
+            "shader-tool-handshake",
+            "shader-tool-preview-handshake",
+        ]);
+        // No raw arbitrary-path file access anywhere on the web-facing
+        // host surface itself.
         expect(mainRs).not.toContain("#[tauri::command]");
         expect(mainRs).not.toContain("invoke_handler");
         expect(mainRs).not.toContain("fs::read_to_string");
         expect(mainRs).not.toContain("fs::write");
+        expect(libRs).not.toContain("fs::read_to_string");
+        expect(libRs).not.toContain('std::fs::write');
     });
 
     it("tightens the webview CSP now that the host can move real files", async () => {

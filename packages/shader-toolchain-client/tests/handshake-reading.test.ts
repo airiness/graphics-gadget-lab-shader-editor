@@ -1,0 +1,242 @@
+import { describe, expect, it } from "vitest";
+import {
+    readHandshakeDocument,
+    type HandshakeReadOutcome,
+} from "../src/handshake-document.js";
+import {
+    COMPILE_SUCCESS,
+    DESCRIBE_SUCCESS,
+    DESCRIBE_SUCCESS_LEGACY_V1,
+    DESCRIBE_USAGE_ERROR,
+    DESCRIBE_COMPILER_UNAVAILABLE,
+    DESCRIBE_INTERNAL_ERROR,
+} from "./fixtures/envelope-goldens.js";
+
+function mutateGolden(golden: string, change: (base: Record<string, unknown>) => Record<string, unknown>): string {
+    const base = JSON.parse(golden) as Record<string, unknown>;
+    return JSON.stringify(change(base));
+}
+
+function withoutField(golden: string, field: string): string {
+    return mutateGolden(golden, (base) => {
+        const copy = { ...base };
+        delete copy[field];
+        return copy;
+    });
+}
+
+function withField(golden: string, field: string, value: unknown): string {
+    return mutateGolden(golden, (base) => ({ ...base, [field]: value }));
+}
+
+function expectRejected(outcome: HandshakeReadOutcome, reason: string, document: string): void {
+    expect(outcome.status, document).toBe("rejected");
+    if (outcome.status !== "rejected") {
+        return;
+    }
+    expect(outcome.rejection.reason, document).toBe(reason);
+    expect(outcome.rejection.detail, document).not.toBe("");
+}
+
+describe("the strict handshake reader", () => {
+    it("reads the published success document and carries every verdict fact", () => {
+        const outcome = readHandshakeDocument(DESCRIBE_SUCCESS);
+        expect(outcome.status).toBe("read");
+        if (outcome.status !== "read") {
+            return;
+        }
+        const document = outcome.document;
+        expect(document.command).toBe("describe");
+        expect(document.success).toBe(true);
+        if (document.success !== true) {
+            throw new Error("the success golden must read as the success document");
+        }
+        expect(document.status).toBe("ok");
+        expect(document.exitCode).toBe(0);
+        expect(document.processContractVersion).toBe(2);
+        expect(document.compilePolicyRevision).toBe(1);
+        expect(document.toolIdentity).toBe("gglab-shaderc");
+        expect(document.toolVersion).toBe("1.1.0");
+        expect(document.producerKind).toBe("dxc");
+        expect(document.producerIdentity).toBe("Microsoft Direct3D 12 Shader Compiler 10.0.26100.2 (dxc)");
+        expect(document.diagnostics).toEqual([]);
+    });
+
+    it("holds the adjudicated target wire names exactly", () => {
+        const outcome = readHandshakeDocument(DESCRIBE_SUCCESS);
+        if (outcome.status !== "read") {
+            throw new Error("the success golden must read");
+        }
+        const document = outcome.document;
+        if (document.success !== true) {
+            throw new Error("the success golden must read as the success document");
+        }
+        expect(document.supportedTargets).toEqual(["gglab-dx12", "gglab-vulkan13"]);
+    });
+
+    it("reads every published failure state as a structured payload only", () => {
+        const cases: ReadonlyArray<{ text: string; status: string; exitCode: number; message: string }> = [
+            { text: DESCRIBE_USAGE_ERROR, status: "usage-error", exitCode: 2, message: "describe accepts no arguments" },
+            { text: DESCRIBE_COMPILER_UNAVAILABLE, status: "compiler-unavailable", exitCode: 4, message: "DXC producer runtime could not be resolved" },
+            { text: DESCRIBE_INTERNAL_ERROR, status: "internal-error", exitCode: 7, message: "describe internal failure" },
+        ];
+        for (const item of cases) {
+            const outcome = readHandshakeDocument(item.text);
+            expect(outcome.status, item.text).toBe("read");
+            if (outcome.status !== "read") {
+                continue;
+            }
+            expect(outcome.document.success).toBe(false);
+            expect(outcome.document.status).toBe(item.status);
+            expect(outcome.document.exitCode).toBe(item.exitCode);
+            expect(outcome.document.processContractVersion).toBe(2);
+            // The failure payload carries no business facts — the shape
+            // itself excludes them.
+            expect(outcome.document).not.toHaveProperty("toolIdentity");
+            expect(outcome.document).not.toHaveProperty("supportedTargets");
+            expect(outcome.document.diagnostics).toEqual([{ message: item.message }]);
+        }
+    });
+
+    it("rejects out-of-channel documents before any field is trusted", () => {
+        expectRejected(readHandshakeDocument(""), "not-json", "<empty>");
+        expectRejected(readHandshakeDocument("{ not json"), "not-json", "{ not json");
+        expectRejected(readHandshakeDocument("[]"), "not-an-object", "[]");
+        expectRejected(
+            readHandshakeDocument('{"a":1}\n{"b":2}'),
+            "not-a-single-line-json-document",
+            'two lines',
+        );
+        expectRejected(readHandshakeDocument(COMPILE_SUCCESS), "command-not-describe", COMPILE_SUCCESS);
+    });
+
+    it("rejects a missing required field explicitly, on either document kind", () => {
+        expectRejected(readHandshakeDocument(withoutField(DESCRIBE_SUCCESS, "toolVersion")), "missing-field", "success without toolVersion");
+        expectRejected(readHandshakeDocument(withoutField(DESCRIBE_SUCCESS, "processContractVersion")), "missing-field", "success without the contract axis");
+        expectRejected(readHandshakeDocument(withoutField(DESCRIBE_SUCCESS, "compilePolicyRevision")), "missing-field", "success without the compile-policy axis");
+        expectRejected(readHandshakeDocument(withoutField(DESCRIBE_USAGE_ERROR, "processContractVersion")), "missing-field", "failure without the contract axis");
+        expectRejected(readHandshakeDocument(withoutField(DESCRIBE_USAGE_ERROR, "diagnostics")), "missing-field", "failure without diagnostics");
+    });
+
+    it("ignores fields outside the contract's shape — the wire contract owns its tolerance policy, the client does not pre-declare one", () => {
+        const successExtra = withField(DESCRIBE_SUCCESS, "experimental", true);
+        expect(readHandshakeDocument(successExtra).status, successExtra).toBe("read");
+        const failureExtra = withField(DESCRIBE_USAGE_ERROR, "extra", 1);
+        expect(readHandshakeDocument(failureExtra).status, failureExtra).toBe("read");
+    });
+
+    it("rejects a status outside the published vocabulary", () => {
+        expectRejected(readHandshakeDocument(withField(DESCRIBE_SUCCESS, "status", "succeeded")), "status-outside-vocabulary", "success status \"succeeded\"");
+        expectRejected(readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "status", "mystery")), "status-outside-vocabulary", "failure status \"mystery\"");
+        expectRejected(readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "status", "compile-failed")), "status-outside-vocabulary", "compile status on a handshake");
+    });
+
+    it("rejects the KNOWN success-only fields on a failure payload — a contract rule, absent not ignored", () => {
+        expectRejected(readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "toolIdentity", "gglab-shaderc")), "forbidden-field", "failure carrying toolIdentity");
+        expectRejected(readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "supportedTargets", ["gglab-dx12"])), "forbidden-field", "failure carrying supportedTargets");
+        expectRejected(readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "compilePolicyRevision", 1)), "forbidden-field", "failure carrying compilePolicyRevision");
+    });
+
+    it("treats an out-of-range axis as a VALID machine document the client does not consume — refused at the axis, before any payload interpretation", () => {
+        // A future-axis document (beyond the declared 2..2), even one
+        // carrying fields the client has never seen, is refused AS AN
+        // AXIS OBSERVATION, never as malformed: the negotiation
+        // bootstrap holds.
+        const futureAxis = withField(DESCRIBE_SUCCESS, "processContractVersion", 3);
+        const futureOutcome = readHandshakeDocument(futureAxis);
+        expect(futureOutcome.status, futureAxis).toBe("unsupported-contract");
+        if (futureOutcome.status === "unsupported-contract") {
+            expect(futureOutcome.contract).toEqual({
+                supported: false,
+                reason: "observed-version-outside-range",
+                observedVersion: 3,
+                range: { minimum: 2, maximum: 2 },
+            });
+        }
+
+        const futureAxisNewField = withField(withField(DESCRIBE_SUCCESS, "processContractVersion", 3), "futureFact", 42);
+        expect(readHandshakeDocument(futureAxisNewField).status).toBe("unsupported-contract");
+
+        const futureFailure = withField(DESCRIBE_USAGE_ERROR, "processContractVersion", 3);
+        expect(readHandshakeDocument(futureFailure).status).toBe("unsupported-contract");
+
+        // The LEGACY v1 document — valid under the v1 contract, with no
+        // compilePolicyRevision — is refused the same way (axis 1 is
+        // outside the declared 2..2): no reinterpretation, no guessed
+        // policy mapping (docs declaration policy).
+        const legacyV1 = readHandshakeDocument(DESCRIBE_SUCCESS_LEGACY_V1);
+        expect(legacyV1.status, DESCRIBE_SUCCESS_LEGACY_V1).toBe("unsupported-contract");
+        if (legacyV1.status === "unsupported-contract") {
+            expect(legacyV1.contract).toEqual({
+                supported: false,
+                reason: "observed-version-outside-range",
+                observedVersion: 1,
+                range: { minimum: 2, maximum: 2 },
+            });
+        }
+
+        // The null-declaration world is reachable explicitly and refuses
+        // the same way, with its own structured reason.
+        const noDeclaration = readHandshakeDocument(DESCRIBE_SUCCESS, null);
+        expect(noDeclaration.status).toBe("unsupported-contract");
+        if (noDeclaration.status === "unsupported-contract") {
+            expect(noDeclaration.contract).toEqual({
+                supported: false,
+                reason: "no-supported-contract-declared",
+                observedVersion: 2,
+            });
+        }
+    });
+
+    it("rejects mistyped fields", () => {
+        expectRejected(readHandshakeDocument(withField(DESCRIBE_SUCCESS, "supportedTargets", ["gglab-dx12", 13])), "field-type-mismatch", "non-string target");
+        expectRejected(readHandshakeDocument(withField(DESCRIBE_SUCCESS, "exitCode", "zero")), "field-type-mismatch", "string exitCode");
+        expectRejected(readHandshakeDocument(withField(DESCRIBE_SUCCESS, "success", "yes")), "field-type-mismatch", "string success");
+        expectRejected(readHandshakeDocument(withField(DESCRIBE_SUCCESS, "processContractVersion", "1")), "field-type-mismatch", "string contract axis");
+        expectRejected(readHandshakeDocument(withField(DESCRIBE_SUCCESS, "compilePolicyRevision", "1")), "field-type-mismatch", "string compile-policy axis");
+    });
+
+    it("rejects malformed diagnostics", () => {
+        expectRejected(readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "diagnostics", [])), "diagnostics-malformed", "empty failure diagnostics");
+        expectRejected(
+            readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "diagnostics", [{}])),
+            "diagnostics-malformed",
+            "diagnostic without a message",
+        );
+        expectRejected(
+            readHandshakeDocument(withField(DESCRIBE_USAGE_ERROR, "diagnostics", [{ message: "x", sourceIdentity: 7 }])),
+            "diagnostics-malformed",
+            "non-string sourceIdentity",
+        );
+        expectRejected(readHandshakeDocument(withField(DESCRIBE_SUCCESS, "diagnostics", "a message")), "diagnostics-malformed", "diagnostics as a string");
+    });
+
+    it("ignores unknown fields inside a diagnostic entry — the contract owns its tolerance policy, at every level", () => {
+        const text = withField(DESCRIBE_USAGE_ERROR, "diagnostics", [
+            { message: "dxc reported an error", severity: "error" },
+        ]);
+        const outcome = readHandshakeDocument(text);
+        expect(outcome.status, text).toBe("read");
+        if (outcome.status === "read") {
+            expect(outcome.document.diagnostics).toEqual([
+                { message: "dxc reported an error" },
+            ]);
+        }
+    });
+
+    it("keeps the diagnostic source-identity fact when the tool reports one", () => {
+        const text = withField(DESCRIBE_USAGE_ERROR, "diagnostics", [
+            { message: "described the wrong source", sourceIdentity: "Shaders/Surface/1/emitted/surface.hlsl" },
+        ]);
+        const outcome = readHandshakeDocument(text);
+        expect(outcome.status, text).toBe("read");
+        if (outcome.status === "read") {
+            expect(outcome.document.diagnostics).toEqual([
+                {
+                    message: "described the wrong source",
+                    sourceIdentity: "Shaders/Surface/1/emitted/surface.hlsl",
+                },
+            ]);
+        }
+    });
+});

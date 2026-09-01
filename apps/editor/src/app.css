@@ -659,6 +659,157 @@ body {
     transform: rotate(180deg);
 }
 
+/* ---- inspector zones (right side) ------------------------------------------ */
+/* One responsibility per tab (design section 13, surface note). The tab
+   carries the zone's LIVE STATE badge — the strip organizes, it never
+   hides; a zoned-out zone still states itself on its label. */
+
+/* Two columns of state CARDS instead of one row of squeezed tabs: the
+   inspector is 336px wide, and an all-across row leaves too little per zone —
+   not enough for a zone name plus its live state badge. Two cards per
+   row give each zone the full state at its natural size; nothing is
+   abbreviated, nothing is clipped. */
+.gglab-inspector-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.gglab-inspector-tab {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 7px 4px;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid transparent;
+    border-radius: var(--r-1);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-heading);
+    text-align: center;
+}
+
+.gglab-inspector-tab:hover {
+    color: var(--text);
+    background: var(--panel-hi);
+    border-color: var(--border-soft);
+}
+
+.gglab-inspector-tab.active {
+    color: var(--text);
+    background: var(--panel-hi);
+    border-color: var(--border-soft);
+    font-weight: 700;
+}
+
+/* ---- contextual node properties -------------------------------------------
+   Selection is session state; values still enter the document only through
+   the core-judged authoring operation. Draft text lives in the panel and is
+   never a second graph model. */
+
+.gglab-node-properties-heading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    color: var(--text);
+}
+
+.gglab-node-properties-heading .mono {
+    min-width: 0;
+    color: var(--faint);
+    font-size: var(--type-code);
+    overflow-wrap: anywhere;
+}
+
+.gglab-node-property-editor,
+.gglab-node-property-readonly {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-soft);
+}
+
+.gglab-node-property-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+    gap: 8px;
+}
+
+.gglab-node-property-field {
+    display: grid;
+    gap: 4px;
+}
+
+.gglab-node-property-label,
+.gglab-node-property-readonly > span {
+    color: var(--faint);
+    font-size: var(--type-meta);
+}
+
+.gglab-node-property-input {
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+    text-align: right;
+}
+
+.gglab-node-property-hint,
+.gglab-node-property-empty,
+.gglab-node-property-readonly p {
+    margin: 8px 0 0;
+    color: var(--faint);
+    font-size: var(--type-meta);
+    line-height: var(--lh-body);
+}
+
+.gglab-node-property-error {
+    margin: 8px 0 0;
+    color: var(--error);
+    font-size: var(--type-meta);
+    line-height: var(--lh-body);
+}
+
+.gglab-node-property-readonly {
+    display: grid;
+    gap: 5px;
+}
+
+.gglab-node-property-readonly code {
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+}
+
+/* ---- path fields (input + native browse) ---------------------------------- */
+/* The path value stays typeable (it is configuration), and the browse
+   button is the convenience: the native dialog picks, the configured
+   value is what the next discovery resolves over. */
+
+.gglab-native-path-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.gglab-native-path-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    /* A path is a data string: read as a string (mono). The full value
+       stays reachable via the input's title attribute. */
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+}
+
+.gglab-native-path-browse {
+    flex: 0 0 auto;
+}
+
 .gglab-section-body {
     padding: 2px 0 10px;
 }
@@ -1397,4 +1548,122 @@ button.gglab-diagnostics-item:hover {
 .gglab-emission-problem.gglab-emission-severity-warning {
     color: var(--warn);
     font-size: var(--type-body);
+}
+
+
+/* ---- native build (compositions and surface) ----------------------------- */
+
+.gglab-native-reasons {
+    margin: 8px 0 0;
+    padding-left: 18px;
+    color: var(--warn);
+    font-size: var(--type-body);
+    line-height: var(--lh-body);
+}
+
+.gglab-native-reasons li {
+    margin: 2px 0;
+}
+
+.gglab-native-notes {
+    margin: 8px 0 0;
+    padding-left: 18px;
+    font-size: var(--type-meta);
+    line-height: var(--lh-body);
+}
+
+.gglab-native-notes li {
+    margin: 3px 0;
+    color: var(--muted);
+}
+
+.gglab-native-notes li.gglab-note-refusal {
+    color: var(--warn);
+}
+
+.gglab-native-notes li.gglab-note-ok {
+    color: var(--text);
+}
+
+/* Evidence rows (the replayable Build Inspector facts) — two-line
+   structure: name + value share the top line (the value owns the right
+   half, wraps as long as it needs, mono — a full path stays readable),
+   the source of truth sits below, full width, in the quiet voice. */
+
+.gglab-native-fact-detail {
+    display: block;
+    padding: 6px 0;
+}
+
+.gglab-native-fact-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.gglab-native-fact-row dt {
+    max-width: 45%;
+    white-space: normal;
+}
+
+.gglab-native-fact-value {
+    margin: 0;
+    text-align: right;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+}
+
+.gglab-native-fact-source {
+    margin: 3px 0 0;
+    color: var(--faint);
+    font-size: var(--type-meta);
+}
+
+.gglab-native-select {
+    max-width: 220px;
+}
+
+/* Configuration fields — stacked blocks: short label, the explanation in
+   the hint, the control on its own full-width row. (The old single-row
+   label+control flex row is gone: it crushed the path display.) */
+
+.gglab-native-field {
+    margin: 4px 0 0;
+}
+
+.gglab-native-field-label {
+    display: block;
+    margin: 0 0 2px;
+    color: var(--muted);
+    font-size: var(--type-body);
+    font-weight: var(--weight-heading);
+}
+
+.gglab-native-field-hint {
+    margin: 0 0 6px;
+    color: var(--faint);
+    font-size: var(--type-meta);
+    line-height: var(--lh-body);
+}
+
+.gglab-native-state {
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+}
+
+.gglab-native-state-current,
+.gglab-native-state-last-good {
+    color: var(--ok, var(--text));
+}
+
+.gglab-native-state-stale {
+    color: var(--muted);
+}
+
+.gglab-native-state-failed,
+.gglab-native-state-canceled {
+    color: var(--warn);
 }

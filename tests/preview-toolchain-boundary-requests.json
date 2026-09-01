@@ -1,0 +1,196 @@
+{
+  "name": "NativePreviewBuildRequest well-formedness conformance cases",
+  "note": "Shared by the TypeScript declaration and the Rust host mirror. These are request-shape facts only; Preview compatibility remains client-owned.",
+  "cases": [
+    {
+      "name": "valid-minimal",
+      "request": {
+        "sessionId": "12121212121212121212121212121212",
+        "targetProfile": "gglab-dx12",
+        "profileId": "gglab.surface",
+        "profileVersion": 1,
+        "previewInputContractId": "gglab.preview-input.surface.numeric",
+        "previewProgramDescriptorIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "generatedSourceIdentity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "generatedSourceBytes": [104, 108, 115, 108],
+        "attemptSequence": 1
+      },
+      "expectWellFormed": true
+    },
+    {
+      "name": "empty-generated-source-is-legal",
+      "request": {
+        "sessionId": "12121212121212121212121212121212",
+        "targetProfile": "gglab-vulkan13",
+        "profileId": "gglab.surface",
+        "profileVersion": 2,
+        "previewInputContractId": "gglab.preview-input.surface.texture2d",
+        "previewProgramDescriptorIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "generatedSourceIdentity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "generatedSourceBytes": [],
+        "attemptSequence": 2
+      },
+      "expectWellFormed": true
+    },
+    {
+      "name": "uppercase-session-id",
+      "request": {
+        "sessionId": "AB121212121212121212121212121212",
+        "targetProfile": "gglab-dx12",
+        "profileId": "gglab.surface",
+        "profileVersion": 1,
+        "previewInputContractId": "numeric",
+        "previewProgramDescriptorIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "generatedSourceIdentity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "generatedSourceBytes": [1],
+        "attemptSequence": 1
+      },
+      "expectWellFormed": false,
+      "expectReason": "sessionId"
+    },
+    {
+      "name": "empty-target-profile",
+      "request": {
+        "sessionId": "12121212121212121212121212121212",
+        "targetProfile": "",
+        "profileId": "gglab.surface",
+        "profileVersion": 1,
+        "previewInputContractId": "numeric",
+        "previewProgramDescriptorIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "generatedSourceIdentity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "generatedSourceBytes": [1],
+        "attemptSequence": 1
+      },
+      "expectWellFormed": false,
+      "expectReason": "targetProfile"
+    },
+    {
+      "name": "empty-profile-id",
+      "request": {
+        "sessionId": "12121212121212121212121212121212",
+        "targetProfile": "gglab-dx12",
+        "profileId": "",
+        "profileVersion": 1,
+        "previewInputContractId": "numeric",
+        "previewProgramDescriptorIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "generatedSourceIdentity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "generatedSourceBytes": [1],
+        "attemptSequence": 1
+      },
+      "expectWellFormed": false,
+      "expectReason": "profileId"
+    },
+    {
+      "name": "zero-profile-version",
+      "request": {
+        "sessionId": "12121212121212121212121212121212",
+        "targetProfile": "gglab-dx12",
+        "profileId": "gglab.surface",
+        "profileVersion": 0,
+        "previewInputContractId": "numeric",
+        "previewProgramDescriptorIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "generatedSourceIdentity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "generatedSourceBytes": [1],
+        "attemptSequence": 1
+      },
+      "expectWellFormed": false,
+      "expectReason": "profileVersion"
+    },
+    {
+      "name": "empty-preview-input-contract",
+      "request": {
+        "sessionId": "12121212121212121212121212121212",
+        "targetProfile": "gglab-dx12",
+        "profileId": "gglab.surface",
+        "profileVersion": 1,
+        "previewInputContractId": "",
+        "previewProgramDescriptorIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "generatedSourceIdentity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "generatedSourceBytes": [1],
+        "attemptSequence": 1
+      },
+      "expectWellFormed": false,
+      "expectReason": "previewInputContractId"
+    },
+    {
+      "name": "profile-version-outside-safe-integer-range",
+      "request": {
+        "sessionId": "12121212121212121212121212121212",
+        "targetProfile": "gglab-dx12",
+        "profileId": "gglab.surface",
+        "profileVersion": 9007199254740992,
+        "previewInputContractId": "numeric",
+        "previewProgramDescriptorIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "generatedSourceIdentity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "generatedSourceBytes": [1],
+        "attemptSequence": 1
+      },
+      "expectWellFormed": false,
+      "expectReason": "profileVersion"
+    },
+    {
+      "name": "uppercase-preview-descriptor-identity",
+      "request": {
+        "sessionId": "12121212121212121212121212121212",
+        "targetProfile": "gglab-dx12",
+        "profileId": "gglab.surface",
+        "profileVersion": 1,
+        "previewInputContractId": "numeric",
+        "previewProgramDescriptorIdentity": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "generatedSourceIdentity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "generatedSourceBytes": [1],
+        "attemptSequence": 1
+      },
+      "expectWellFormed": false,
+      "expectReason": "previewProgramDescriptorIdentity"
+    },
+    {
+      "name": "malformed-generated-source-identity",
+      "request": {
+        "sessionId": "12121212121212121212121212121212",
+        "targetProfile": "gglab-dx12",
+        "profileId": "gglab.surface",
+        "profileVersion": 1,
+        "previewInputContractId": "numeric",
+        "previewProgramDescriptorIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "generatedSourceIdentity": "not-a-digest",
+        "generatedSourceBytes": [1],
+        "attemptSequence": 1
+      },
+      "expectWellFormed": false,
+      "expectReason": "generatedSourceIdentity"
+    },
+    {
+      "name": "zero-attempt-sequence",
+      "request": {
+        "sessionId": "12121212121212121212121212121212",
+        "targetProfile": "gglab-dx12",
+        "profileId": "gglab.surface",
+        "profileVersion": 1,
+        "previewInputContractId": "numeric",
+        "previewProgramDescriptorIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "generatedSourceIdentity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "generatedSourceBytes": [1],
+        "attemptSequence": 0
+      },
+      "expectWellFormed": false,
+      "expectReason": "attemptSequence"
+    },
+    {
+      "name": "attempt-sequence-outside-safe-integer-range",
+      "request": {
+        "sessionId": "12121212121212121212121212121212",
+        "targetProfile": "gglab-dx12",
+        "profileId": "gglab.surface",
+        "profileVersion": 1,
+        "previewInputContractId": "numeric",
+        "previewProgramDescriptorIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "generatedSourceIdentity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "generatedSourceBytes": [1],
+        "attemptSequence": 9007199254740992
+      },
+      "expectWellFormed": false,
+      "expectReason": "attemptSequence"
+    }
+  ]
+}

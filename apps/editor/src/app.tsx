@@ -7,12 +7,13 @@
  * defined here: validation, port-level types, conformance, compatibility,
  * and emission all come from @gglab/shader-graph-core.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import {
     addConnection,
     removeConnection,
     removeConnectionsAtPort,
     removeNode,
+    setConstantValue,
     reconnectConnection,
     isEditingTextTarget,
     createHistory,
@@ -37,6 +38,7 @@ import {
     FlowViewport,
     Input,
     LayoutIcon,
+    NodePropertiesPanel,
     PanelCloseIcon,
     PanelOpenIcon,
     TrashIcon,
@@ -44,6 +46,7 @@ import {
     type AuthoringDropPayload,
     type AuthoringResult,
     type CanvasFocus,
+    type ConstantValue,
     FileIcon,
     type ConnectionRequest,
     type DescriptorPanelState,
@@ -63,9 +66,15 @@ import {
     type ShaderGraphDiagnostic,
     type SurfaceProfileDescriptor,
 } from "@gglab/shader-graph-core";
+import { DEFAULT_BUILD_TARGET } from "./build-target-config.js";
+import type { BuildInspectorRow } from "./build-inspector.js";
 import { createDesktopFileChannel, isDesktopHost, type FileChannel } from "./host-io.js";
+import { useNativeBuild } from "./useNativeBuild.js";
+import { useShaderPreview } from "./useShaderPreview.js";
+import type { NativeBuildReadiness } from "./native-build-readiness.js";
 import { basenameOf, closeAction, createSession, isDirty, provenanceFromImport, provenanceFromFile, saveTarget, sessionSaved, sessionTitle, type CloseChoice, type DocumentProvenance, type DocumentSession } from "./document-session.js";
 import { saveShortcutOf } from "./shortcuts.js";
+import { INSPECTOR_ZONES, INSPECTOR_ZONE_LABELS, inspectorZoneBadge, type InspectorZone, type InspectorZoneFacts } from "./inspector-tabs.js";
 // Type-only (erased at compile time): the official dialog option shapes,
 // used for the single documented boundary cast below. Runtime functions
 // are dynamically imported inside the desktop effect only.
@@ -133,6 +142,10 @@ export function App() {
     // Right inspector rail: layout session state, same model as the
     // library rail (the app owns which column is collapsed).
     const [inspectorOpen, setInspectorOpen] = useState(true);
+    /** The visible inspector zone — pure surface organization (inspector-tabs.ts):
+     *  the zoned-out zones keep their state on their TAB (a projection of
+     *  existing facts; the switch itself owns no state). */
+    const [inspectorZone, setInspectorZone] = useState<InspectorZone>("contract");
     // Connection selection — SESSION state (canvas interaction), never
     // document data: selecting or deselecting an edge must not dirty the
     // document. The projection (documentToFlow) receives it and renders
@@ -493,6 +506,10 @@ export function App() {
     const descriptor: SurfaceProfileDescriptor | null = descriptorState.kind === "ready" ? descriptorState.descriptor : null;
 
     const flow = useMemo(() => documentToFlow(document, focus, selectedConnectionId, selectedNodeId), [document, focus, selectedConnectionId, selectedNodeId]);
+    const selectedNode = useMemo(
+        () => document.nodes.find((node) => node.id === selectedNodeId) ?? null,
+        [document, selectedNodeId],
+    );
 
     const graphSets = useMemo<readonly DiagnosticSet[]>(() => {
         const validation = validateShaderGraph(document);
@@ -503,22 +520,45 @@ export function App() {
         ];
     }, [document]);
 
-    const contractSets = useMemo<readonly DiagnosticSet[]>(() => {
+    // The core's profile × descriptor compatibility — one memo, two
+    // consumers (the diagnostics panel AND the native-build readiness
+    // composition): the verdict has exactly one source here.
+    const profileCompatibility = useMemo(() => {
         if (descriptor === null) {
+            return null;
+        }
+        return {
+            verdict: checkProfileDescriptorCompatibility(document, descriptor),
+            conformance: checkProfileConformance(document, descriptor),
+        };
+    }, [document, descriptor]);
+
+    const contractSets = useMemo<readonly DiagnosticSet[]>(() => {
+        if (profileCompatibility === null) {
             return [];
         }
-        const conformance = checkProfileConformance(document, descriptor);
-        const compatibility = checkProfileDescriptorCompatibility(document, descriptor);
+        const { conformance, verdict } = profileCompatibility;
         return [
             { title: "Parameter conformance", ok: conformance.ok, diagnostics: conformance.diagnostics, passedText: "Parameters conform to the loaded descriptor." },
             {
                 title: "Profile × descriptor compatibility",
-                ok: compatibility.ok,
-                diagnostics: compatibility.diagnostics,
+                ok: verdict.ok,
+                diagnostics: verdict.diagnostics,
                 passedText: "The document's profile line and this descriptor instance agree on capabilities.",
             },
         ];
-    }, [document, descriptor]);
+    }, [profileCompatibility]);
+
+    // The core's own explanation of a failed verdict (its structured
+    // diagnostics, one line — the readiness reason carries the core's
+    // detail verbatim, never a paraphrase).
+    const descriptorDetail = useMemo(() => {
+        if (profileCompatibility === null) {
+            return "no descriptor instance is loaded";
+        }
+        const first = profileCompatibility.verdict.diagnostics.find((diagnostic) => diagnostic.severity === "error");
+        return first !== undefined ? `${first.code}: ${first.message}` : "the profile and the descriptor instance disagree on capabilities";
+    }, [profileCompatibility]);
 
     function applyAuthoring(result: AuthoringResult, label: string): void {
         if (result.applied) {
@@ -546,6 +586,12 @@ export function App() {
         const reason = result.refusal !== undefined ? result.refusal.reason : "The operation was not applied.";
         setOperationNotes((previous) => [...previous, reason]);
     }
+
+    const onConstantValueCommit = (nodeId: string, value: ConstantValue): boolean => {
+        const result = setConstantValue(document, nodeId, value);
+        applyAuthoring(result, `changed value on ${nodeId}`);
+        return result.applied;
+    };
 
     function selectDiagnostic(diagnostic: ShaderGraphDiagnostic): void {
         // Navigation intent → target resolved against the document from the
@@ -602,6 +648,8 @@ export function App() {
         setSelectedNodeId(nodeId);
         setSelectedConnectionId(null);
         setEdgeMenu(null);
+        setInspectorOpen(true);
+        setInspectorZone("selection");
     };
     const onCanvasClick = (): void => {
         setSelectedConnectionId(null);
@@ -620,6 +668,8 @@ export function App() {
         setEdgeMenu(null);
         setReconnectArmed(null);
         setNodeMenu({ nodeId, x: anchor.x, y: anchor.y });
+        setInspectorOpen(true);
+        setInspectorZone("selection");
     };
     const onEdgeContextMenu = (event: { clientX: number; clientY: number }, connectionId: string): void => {
         // Right-click selects (if needed) and offers the one destructive
@@ -869,6 +919,86 @@ export function App() {
     const contractProblemCount = contractSets.reduce((sum, set) => sum + set.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length, 0);
     const emissionIdentity = emission !== null && emission.ok && emission.sourceMap?.generatedSourceIdentity !== undefined ? emission.sourceMap.generatedSourceIdentity.slice(0, 12) + "…" : undefined;
 
+    // ---- native build (Step 4 surface) — the composition and gate ----
+    // Every RULE lives in the client (verdicts, the state machine, the
+    // build-line) and the pure editor modules (readiness composition,
+    // the session store, the inspector projection); the app owns only
+    // which facts feed them and the actions the user can take.
+    const native = useNativeBuild({
+        descriptor,
+        descriptorCompatible: profileCompatibility !== null && profileCompatibility.verdict.ok,
+        descriptorDetail,
+        emission,
+    });
+    const preview = useShaderPreview({
+        document,
+        descriptor,
+        descriptorCompatible: profileCompatibility !== null && profileCompatibility.verdict.ok,
+        emission,
+        configuredTarget: native.target.target,
+        nativeFlow: native.flow,
+    });
+
+    const nativeTargetOptions = useMemo(() => {
+        const supported = native.flow?.supportedTargets ?? null;
+        return Array.from(new Set<string>([native.target.target, DEFAULT_BUILD_TARGET, ...(supported ?? [])]));
+    }, [native.flow, native.target.target]);
+
+    // Discovery-config picks (design section 5, rules 1 and 2): the
+    // native dialog seam belongs to the file channel (desktop host only —
+    // nothing chooses a path on its own in a web shell); the picked value
+    // lands in the CONFIG SETTER, its single write path — nothing else
+    // moves (the next Re-discover resolves over it).
+    const browseToolPath = async (): Promise<void> => {
+        const channel = fileChannel;
+        if (channel === null) {
+            return;
+        }
+        try {
+            const path = await channel.pickToolExecutablePath();
+            if (path !== null) {
+                native.setToolPath(path);
+            }
+        } catch (error) {
+            native.addNote("refusal", `Tool path pick failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    };
+
+    const browseSiblingBuildOutput = async (): Promise<void> => {
+        const channel = fileChannel;
+        if (channel === null) {
+            return;
+        }
+        try {
+            const path = await channel.pickSiblingBuildOutputDirectory();
+            if (path !== null) {
+                native.setSiblingBuildOutput(path);
+            }
+        } catch (error) {
+            native.addNote("refusal", `Build-output pick failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    };
+
+    // The zone badges: each zone's live STATE projected from the facts
+    // above (design section 13, surface note) — the badges render, they
+    // own nothing: one source of truth per fact stands.
+    const inspectorZoneFacts: InspectorZoneFacts = {
+        selection: { nodeSelected: selectedNode !== null },
+        checks: {
+            ok: graphOk && contractOk && (loadResult === null || loadResult.ok),
+            problemCount:
+                graphProblemCount +
+                contractProblemCount +
+                (loadResult !== null ? loadResult.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length : 0),
+        },
+        document: { dirty },
+        emission: {
+            state: emission === null ? "none" : emission.ok === false ? "failed" : "ok",
+            problemCount: emission !== null && emission.ok === false ? emission.diagnostics.length : 0,
+        },
+        build: { ready: native.ready },
+    };
+
     return (
         <div className="gglab-app">
             <header className="gglab-header">
@@ -1033,7 +1163,40 @@ export function App() {
                                 </Button>
                             </div>
                         </div>
-                        <DescriptorPanel state={descriptorState} onStateChange={onDescriptorStateChange} openDescriptorFile={openDescriptorFile} />
+                        {/* Inspector zones (design section 13, surface note): one
+                            responsibility per tab; each tab carries its zone's
+                            LIVE STATE badge — the grouping organizes, it never
+                            hides: a zoned-out zone still states itself here. */}
+                        <div className="gglab-inspector-tabs" role="tablist" aria-label="Inspector zones">
+                            {INSPECTOR_ZONES.map((zone) => {
+                                const badge = inspectorZoneBadge(zone, inspectorZoneFacts);
+                                return (
+                                    <button
+                                        key={zone}
+                                        type="button"
+                                        role="tab"
+                                        aria-selected={inspectorZone === zone}
+                                        className={inspectorZone === zone ? "gglab-inspector-tab active" : "gglab-inspector-tab"}
+                                        onClick={() => setInspectorZone(zone)}
+                                    >
+                                        <span>{INSPECTOR_ZONE_LABELS[zone]}</span>
+                                        <Badge variant={badge.variant}>
+                                            <BadgeDot />
+                                            {badge.label}
+                                        </Badge>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        {inspectorZone === "selection" && (
+                            <NodePropertiesPanel
+                                node={selectedNode}
+                                onConstantValueCommit={onConstantValueCommit}
+                            />
+                        )}
+                        {inspectorZone === "contract" && (
+                            <>
+                            <DescriptorPanel state={descriptorState} onStateChange={onDescriptorStateChange} openDescriptorFile={openDescriptorFile} />
                     {graphSets.map((set) => (
                         <DiagnosticsPanel key={set.title} title={set.title} diagnostics={set.diagnostics} ok={set.ok} passedText={set.passedText} onSelect={selectDiagnostic} />
                     ))}
@@ -1043,6 +1206,10 @@ export function App() {
                     {loadResult !== null && (
                         <DiagnosticsPanel title={loadResult.title} diagnostics={loadResult.diagnostics} ok={loadResult.ok} passedText={loadResult.passedText} onSelect={selectDiagnostic} />
                     )}
+                            </>
+                        )}
+                        {inspectorZone === "document" && (
+                            <>
                     {/* Desktop slice 1: native document I/O. The host owns
                         path + UTF-8 bytes only; the core owns parse/
                         serialize; this app owns which text moves where. */}
@@ -1085,6 +1252,10 @@ export function App() {
                             </Button>
                         </ButtonGroup>
                     </section>
+                            </>
+                        )}
+                        {inspectorZone === "emission" && (
+                            <>
                     <section className="gglab-panel gglab-emission-block">
                         <h2 className="gglab-panel-title">Emission preview</h2>
                         <ButtonGroup className="mb-2.5">
@@ -1094,7 +1265,273 @@ export function App() {
                         </ButtonGroup>
                         {emission !== null && <EmissionPreview emission={emission} />}
                         </section>
+                            </>
+                        )}
+                        {inspectorZone === "build" && (
+                            <>
+                    {/* Native build — readiness, gate, build line, and the
+                        Build Inspector projection (one source of truth
+                        per field; the inspector never computes facts). */}
+                    <section className="gglab-panel gglab-panel-native-build" aria-label="Native build">
+                        <h2 className="gglab-panel-title">Native build</h2>
+                        <p className="gglab-panel-hint">
+                            Tool readiness, proof, and the generated-function facts for the native production contract. The generated surface function is a
+                            function contract, not a complete program entry.
+                        </p>
+                        <Badge variant={native.ready ? "ok" : "error"}>
+                            <BadgeDot />
+                            {native.ready ? "Ready" : "NotReady"}
+                        </Badge>
+                        {readyReasonList(native.readiness) !== null && <ul className="gglab-native-reasons">{readyReasonList(native.readiness)}</ul>}
+                        {/* Program-composition state: carried INSIDE the
+                            readiness reason list above (one source per
+                            fact, one verdict — Preview Program design
+                            v1.0): while this surface owns no
+                            complete-program composition, the readiness
+                            verdict is NotReady [ProgramCompositionUnavailable]
+                            and the gate refuses structurally. No second
+                            display surface for it here. */}
+                        {/* Configuration (sections 5 and 8) — each field is a
+                            stacked block: a short label, the explanation in
+                            the hint, and the control on its own full-width
+                            row. A long label never shares the value's row
+                            again (the path display is never crushed). */}
+                        <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
+                            Configuration
+                        </h3>
+                        <div className="gglab-native-field">
+                            <label className="gglab-native-field-label" htmlFor="native-tool-path">
+                                Tool path
+                            </label>
+                            <p className="gglab-native-field-hint">
+                                Explicit configuration — discovery rule 1. Empty means not configured: that rule records its own failure.
+                            </p>
+                            <div className="gglab-native-path-row">
+                                <Input
+                                    id="native-tool-path"
+                                    className="gglab-native-path-input"
+                                    placeholder="C:\…\gglab-shaderc.exe"
+                                    title={native.discoveryConfig.explicitConfig === "" ? undefined : native.discoveryConfig.explicitConfig}
+                                    value={native.discoveryConfig.explicitConfig}
+                                    onChange={(event) => native.setToolPath(event.currentTarget.value)}
+                                    aria-label="Explicit tool path (discovery rule 1)"
+                                />
+                                {fileChannel !== null && (
+                                    <Button variant="ghost" className="gglab-native-path-browse" onClick={() => void browseToolPath()}>
+                                        <FileIcon />
+                                        Browse…
+                                    </Button>
+                                )}
+                            </div>
+                        </div>
+                        <div className="gglab-native-field">
+                            <label className="gglab-native-field-label" htmlFor="native-sibling-build">
+                                Build-output location
+                            </label>
+                            <p className="gglab-native-field-hint">
+                                Sibling GGLab build output — discovery rule 2; optional.
+                            </p>
+                            <div className="gglab-native-path-row">
+                                <Input
+                                    id="native-sibling-build"
+                                    className="gglab-native-path-input"
+                                    placeholder="…\Build\Output\x64"
+                                    title={native.discoveryConfig.siblingBuildOutput === "" ? undefined : native.discoveryConfig.siblingBuildOutput}
+                                    value={native.discoveryConfig.siblingBuildOutput}
+                                    onChange={(event) => native.setSiblingBuildOutput(event.currentTarget.value)}
+                                    aria-label="Configured sibling build-output location (discovery rule 2)"
+                                />
+                                {fileChannel !== null && (
+                                    <Button variant="ghost" className="gglab-native-path-browse" onClick={() => void browseSiblingBuildOutput()}>
+                                        <FileIcon />
+                                        Browse…
+                                    </Button>
+                                )}
+                            </div>
+                        </div>
+                        <div className="gglab-native-field">
+                            <label className="gglab-native-field-label" htmlFor="native-build-target">
+                                Build target
+                            </label>
+                            <p className="gglab-native-field-hint">
+                                Explicit configuration (development default {DEFAULT_BUILD_TARGET}); the next BuildIntent carries it.
+                            </p>
+                            <select id="native-build-target" className="gglab-native-select" value={native.target.target} onChange={(event) => native.setTarget(event.currentTarget.value)}>
+                                {nativeTargetOptions.map((option) => (
+                                    <option key={option} value={option}>
+                                        {option}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        {/* Actions, in lifecycle order: resolve the tool
+                            (the rule walk), establish proof (the handshake).
+                            No compile action: the function-only program
+                            composition is unavailable in this editor (the
+                            state above), so the surface offers no path to
+                            issue one. */}
+                        <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
+                            Actions
+                        </h3>
+                        <ButtonGroup role="toolbar" aria-label="native build actions">
+                            <Button variant="ghost" onClick={() => void native.discoverNow()} disabled={native.discoveryInFlight}>
+                                {native.discoveryInFlight ? "Discovering…" : "Re-discover"}
+                            </Button>
+                            <Button variant="ghost" onClick={() => void native.handshakeNow()} disabled={native.handshakeInFlight}>
+                                {native.handshakeInFlight ? "Handshaking…" : "Handshake (establish proof)"}
+                            </Button>
+                        </ButtonGroup>
+                        {native.lineReport !== null && (
+                            <>
+                                <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
+                                    Build line
+                                </h3>
+                                <p className="gglab-native-field-hint">
+                                    This session's attempts, in issue order (the newest issued anchors `current`).
+                                </p>
+                                <dl className="gglab-facts">
+                                    {native.lineReport.states.map((entry, index) => (
+                                        <div key={`${entry.buildId.sequence}-${index}`} className="gglab-fact">
+                                            <dt>
+                                                #{entry.buildId.sequence} · {entry.intent.target}
+                                            </dt>
+                                            <dd className={`gglab-native-state gglab-native-state-${entry.state}`}>{entry.state}</dd>
+                                        </div>
+                                    ))}
+                                </dl>
+                            </>
+                        )}
+                        {native.inspector !== null && (
+                            <>
+                                <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
+                                    Replayable evidence
+                                </h3>
+                                <p className="gglab-native-field-hint">
+                                    One source of truth per field: which tool, under which facts, compiled which exact bytes — and where each fact is true.
+                                </p>
+                                <InspectorRows title="Tool" rows={native.inspector.tool} />
+                                <InspectorRows title="Descriptor" rows={native.inspector.descriptor} />
+                                <InspectorRows title="Host · target · readiness" rows={native.inspector.hostAndTarget} />
+                                <InspectorRows title="Build" rows={native.inspector.build} />
+                            </>
+                        )}
+                        {native.notes.length > 0 && <ul className="gglab-native-notes">{renderNativeNotes(native.notes)}</ul>}
+                    </section>
+                    <section className="gglab-panel gglab-panel-native-build" aria-label="Shader Graph Preview">
+                        <h2 className="gglab-panel-title">Shader Graph Preview</h2>
+                        <p className="gglab-panel-hint">
+                            Authoritative attached preview through the main-owned Preview Program and GGLab Runtime. Launch is success-first: no Runtime process starts before a valid publication exists.
+                        </p>
+                        <Badge
+                            variant={
+                                preview.projection?.freshness === "current"
+                                    ? "ok"
+                                    : preview.projection?.freshness === "rejected"
+                                      ? "error"
+                                      : preview.projection?.freshness === "stale"
+                                        ? "warn"
+                                        : "accent"
+                            }
+                        >
+                            <BadgeDot />
+                            {preview.projection?.freshness ?? "idle"}
+                        </Badge>
+                        <dl className="gglab-facts" style={{ marginTop: 10 }}>
+                            <div className="gglab-fact">
+                                <dt>Session</dt>
+                                <dd className="mono">{preview.sessionId ?? "(desktop Preview host unavailable)"}</dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Runtime</dt>
+                                <dd className="mono">
+                                    {preview.runtime.kind}
+                                    {"runtimeId" in preview.runtime
+                                        ? ` · #${preview.runtime.runtimeId.sequence}`
+                                        : preview.runtime.kind === "exited"
+                                          ? ` · ${preview.runtime.exit.kind}`
+                                          : preview.runtime.kind === "launch-refused"
+                                            ? ` · ${preview.runtime.result.kind}`
+                                            : ""}
+                                </dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Runtime executable identity</dt>
+                                <dd className="mono">
+                                    {"runtimeIdentity" in preview.runtime ? preview.runtime.runtimeIdentity : "—"}
+                                </dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Target</dt>
+                                <dd className="mono">{native.target.target}</dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Current publication</dt>
+                                <dd className="mono">{preview.projection?.currentPublicationId ?? "—"}</dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Last-good publication</dt>
+                                <dd className="mono">{preview.projection?.lastGoodPublicationId ?? "—"}</dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Observation</dt>
+                                <dd className="mono">
+                                    {preview.lastObservationRefresh?.kind ?? "not read"}
+                                    {preview.projection?.rejectionCode !== null && preview.projection?.rejectionCode !== undefined
+                                        ? ` · ${preview.projection.rejectionCode}`
+                                        : ""}
+                                </dd>
+                            </div>
+                        </dl>
+                        {preview.gate !== null && !preview.gate.admitted && (
+                            <ul className="gglab-native-reasons">
+                                {preview.gate.reasons.map((reason, index) => (
+                                    <li key={`${reason.reason}-${index}`}>
+                                        <code className="gglab-panel-code">{reason.reason}</code>
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                        <ButtonGroup role="toolbar" aria-label="Shader Graph Preview actions">
+                            <Button
+                                variant="ghost"
+                                onClick={() => void preview.previewHandshake()}
+                                disabled={preview.flow === null || preview.handshakeInFlight}
+                            >
+                                {preview.handshakeInFlight ? "Proving Preview…" : "Prove Preview compatibility"}
+                            </Button>
+                            <Button
+                                variant="primary"
+                                onClick={() => void preview.buildPreview()}
+                                disabled={preview.flow === null || preview.buildInFlight || preview.gate?.admitted !== true}
+                            >
+                                {preview.buildInFlight ? "Building Preview…" : "Build / Update Preview"}
+                            </Button>
+                            <Button
+                                variant="secondary"
+                                onClick={() => void preview.launchPreview()}
+                                disabled={
+                                    preview.flow === null ||
+                                    preview.launchInFlight ||
+                                    !preview.initialPublicationAvailable ||
+                                    preview.runtime.kind === "running" ||
+                                    preview.runtime.kind === "stopping"
+                                }
+                            >
+                                {preview.launchInFlight ? "Launching…" : "Launch attached Lab"}
+                            </Button>
+                            <Button
+                                variant="ghost"
+                                onClick={() => void preview.stopPreview()}
+                                disabled={preview.runtime.kind !== "running" && preview.runtime.kind !== "stopping"}
+                            >
+                                Stop attached Lab
+                            </Button>
+                        </ButtonGroup>
+                        {preview.notes.length > 0 && <ul className="gglab-native-notes">{renderNativeNotes(preview.notes)}</ul>}
+                    </section>
                         </>
+                    )}
+                    </>
                     ) : (
                         <div className="gglab-side-rail" aria-label="Inspector (collapsed)">
                             <button type="button" className="gglab-rail-btn" onClick={() => setInspectorOpen(true)} title="Expand the inspector">
@@ -1150,6 +1587,72 @@ export function App() {
             </footer>
         </div>
     );
+}
+
+/** The readiness reason list (every non-Ready input's reason, complete
+ *  and structured — the inspector's explanation, not a failure). */
+function readyReasonList(readiness: NativeBuildReadiness): readonly ReactElement[] | null {
+    if (readiness.status === "Ready") {
+        return null;
+    }
+    const reasons = readiness.reasons;
+    return reasons.map((reason, index) => {
+        const extra =
+            reason.reason === "ToolUnproven"
+                ? ` [${reason.unprovenDetails.map((d) => d.code).join(", ")}]`
+                : reason.reason === "ToolIncompatible"
+                  ? ` [${reason.mismatchCodes.join(", ")}]`
+                  : "";
+        return (
+            <li key={`${reason.reason}-${index}`}>
+                <code className="gglab-panel-code">{reason.reason}</code> — {reason.detail}
+                {extra}
+            </li>
+        );
+    });
+}
+
+/** One inspector section: its owner's domain, and each fact row with
+ *  its VALUE (as the owner holds it) and the named SOURCE OF TRUTH —
+ *  the "one source of truth per field" guarantee, rendered. */
+function InspectorRows(props: { title: string; rows: readonly BuildInspectorRow[] }) {
+    const { title, rows } = props;
+    if (rows.length === 0) {
+        return null;
+    }
+    return (
+        <div>
+            <h3 className="gglab-panel-title" style={{ marginTop: 10 }}>
+                {title}
+            </h3>
+            <dl className="gglab-facts">
+                {rows.map((row, index) => (
+                    <div key={`${row.field}-${index}`} className="gglab-fact gglab-native-fact-detail">
+                        {/* Two-line fact: name + value share the top line
+                            (the value owns the right half and wraps as long
+                            as it needs — a full path stays readable); the
+                            source of truth sits below, full width, quiet. */}
+                        <div className="gglab-native-fact-row">
+                            <dt>{row.field}</dt>
+                            <dd className="gglab-native-fact-value">{row.value}</dd>
+                        </div>
+                        <div className="gglab-native-fact-source">
+                            source: {row.source}
+                        </div>
+                    </div>
+                ))}
+            </dl>
+        </div>
+    );
+}
+
+/** The native-build operation notes (structured one-liners). */
+function renderNativeNotes(notes: readonly { readonly level: "ok" | "info" | "refusal"; readonly text: string }[]): readonly ReactElement[] {
+    return notes.map((note, index) => (
+        <li key={`${note.text}-${index}`} className={`gglab-note-${note.level}`}>
+            {note.text}
+        </li>
+    ));
 }
 
 function EmissionPreview(props: { emission: HlslEmission }) {

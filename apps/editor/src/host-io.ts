@@ -28,8 +28,9 @@ export function isDesktopHost(host: unknown): boolean {
     return "__TAURI_INTERNALS__" in (host as Record<string, unknown>);
 }
 
-/** File dialog options as produced by the channel; `multiple`/`directory`
- * are always false (single file picks only). */
+/** File dialog options as produced by the channel. `multiple` is always
+ * false (single picks only); `directory` is false for the file picks and
+ * true for the directory pick (the build-output location). */
 export type FileDialogOptions = Record<string, unknown>;
 /** Official `open` shape; `null` is a user cancel. */
 export type HostOpenDialog = (options?: FileDialogOptions) => Promise<string | string[] | null>;
@@ -53,14 +54,21 @@ export interface DesktopHost {
 
 /**
  * A file channel: pick paths through native dialogs, then move UTF-8
- * text to/from the host. `null` from the pick calls means the user
- * cancelled; rejections are explicit IO failures (never silent).
+ * text to/from the host. The pick calls are the ONE owner of native
+ * dialog choices (documents + the discovery-config paths); `null` from a
+ * pick means the user cancelled; rejections are explicit IO failures
+ * (never silent).
  */
 export interface FileChannel {
     /** Open a document (`.shadergraph` / descriptor JSON) dialog → path. */
     pickDocumentPath(): Promise<string | null>;
     /** Open a descriptor (JSON) dialog → path. */
     pickDescriptorPath(): Promise<string | null>;
+    /** Pick the tool executable (native file dialog, exe filter) → path. */
+    pickToolExecutablePath(): Promise<string | null>;
+    /** Pick the sibling build-output directory (native directory dialog)
+     * → path. */
+    pickSiblingBuildOutputDirectory(): Promise<string | null>;
     /** Save dialog → destination path (the host appends nothing; the name
      * is what the user chose). */
     pickSavePath(defaultName: string): Promise<string | null>;
@@ -87,6 +95,26 @@ export function createDesktopFileChannel(host: DesktopHost): FileChannel {
                 multiple: false,
                 directory: false,
                 filters: [{ name: "Surface profile descriptor", extensions: ["json"] }],
+            });
+            return typeof picked === "string" ? picked : null;
+        },
+        async pickToolExecutablePath() {
+            const picked = await host.openDialog({
+                title: "Select the gglab-shaderc executable",
+                multiple: false,
+                directory: false,
+                filters: [
+                    { name: "Executables", extensions: ["exe"] },
+                    { name: "All files", extensions: [] },
+                ],
+            });
+            return typeof picked === "string" ? picked : null;
+        },
+        async pickSiblingBuildOutputDirectory() {
+            const picked = await host.openDialog({
+                title: "Select the sibling GGLab build-output directory",
+                multiple: false,
+                directory: true,
             });
             return typeof picked === "string" ? picked : null;
         },

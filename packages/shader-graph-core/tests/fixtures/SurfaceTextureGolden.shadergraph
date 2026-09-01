@@ -265,68 +265,68 @@
     "nodes": {
       "n.albedo": {
         "position": {
-          "x": 40,
-          "y": 80
+          "x": 60,
+          "y": 60
         }
       },
       "n.baseTint": {
         "position": {
-          "x": 40,
-          "y": 460
+          "x": 400,
+          "y": 378
         }
       },
       "n.clamp": {
         "position": {
-          "x": 840,
-          "y": 120
+          "x": 1080,
+          "y": 380
         }
       },
       "n.emis": {
         "position": {
-          "x": 620,
-          "y": 420
+          "x": 740,
+          "y": 182
         }
       },
       "n.emisClamp": {
         "position": {
-          "x": 840,
-          "y": 420
+          "x": 1080,
+          "y": 194
         }
       },
       "n.emission": {
         "position": {
-          "x": 40,
-          "y": 740
+          "x": 400,
+          "y": 674
         }
       },
       "n.mix": {
         "position": {
-          "x": 620,
-          "y": 120
+          "x": 740,
+          "y": 356
         }
       },
       "n.mixStrength": {
         "position": {
-          "x": 40,
-          "y": 600
+          "x": 400,
+          "y": 526
         }
       },
       "n.out": {
         "position": {
-          "x": 1060,
-          "y": 360
+          "x": 1420,
+          "y": 124
         }
       },
       "n.sample": {
         "position": {
-          "x": 320,
-          "y": 200
+          "x": 400,
+          "y": 74
         }
       },
       "n.uv": {
         "position": {
-          "x": 40,
-          "y": 220
+          "x": 60,
+          "y": 208
         }
       }
     }

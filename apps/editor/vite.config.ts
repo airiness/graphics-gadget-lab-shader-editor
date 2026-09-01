@@ -26,6 +26,16 @@ export default defineConfig({
         // (chokidar v4 option name is `ignored`, not `ignore`.)
         watch: {
             ignored: ["**/src-tauri/**", "**/target/**"],
+            // Windows dev loop: the editor's file backend writes via a
+            // temp-file + rename pattern, and a native `watch` on a handle
+            // held by a scanner/editor settles as EBUSY — which vite
+            // reports as an UNHANDLED FSWatcher error and dies on (the
+            // server goes down and the desktop window strands on its last
+            // page). Observed twice here (app.tsx, then app.css). A
+            // polling watcher holds no native handle locks; at this
+            // source-tree scale the cost is negligible.
+            usePolling: true,
+            interval: 300,
         },
     },
 });

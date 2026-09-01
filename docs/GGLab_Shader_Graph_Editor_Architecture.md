@@ -1,10 +1,10 @@
 # GGLab Shader Graph Editor — Authoring Architecture
 
-> Status: Proposed Architecture v0.3  
+> Status: Proposed Architecture v0.4  
 > Scope: Shader Graph authoring model, first-class authoring frontends (GUI and CLI), editor application architecture, graph-to-HLSL compilation, Shader Toolchain integration, diagnostics, preview, and the minimum GGLab Runtime integration seam  
 > Authority relationship: Extends the authoring side of `GGLab_Shader_System_Architecture.md`; does not replace Shader Toolchain or Runtime architecture  
 > Primary target: Windows desktop development workflow for Graphics Gadget Lab, plus a headless CLI surface for the same workflow  
-> Revision note: v0.3 adds the first-class CLI authoring frontend (machine/automation authoring over the same headless core) as a normative product boundary. v0.2 folds the architecture-review amendment and subsequent review closure into this single normative proposal.
+> Revision note: v0.3 adds the first-class CLI authoring frontend (machine/automation authoring over the same headless core) as a normative product boundary. v0.2 folds the architecture-review amendment and subsequent review closure into this single normative proposal. v0.4 records the Slice 2 owner decisions: the strict native-build readiness gate (no bypass), the Toolchain Client as a sibling domain of ShaderGraphCore, the narrow Tauri ShaderToolService with Rust as bounded execution only, service-owned staging of generated sources, target as explicit build configuration, the CLI build deferral, and the external ownership of the toolchain handshake wire contract.
 
 ---
 
@@ -1100,31 +1100,62 @@ UI richness must not leak into semantic persistence.
 
 Tauri is a process/filesystem bridge, not a compiler architecture layer.
 
-A narrow service may expose operations such as:
+The desktop host exposes a narrow `ShaderToolService` for the toolchain loop,
+in addition to the existing scoped document/descriptor file-IO surface (whose
+contract is unchanged):
 
 ```text
 ShaderToolService
-├─ discoverCompiler()
-├─ discoverSurfaceProfile()
-├─ getReadiness()
-├─ compile(request)
-├─ cancel(buildId)
-├─ openFileDialog()
-├─ saveFileDialog()
-└─ launchPreview(...)
+├─ discover()          candidate tool facts (path + which discovery rule hit); a fact, never a readiness claim
+├─ handshake()         runs the tool's discovery command; returns raw output bytes + exit code + timeout state
+├─ compile(request)    executes exactly one structured compile; returns raw output bytes + exit code + timeout state
+└─ cancel(buildId)     cancels exactly one in-flight build
 ```
 
 The frontend must not receive an unrestricted shell API.
 
 Process arguments are constructed structurally, not through concatenated shell strings.
 
+Division of labor (owner decision, 2026-08-24):
+
+- The **WebView never constructs raw argv** and holds no generic `spawn`
+  capability of any kind. It composes domain-shaped request values
+  (`NativeCompileRequest`: complete-program source bytes + identity, target,
+  program stage, program entry); a generated function alone cannot satisfy
+  that shape;
+  argv does not exist anywhere in the TypeScript world.
+- **Rust owns the bounded host boundary**: it validates the allowlisted
+  request shape, serializes the approved request into the tool's invocation
+  (structural arguments — host-internal, never a shell string, no
+  backend-policy ownership), executes with timeout/cancel, and returns raw
+  output bytes + exit code — the entire output of the boundary.
+- **Protocol interpretation exists exactly once, in the TypeScript Toolchain
+  Client**: handshake/result envelope parsing, status-vocabulary checking,
+  version and compatibility judgment, and the build-state rules. Readiness
+  composition and the product compile gate live in the editor
+  orchestration — not in the service and not in the client.
+- `launchPreview` remains a slot of the preview architecture, introduced only
+  after the standalone Preview Lab milestone is accepted; it is not a Slice 2
+  surface.
+
 ## 19.1 `gglab-shaderc` invocation
 
-The editor invokes `gglab-shaderc` as an external process/sidecar.
+The editor invokes `gglab-shaderc` as an external process/sidecar, through
+`ShaderToolService` only.
 
 It must not reconstruct DXC/backend arguments such as Vulkan binding shifts, shader-model details, target-environment flags, or coordinate policy.
 
 Those remain `ShaderToolchainCore` authority.
+
+The generated HLSL is a **derived build input**: it is staged into a private
+area owned exclusively by `ShaderToolService` — the service creates it, writes
+the delivered bytes, compiles against it, and cleans it up. Every build
+attempt owns its own private sub-area (per attempt), so concurrent attempts
+sharing identical source bytes never share staging, and one attempt's
+cleanup can never remove another attempt's source. The WebView never
+handles staging paths; the build result carries a service-local staging
+reference (a name for evidence, not a usable path) alongside the core's durable
+source identity (SHA-256 of the exact generated bytes).
 
 ---
 
@@ -1142,20 +1173,73 @@ Recommended precedence:
 
 The editor must not report native compilation as Ready merely because an executable exists.
 
-Conceptually:
+**Strict readiness gate (owner decision, 2026-08-24).** Readiness is TWO
+distinct state spaces in two domains — the tool's state is the client's
+verdict, the build's readiness is the editor's composition — never one mixed
+ladder, because mixing them leaves "tool OK but descriptor not" unnamed, and
+forces a domain to decide what it cannot know:
 
 ```text
-Ready =
-    compatible gglab-shaderc process contract
-    AND compatible required Surface Profile Descriptor
-    AND required deployment dependencies are resolvable
+Tool compatibility (judged by the Toolchain Client):
+  unavailable    no candidate resolved by the discovery rules
+  discovered     an executable resolved — a FACT, never a readiness claim
+  unproven       resolved, but not machine-readably proven compatible; the
+                 honest state of every real tool until the toolchain handshake
+                 contract exists and the client supports it
+  incompatible   resolved, and the TOOL's OWN reported facts contradict the
+                 required ones — facts the tool itself publishes; target
+                 coverage is a build fact, NOT part of this verdict
+  compatible     proven machine-readably compatible
+
+Native build readiness (composed ONCE, by the editor orchestration):
+  Ready          tool compatible AND profile/descriptor compatible (core
+                 verdict) AND host execution capability (service report) AND
+                 the explicit build target configured AND that target is
+                 among the tool's published supported targets
+  NotReady{…}   otherwise — ALWAYS with a structured reason list
+                 (ToolUnavailable, ToolDiscovered, ToolUnproven,
+                 ToolIncompatible, DescriptorIncompatible, HostUnavailable,
+                 TargetNotConfigured, TargetUnsupported); reasons are
+                 visible, complete, structured
 ```
+
+The handshake is the operation that establishes or refreshes proof, and it
+remains legal for ANY resolved candidate — `discovered`, `unproven`, and
+`incompatible` alike (`unavailable` has no candidate to handshake); it is
+exactly how an unproven tool — and an in-place updated tool — becomes `compatible`.
+The client's tool-side guarantee therefore covers the COMPILE direction
+only: it never forms a compile request out of an unproven / incompatible
+tool. Refusing the handshake on those states would deadlock the state
+machine and is explicitly NOT the rule.
+
+Guarantees, each layer owns exactly its own:
+
+- The **product compile gate lives in the editor orchestration**, and is
+  gated on `Ready` **with no bypass**: no dev mode, environment flag, or
+  local setting routes a request through a `NotReady` composition — the
+  path does not exist to configure because none is defined.
+- The **Toolchain Client guarantees the tool-operation level, split by
+  operation**: it never forms a compile request out of an unavailable /
+  unproven / incompatible tool (the refusal is structured); a handshake
+  stays legal for any resolved candidate — it is the means by which those
+  states enter, and re-enter after an update, `compatible`. It composes
+  nothing — it does not know the descriptor profile, the host, or the
+  target, and is not asked (target coverage is the editor's composition,
+  because only the editor holds the configuration).
+- The **Tauri service guarantees the boundary level**: it executes only
+  allowlisted, in-shape domain requests, bounded. It knows nothing about
+  readiness, and it cannot be asked.
+- Readiness is **derived, never remembered** (recomposed on every input
+  change); a downgrade (a reason appearing) is as visible as an upgrade.
 
 A missing/incompatible Surface Profile Descriptor for a profile that requires it is a first-class compatibility failure, not a reason to guess ABI rules.
 
 When multiple Surface Profile Descriptors are discoverable, selection first matches the graph's requested `profileId` and `profileVersion`. Within that compatible profile line, the editor selects the highest `descriptorVersion` it supports and records the exact selected descriptor/profile version in build state and the Build Inspector. A numerically newer descriptor for another profile/profileVersion must never cause an implicit profile upgrade.
 
-The Build Inspector should expose the resolved tool path, process-contract/tool version, producer identity, selected Surface Profile Descriptor/profile version, and target capability state.
+The Build Inspector should expose the resolved tool path and its discovery
+provenance, the proven tool version and process-contract axis, the producer
+identity, the selected Surface Profile Descriptor / profile / descriptorVersion,
+the explicit build target, and the current readiness state.
 
 ---
 
@@ -1165,24 +1249,51 @@ A machine-readable compile result is necessary but not sufficient for an indepen
 
 Before native compile requests, the editor proves that the discovered tool is contract-compatible.
 
-Machine-readable discovery should provide enough information for a handshake such as:
+**Wire-contract ownership (owner decision, 2026-08-24).** The discovery
+handshake contract is owned by the external GGLab Shader Toolchain contract
+authority — the normative design lives in the GGLab docs repository; the
+implementation and its contract self-tests live in the main GGLab
+repository. **What the editor requires is not what the editor owns.** This
+document records only the FACTS the editor's compatibility verdict requires;
+it does not define, duplicate, or assign values to the wire schema or to the
+toolchain's own version axes. Those facts (v1):
 
 ```text
-processContractVersion
-toolVersion
-producer/compiler identity
-supported targets
-supported capabilities
-artifact contract/schema compatibility
+the tool's identity                      (the descriptor requires one)
+the tool's version                        (judged against the descriptor's minimum under the descriptor's own comparison rule)
+the tool's process-contract version axis  (checked against the range the client declares it supports)
+the producer/compiler identity
+the tool's published supported targets    (extracted as a tool FACT;
+                                            whether it covers the configured target is the
+                                            editor composition's judgment — the client holds
+                                            no configuration, and this check is `TargetUnsupported`,
+                                            a build fact, never a tool verdict)
 ```
 
-The editor declares the process-contract version/range it supports.
+The artifact contract/schema axis is **not** a v1 requirement: it enters
+only when the editor/preview genuinely consumes a versioned ShaderArtifact
+contract. Do not invent handshake requirements from facts the compile
+result already carries.
+
+The client declares the handshake-contract versions it supports, and
+contract versions outside that range are explicitly unsupported (the client's
+own range discipline) — never silently accepted. For everything inside a
+supported published contract, the client follows the compatibility and
+field-tolerance rules that contract defines; the descriptor reader's
+strictness belongs to the descriptor schema the editor itself reads, and is
+not projected onto an external wire contract. Until it supports a published
+contract, its supported set is empty, which is exactly why no real tool can
+be proven yet — and none may be compiled through.
 
 An incompatible tool fails explicitly with a compatibility diagnostic. Do not:
 
 - silently fall back to another compiler;
-- parse human `--version` prose as the durable contract;
-- reconstruct missing target policy in the editor.
+- parse ANY human-facing surface (`--version` text, the `targets` listing,
+  help output) as compatibility evidence — human-facing output is stable for
+  humans, not a contract;
+- reconstruct missing target policy in the editor;
+- bypass the readiness gate by any dev mode, environment flag, or local
+  override — no such path exists to configure, because none is defined.
 
 ## 21.1 Surface Profile Descriptor compatibility
 
@@ -1223,11 +1334,38 @@ Generated source identity HN
 Build request BN
 ```
 
-When a result returns, it only becomes current if it still matches the current semantic/build revision.
+When a result returns, it only becomes **current** if it belongs to the
+CURRENT BUILD INTENT (the semantic identity of the compile request: generated
+source identity + target + stage/entry + the relevant proven tool/process
+facts — identity, version, process-contract axis, and the producer/compiler
+identity; the tool version does not imply the producer. The
+generated-source SHA-256 is its durable content component, never its whole
+anchor; same bytes under a different target, or under a different proven
+producer, is a different intent) and it is the newest successful attempt
+within that intent. Identity and attempt ordering are separate axes: a
+result is matched by intent AND ordered by its attempt; no new persisted
+identity is created.
 
-Otherwise mark it stale and retain it only as historical evidence if useful.
+Every result occupies an explicit, named state — there is no silent middle
+ground — and a failed build is a state, not an exception:
 
-A slow old compile must never overwrite a newer graph/artifact state.
+```text
+current      the newest successful result belonging to the current build intent
+stale        a once-current result displaced by a newer build intent; retained as evidence only
+last-good    the most recent successful result, preserved across newer failures
+failed       explicit diagnostics carried by the machine contract — never prose
+canceled     an in-flight build that was canceled by the user
+```
+
+A slow old compile must never overwrite a newer graph/artifact state. A failed
+newer build must never blank or erase a safe last-good result (see §30).
+
+Division of labor (owner decision, 2026-08-24): the **pure rules** — revision
+binding, stale judgment, last-good selection, transition legality — live in
+the Toolchain Client as headless, host-independent logic tested against fake
+processes. The **session storage** of these states for the current session is
+editor session state, composed in the shell — the same "pure verdict, session
+composition" pattern the authoring operations already use.
 
 ---
 
@@ -1321,6 +1459,7 @@ selected descriptorVersion
 generatedSourceIdentity
 resolved gglab-shaderc path
 processContractVersion
+compilePolicyRevision
 toolVersion
 DXC/producer identity
 target
@@ -1333,6 +1472,20 @@ diagnostics
 ```
 
 The goal is replayable evidence rather than opaque “Compile failed” UI.
+
+**One source of truth per field (owner decision, 2026-08-24).** Every inspector
+field has exactly one authority — discovery facts (service), proven tool
+version / process-contract axis / producer identity (tool result, parsed by
+the client), descriptor / profile compatibility (core verdict), target (explicit
+build configuration), generated-function facts (descriptor), generated-source
+identity (core emission), complete-program stage / entry (the main-owned program
+composition), result states (session store over the client's rules), and
+artifact facts (tool result) — and the inspector only projects. Descriptor
+`generatedFunction` facts must never be projected into complete-program
+stage/entry fields. A field with
+two sources of truth is a review failure, in the same sense a
+freeze-record/descriptor disagreement is one. The field-level table is in
+`GGLab_Shader_Toolchain_Integration_Design.md` (§13).
 
 ---
 
@@ -1361,14 +1514,42 @@ ShaderGraphCore
    ↓
 Generated HLSL
    ↓
+main-owned Preview adapter + PSMain
+   ↓
 gglab-shaderc
    ↓
-ShaderArtifact
+Runtime Preview Artifact
    ↓
 GGLab Shader Graph Preview Lab
    ↓
 GGLabRuntime / Renderer / RenderGraph / RHI
 ```
+
+**Program boundary correction (2026-08-30).** The generated
+`EvaluateSurface` function is a function contract, not a complete Runtime pixel
+program. Compiling function-only generated source as `stage=pixel,
+entry=EvaluateSurface` is invalid program composition and is not qualification
+evidence. Native qualification requires the generated function plus a
+main-owned qualification `PSMain`; Runtime preview requires the generated
+function plus a main-owned Preview `PSMain`. The Editor must not synthesize
+either entry or pass binding. Its current function-only request composition is a
+known implementation defect and must be removed or disabled until a reviewed
+full-program operation exists. The fixed input contracts, standalone Preview
+Program, ordinary runtime catalog mappings, visualizer, and milestone order were
+approved and completed in Milestone A (GraphicsGadgetLab PR #175, merge
+`d6a2b75d`). Q4, Q5, and Q7 are now approved for Milestone B by
+`GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md`. The main repository has
+published the Preview handshake, `build-preview`, immutable publication/session
+coordination, and attached Runtime observation path. The Editor now consumes
+that line through an identity-only Tauri boundary: a successful initial
+publication admits candidate/session-scoped Runtime launch, live processes own
+host-issued identities, observation polling runs only while attached, and
+explicit/editor/service teardown stops the child. The surface presents the
+cross-linked Current/LastGood/Stale/Rejected state; cross-repository live
+success/failure/recovery qualification is the remaining Milestone B step. A
+live session cannot silently cross artifact roots: switching to another tool
+deployment requires the attached Runtime to exit before a new build is issued.
+Material Programs remain separate.
 
 It must follow normal GGLab Lab/runtime discipline:
 
@@ -1613,6 +1794,12 @@ Architecture/programmer invariants may still assert in development code, but use
 
 The slices below are sequencing guidance, not durable source identifiers.
 
+The toolchain integration's construction-level design is recorded in
+`GGLab_Shader_Toolchain_Integration_Design.md` (package topology, state
+machines, service boundary, staging, testing, implementation order). This
+section keeps the decisions and the slice boundaries; that document is the
+build plan.
+
 The CLI authoring frontend (§8.1/§8.2) rides on the same core milestones. Its
 command surface is derived from the mature `ShaderGraphCore` API and is not
 pre-built into the slices below; establishing the `apps/cli` package boundary
@@ -1658,6 +1845,69 @@ screenshot and smoke test. Decisions recorded here:
    dangling-wire node creation, edge rerouting, the history panel,
    recent files, a dedicated code pane) are deferred until after the
    toolchain loop (Slice 2/3) closes.
+
+### Stage record (owner, 2026-08-24)
+
+Slice 1 is closed and **merged into main** (PR #2). The active stage is
+**Slice 2 — Shader Toolchain Integration** (branch
+`3-shader-toolchain-integration`). Decisions recorded here; the construction
+level is in `GGLab_Shader_Toolchain_Integration_Design.md`:
+
+1. Native build runs behind a **strict readiness gate, as two state spaces
+   in two domains** — ToolCompatibility (judged by the client):
+   `unavailable / discovered / unproven / incompatible / compatible`; and
+   NativeBuildReadiness (composed ONCE by the editor orchestration):
+   `Ready` or `NotReady{reasons}`. A request may only be issued when the
+   composition is `Ready`: no dev bypass, no environment-flag exception, and
+   no such path to configure because none exists. A real tool whose
+   process-contract axis lies outside the client's declared supported
+   range, or whose facts miss the requirement, is `unproven` /
+   `incompatible`, full stop: no compile request is formed out of it.
+2. The handshake wire contract is **owned by the external GGLab Shader
+   Toolchain contract authority** (normative design in the GGLab docs
+   repository; implementation and contract self-tests in the main GGLab
+   repository). This repository records only the editor's consumption
+   requirements (the v1 facts a compatibility verdict needs; the client's
+   supported-range discipline) — no wire schema, no values assigned to the
+   toolchain's own version axes, no pre-declared unknown-field policy for the
+   external contract, and the artifact-contract axis is not a v1
+   requirement. *What the editor requires is not what the editor owns.*
+3. The Toolchain Client (`shader-toolchain-client`, a new headless package)
+   is a **sibling domain** of `shader-graph-core`: no dependency in either
+   direction. It owns machine-protocol consumption, the ToolCompatibility
+   verdicts, the build-intent / build-line (stale/current/last-good) pure
+   rules, and the host-boundary contract (allowlisted operations + the
+   `NativeCompileRequest` shape) — without understanding
+   ShaderGraphDocument, GraphType, or node semantics, and with no argv
+   anywhere in its vocabulary. The editor orchestration is the single
+   composition and gate point: ToolCompatibility (client) +
+   profile/descriptor compatibility (core) + host capability (service) +
+   target configuration (configured, AND covered by the tool's published
+    targets — the coverage check is made here, where the configuration
+    lives, and never inside the client's tool verdict) + complete-program
+    availability. Generated-function-only state is structured
+    `ProgramCompositionUnavailable`, never `Ready`.
+4. The desktop host exposes a **narrow `ShaderToolService`** (discover /
+   handshake / compile / cancel), never a general-purpose shell. The WebView
+   never constructs raw argv — it composes domain-shaped request values; the
+   approved request is serialized into the tool's invocation INSIDE the host
+   boundary (Rust), bounded, with no shell string and no readiness logic;
+   protocol interpretation exists exactly once, in the TypeScript Toolchain
+   Client.
+5. **Corrected 2026-08-30:** target remains explicit build configuration, but
+   `NativeCompileRequest.stage` / `.entry` are complete-program facts and cannot
+   come from descriptor `generatedFunction` facts. The current function-only
+   request is invalid and the real-product acceptance item is reopened. Until a
+   main-owned qualification or Preview Program composition exists, the Editor
+   may display generation/readiness facts but must not issue
+   `entry=EvaluateSurface`. DXC/backend target policy remains
+   `gglab-shaderc`'s.
+6. **`apps/cli` gains no `build` command in Slice 2.** Native-build
+   orchestration for the CLI is a separately reviewed deferred addition
+   (it would add its own host-boundary implementation over the same client
+   vocabulary — no protocol rework). The fake-test surface is the client /
+   host-boundary contract directly: the test-side implementation of the
+   declared boundary; it exposes no argv either.
 
 ## Gate 0 — Surface Integration Probe
 
@@ -1723,21 +1973,35 @@ Deliver:
 - Surface Profile Descriptor version/profile compatibility and deterministic selection;
 - explicit incompatible-tool/profile states;
 - structured compile invocation;
-- build revision/stale-result protection;
+- build-intent / attempt-ordering and stale-result protection;
 - artifact/manifest display;
 - Build Inspector;
-- fake process tests + optional real tool smoke.
+- fake host-boundary tests (the declared contract's test-side implementation;
+  the real tool is never a test fixture and never a test dependency, and the
+  fake exposes no argv);
+- exploratory manual smoke — the owner may run `gglab-shaderc` outside the
+  editor against a complete-program fixture or the main-owned qualification
+  harness, as investigative evidence only; it never changes the tool's
+  `unproven` state and never enters the editor's product path;
+- no function-only stage-acceptance smoke. The permanent main GGLab gate is
+  the current qualification authority; the next real Editor product smoke is
+  the Preview Milestone B path after the standalone Preview Lab is accepted.
 
 Acceptance:
 
 ```text
 compatible toolchain + compatible selected surface profile
-→ Ready
-→ generated HLSL
-→ gglab-shaderc
-→ ShaderArtifact
-→ artifact/build identity visible
+→ generated HLSL + generated-source identity visible
+→ no complete program in Slice 2
+→ NotReady[ProgramCompositionUnavailable]
+→ no native request / BuildId / artifact claim
 ```
+
+The implementation satisfies this corrected acceptance chain: the ordinary
+generated-function-only path remains visibly
+`NotReady[ProgramCompositionUnavailable]` and cannot issue a native request.
+The permanent main-repository generated-function gate remains the native
+qualification authority.
 
 ## Slice 3 — Compiler diagnostics → graph navigation
 
@@ -1752,6 +2016,11 @@ native compile diagnostic
 ```
 
 ## Slice 4 — GGLab Shader Graph Preview Lab
+
+Milestone A and the code portions of Milestone B are implemented across the
+main and Editor repositories. Remaining acceptance is the cross-repository
+live success/failure/recovery qualification; it does not broaden the Material
+Program scope.
 
 Deliver:
 
