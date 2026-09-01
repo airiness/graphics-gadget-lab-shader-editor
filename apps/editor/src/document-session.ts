@@ -5,9 +5,10 @@
  * Load-bearing invariants (kept in one place, so the UI and the close
  * guard both use the same rules):
  *
- *   a document opened from a file   → the session owns that path;
- *   a document imported from text   → the session owns NO path;
- *   the seeded startup document    → the session owns no path.
+ *   a native document snapshot      → the session owns its host-issued
+ *                                     canonical URI + revision token;
+ *   a document imported from text   → the session owns NO save authority;
+ *   the seeded startup document     → the session owns NO save authority.
  *
  *   dirty ⇔ serializeShaderGraphDocument(current) ≠ savedBaseline.
  *   Because the core's serialization is deterministic AND structurally
@@ -16,8 +17,9 @@
  *   two document states — nothing else can make a document appear dirty,
  *   and no semantic change can stay invisible.
  *
- *   A plain Save may only write to the path owned by the CURRENT
- *   document — an imported document can never silently overwrite a file
+ *   A plain Save may only present the authority and expected revision owned
+ *   by the CURRENT document. A display path is provenance, never write
+ *   authority, and an imported document can never silently overwrite a file
  *   that a previous document owned.
  */
 import {
@@ -33,12 +35,13 @@ import type {
     DocumentSessionId,
     WorkspaceDocumentHandle,
 } from "./workspace-session.js";
+import type { DocumentSnapshot, FileRevisionToken } from "./host-io.js";
 
 export type DocumentProvenance =
     | { readonly kind: "file"; readonly path: string }
     | { readonly kind: "imported" };
 
-/** The current document came from this file path. */
+/** Display provenance for a document supplied by the native host. */
 export function provenanceFromFile(path: string): DocumentProvenance {
     return { kind: "file", path };
 }
@@ -59,6 +62,8 @@ export interface DocumentSession extends WorkspaceDocumentHandle {
     readonly sessionId: DocumentSessionId;
     /** Null until the native host supplies a canonical document URI. */
     readonly canonicalUri: CanonicalDocumentUri | null;
+    /** Opaque revision of the snapshot on which local edits are based. */
+    readonly fileRevisionToken: FileRevisionToken | null;
     readonly history: DocumentHistory<ShaderGraphDocument>;
     readonly provenance: DocumentProvenance;
     /** Canonical serialization of the document in its last saved /
@@ -71,10 +76,15 @@ export function createSession(
     provenance: DocumentProvenance,
     document: ShaderGraphDocument,
     canonicalUri: CanonicalDocumentUri | null = null,
+    fileRevisionToken: FileRevisionToken | null = null,
 ): DocumentSession {
+    if ((canonicalUri === null) !== (fileRevisionToken === null)) {
+        throw new Error("A persisted DocumentSession requires both canonical URI and file revision token.");
+    }
     return {
         sessionId,
         canonicalUri,
+        fileRevisionToken,
         history: createHistory(document),
         provenance,
         savedBaseline: serializeShaderGraphDocument(document),
@@ -108,21 +118,22 @@ export function redoDocumentChange(session: DocumentSession): DocumentSession {
  *
  * Saving is asynchronous. If another document became active before the write
  * completed, its session identity differs and the completion is stale for the
- * current context; it must not steal the path or saved baseline.
+ * current context; it must not steal the URI, revision, or saved baseline.
  */
 export function sessionSaved(
     session: DocumentSession,
     savedSessionId: DocumentSessionId,
-    path: string,
-    savedBytes: string,
+    snapshot: DocumentSnapshot,
 ): DocumentSession {
     if (session.sessionId !== savedSessionId) {
         return session;
     }
     return {
         ...session,
-        provenance: provenanceFromFile(path),
-        savedBaseline: savedBytes,
+        canonicalUri: snapshot.canonicalDocumentUri,
+        fileRevisionToken: snapshot.fileRevisionToken,
+        provenance: provenanceFromFile(snapshot.displayPath),
+        savedBaseline: snapshot.text,
     };
 }
 
@@ -137,15 +148,26 @@ export function isDirty(session: DocumentSession): boolean {
  * Target for a plain Save of the current document.
  *
  * - Save As (`as === true`) → always `null` (the host must pick);
- * - Save of a file-opened document → its owned path;
+ * - Save of a host snapshot → its URI + expected revision capability;
  * - Save of an imported/seeded document → `null` (the host must pick),
- *   NEVER a path left over from any other document.
+ *   NEVER authority left over from any other document.
  */
-export function saveTarget(session: DocumentSession, as: boolean): string | null {
+export interface DocumentSaveTarget {
+    readonly canonicalDocumentUri: CanonicalDocumentUri;
+    readonly expectedFileRevisionToken: FileRevisionToken;
+}
+
+export function saveTarget(session: DocumentSession, as: boolean): DocumentSaveTarget | null {
     if (as) {
         return null;
     }
-    return session.provenance.kind === "file" ? session.provenance.path : null;
+    if (session.canonicalUri === null || session.fileRevisionToken === null) {
+        return null;
+    }
+    return {
+        canonicalDocumentUri: session.canonicalUri,
+        expectedFileRevisionToken: session.fileRevisionToken,
+    };
 }
 
 /**

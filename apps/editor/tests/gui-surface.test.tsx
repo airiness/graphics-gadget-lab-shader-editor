@@ -1011,9 +1011,10 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(applied).toContain("recordDocumentChange(previous, result.document, label)");
             expect(applied).toContain("invalidateRevisionDerivedState()");
             // Provenance transitions (open / import) establish a distinct
-            // editing context with a fresh identity and history line.
+            // editing context with a fresh identity and history line. A
+            // native Open also binds the host-issued URI and revision token.
             expect(app).toMatch(
-                /const replaceDocumentSession[\s\S]*?const replacement = createSession\(allocateDocumentSessionId\(\), source, next\)[\s\S]*?closeWorkspaceDocument[\s\S]*?openWorkspaceDocument/,
+                /const replaceDocumentSession[\s\S]*?const replacement = createSession\([\s\S]*?canonicalUri,[\s\S]*?fileRevisionToken,[\s\S]*?closeWorkspaceDocument[\s\S]*?openWorkspaceDocument/,
             );
             // An async save completion is identity-bound and cannot steal
             // the path/baseline of a replacement document.
@@ -1021,7 +1022,12 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(app).toContain("currentDocumentSessionId.current = replacement.sessionId");
             expect(app).toContain("if (currentDocumentSessionId.current !== savedSessionId)");
             expect(app).toMatch(/updateDocumentSession\(\s*savedSessionId/);
-            expect(app).toContain("sessionSaved(current, savedSessionId, path, text)");
+            expect(app).toContain("channel.openDocument()");
+            expect(app).toContain("snapshot.canonicalDocumentUri");
+            expect(app).toContain("snapshot.fileRevisionToken");
+            expect(app).toContain("channel.saveDocument({ ...target, text })");
+            expect(app).toContain('if (outcome.kind === "conflict")');
+            expect(app).toContain("sessionSaved(current, savedSessionId, snapshot)");
             // Keyboard: the guard predicate runs BEFORE the graph shortcut.
             expect(app).toMatch(/event\.key\.toLowerCase\(\) === "z"[\s\S]*?isEditingTextTarget\(event\.target\)/);
             expect(app).toMatch(/if \(event\.shiftKey\) \{\s*onRedo\(\);\s*\} else \{\s*onUndo\(\);/);
@@ -2219,7 +2225,7 @@ describe("action affordance (chrome kit)", () => {
     });
 });
 
-// --- desktop slice 1: host file-open injection into the descriptor panel -----
+// --- host file-open injection into the descriptor panel ----------------------
 
 describe("descriptor panel: host file-open injection (desktop)", () => {
     it("uses the injected host open and feeds its text to the core reader", async () => {

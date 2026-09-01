@@ -99,7 +99,7 @@ import { INSPECTOR_ZONES, INSPECTOR_ZONE_LABELS, inspectorZoneBadge, type Inspec
 // Type-only (erased at compile time): the official dialog option shapes,
 // used for the single documented boundary cast below. Runtime functions
 // are dynamically imported inside the desktop effect only.
-import type { OpenDialogOptions, SaveDialogOptions } from "@tauri-apps/plugin-dialog";
+import type { OpenDialogOptions } from "@tauri-apps/plugin-dialog";
 import "./app.css";
 
 /** The editor's default workspace document (a valid gglab.surface v1 graph). */
@@ -235,7 +235,7 @@ export function App() {
     const [nodeMenu, setNodeMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
     // Viewport fit trigger (registered by the flow adapter via onInit).
     const fitRef = useRef<(() => void) | null>(null);
-    // Desktop slice 1: native document I/O channel (absent in the browser
+    // Desktop native document I/O channel (absent in the browser
     // — the web build keeps the text save/load surface only).
     const [fileChannel, setFileChannel] = useState<FileChannel | null>(null);
     // Dirty = current canonical bytes ≠ baseline (core determinism makes
@@ -249,25 +249,28 @@ export function App() {
             }
             // Desktop-only code path: the official plugin JS APIs are
             // code-split out of the web bundle and loaded only inside the
-            // desktop webview. The native side stays thin and scoped:
-            // dialog.open / dialog.save choose a path (and the dialog
-            // plugin adds THAT path to the filesystem scope), then
-            // fs.readTextFile / fs.writeTextFile move scoped UTF-8 bytes.
-            // No arbitrary-path command exists in the host.
-            const [dialog, fs] = await Promise.all([import("@tauri-apps/plugin-dialog"), import("@tauri-apps/plugin-fs")]);
+            // desktop webview. Document Open/Save As and all document bytes
+            // go through bounded host commands. The official dialog/fs APIs
+            // remain only for user-selected auxiliary descriptor/config
+            // reads. No arbitrary document path crosses the WebView command
+            // boundary.
+            const [core, dialog, fs] = await Promise.all([
+                import("@tauri-apps/api/core"),
+                import("@tauri-apps/plugin-dialog"),
+                import("@tauri-apps/plugin-fs"),
+            ]);
             if (cancelled) {
                 return;
             }
             setFileChannel(
                 createDesktopFileChannel({
+                    invoke: (command, args) => core.invoke(command, args),
                     // The host-io slots are intentionally generic
                     // (Record<string, unknown> options); the official API
                     // types live here, at the composition root — the single
                     // place cast/verification is allowed.
                     openDialog: (options) => dialog.open(options as unknown as OpenDialogOptions),
-                    saveDialog: (options) => dialog.save(options as unknown as SaveDialogOptions),
                     readTextFile: (path) => fs.readTextFile(path),
-                    writeTextFile: (path, contents) => fs.writeTextFile(path, contents),
                 }),
             );
         })();
@@ -320,7 +323,12 @@ export function App() {
         setEmission(null);
     }
 
-    const replaceDocumentSession = (next: ShaderGraphDocument, source: DocumentProvenance): void => {
+    const replaceDocumentSession = (
+        next: ShaderGraphDocument,
+        source: DocumentProvenance,
+        canonicalUri: DocumentSession["canonicalUri"] = null,
+        fileRevisionToken: DocumentSession["fileRevisionToken"] = null,
+    ): void => {
         // A new document is a NEW history line, not an undoable step —
         // and every canvas state bound to the old document is stale.
         clearCanvasInteractionState();
@@ -328,7 +336,13 @@ export function App() {
         // A new document becomes the new baseline — the session is not
         // dirty merely because its text was imported or a file was
         // opened.
-        const replacement = createSession(allocateDocumentSessionId(), source, next);
+        const replacement = createSession(
+            allocateDocumentSessionId(),
+            source,
+            next,
+            canonicalUri,
+            fileRevisionToken,
+        );
         currentDocumentSessionId.current = replacement.sessionId;
         setWorkspace((current) => {
             if (current.activeDocumentId === null) {
@@ -348,24 +362,26 @@ export function App() {
         setSavedText(serializeShaderGraphDocument(next));
     };
 
-    /** Open a `.shadergraph` through the host (path → scoped UTF-8 → core reader). */
+    /** Open a host-owned exact `.shadergraph` snapshot through the core reader. */
     const openDocument = async (): Promise<void> => {
         const channel = fileChannel;
         if (channel === null) {
             return;
         }
         try {
-            const path = await channel.pickDocumentPath();
-            if (path === null) {
+            const snapshot = await channel.openDocument();
+            if (snapshot === null) {
                 return; // user cancelled
             }
-            const text = await channel.readText(path);
-            const parsed = parseShaderGraphDocument(text);
+            const parsed = parseShaderGraphDocument(snapshot.text);
             if (parsed.ok && parsed.value !== null) {
-                // A file-opened document OWNS that path — from now on a
-                // plain Save targets exactly it.
-                replaceDocumentSession(parsed.value, provenanceFromFile(path));
-                setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: `Opened ${path}; the session state was restored.` });
+                replaceDocumentSession(
+                    parsed.value,
+                    provenanceFromFile(snapshot.displayPath),
+                    snapshot.canonicalDocumentUri,
+                    snapshot.fileRevisionToken,
+                );
+                setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: `Opened ${snapshot.displayPath}; the session state was restored.` });
                 requestAnimationFrame(() => fitRef.current?.());
                 return;
             }
@@ -382,12 +398,11 @@ export function App() {
 
     /**
      * Save via the host: the BYTES are the core's canonical .shadergraph
-     * serialization (the disk format authority); the host only writes
-     * scoped UTF-8 bytes to a user-chosen path. The TARGET comes from
-     * the current document's provenance — Save reuses the owned path
-     * when one exists, otherwise (and always for Save As) the dialog
-     * asks. An imported document can therefore never overwrite a file
-     * from a previous session of a different document.
+     * serialization (the disk format authority). Plain Save presents the
+     * session's host-issued canonical URI plus the exact revision token on
+     * which local edits are based; the host performs compare-and-swap and
+     * atomic replacement. Save As has a host-owned dialog and never silently
+     * overwrites an existing destination.
      */
     /** Save to the session's target; resolve with success. Saving
      * establishes the new baseline (the saved bytes) — the document is
@@ -400,25 +415,40 @@ export function App() {
         try {
             const savedSessionId = session.sessionId;
             const text = serializeShaderGraphDocument(document);
-            let path = saveTarget(session, as);
-            if (path === null) {
-                const defaultName = session.provenance.kind === "file" ? basenameOf(session.provenance.path) : "Untitled.shadergraph";
-                path = await channel.pickSavePath(defaultName);
-                if (path === null) {
-                    return false; // user cancelled
-                }
+            const target = saveTarget(session, as);
+            const outcome =
+                target === null
+                    ? await channel.saveDocumentAs(
+                          session.provenance.kind === "file"
+                              ? basenameOf(session.provenance.path)
+                              : "Untitled.shadergraph",
+                          text,
+                      )
+                    : await channel.saveDocument({ ...target, text });
+            if (outcome.kind === "cancelled") {
+                return false;
             }
-            await channel.writeText(path, text);
+            if (outcome.kind === "conflict") {
+                setOperationNotes((previous) => [
+                    ...previous,
+                    `Save conflict: the destination changed on disk; the local document was not written (${outcome.canonicalDocumentUri}).`,
+                ]);
+                return false;
+            }
+            const snapshot = outcome.snapshot;
             updateDocumentSession(
                 savedSessionId,
-                (current) => sessionSaved(current, savedSessionId, path, text),
+                (current) => sessionSaved(current, savedSessionId, snapshot),
                 "ignore",
             );
             if (currentDocumentSessionId.current !== savedSessionId) {
                 return false;
             }
-            setSavedText(text);
-            setOperationNotes((previous) => [...previous, `Saved ${path} as the core's canonical .shadergraph bytes.`]);
+            setSavedText(snapshot.text);
+            setOperationNotes((previous) => [
+                ...previous,
+                `Saved ${snapshot.displayPath} as the core's canonical .shadergraph bytes.`,
+            ]);
             return true;
         } catch (error) {
             setOperationNotes((previous) => [...previous, `Save failed (${error instanceof Error ? error.message : String(error)}).`]);
@@ -1305,14 +1335,15 @@ export function App() {
                         )}
                         {inspectorZone === "document" && (
                             <>
-                    {/* Desktop slice 1: native document I/O. The host owns
-                        path + UTF-8 bytes only; the core owns parse/
-                        serialize; this app owns which text moves where. */}
+                    {/* Native document I/O. The host owns canonical URI
+                        capabilities, revision tokens, and exact UTF-8 bytes;
+                        the core owns parse/serialize, and this app owns which
+                        snapshot belongs to each document session. */}
                     {fileChannel !== null && (
                         <section className="gglab-panel gglab-document-native">
                             <h2 className="gglab-panel-title">Document</h2>
                             <p className="gglab-panel-hint">
-                                Native open, save, save-as (the host moves path + UTF-8 bytes; bytes are the core's canonical .shadergraph serialization).
+                                Native open, revision-checked save, and save-as (the host owns file identity; bytes are the core&apos;s canonical .shadergraph serialization).
                             </p>
                             <ButtonGroup role="toolbar" aria-label="Document I/O">
                                 <Button variant="secondary" onClick={() => void openDocument()}>

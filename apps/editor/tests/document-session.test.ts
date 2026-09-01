@@ -3,9 +3,9 @@
  * dirty state, save target, window title, and the close-guard decision.
  *
  * The regression most worth locking: "Load from text" replaces the
- * document but must never keep a previous file's path — an imported
- * document's Save target is `null`, so a plain Save goes through the
- * dialog and can never silently overwrite the last opened file.
+ * document but must never keep a previous file's save authority — an
+ * imported document's Save target is `null`, so a plain Save goes through
+ * the host-owned dialog and can never silently overwrite the last file.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -28,12 +28,17 @@ import {
     activeWorkspaceDocument,
     activateWorkspaceDocument,
     commitWorkspacePreviewTarget,
+    canonicalDocumentUriFromHost,
     createDocumentSessionId,
     createWorkspaceSession,
     openWorkspaceDocument,
     updateWorkspaceDocument,
     type DocumentSessionId,
 } from "../src/workspace-session.js";
+import {
+    fileRevisionTokenFromHost,
+    type DocumentSnapshot,
+} from "../src/host-io.js";
 
 const DOC: ShaderGraphDocument = {
     schemaVersion: 1,
@@ -48,6 +53,20 @@ const DOC: ShaderGraphDocument = {
 };
 
 const SESSION_ID = createDocumentSessionId("document-session-a");
+const CANONICAL_URI = canonicalDocumentUriFromHost("file:///C:/gglab/A.shadergraph");
+const REVISION = fileRevisionTokenFromHost("revision-a");
+
+function savedSnapshot(
+    document: ShaderGraphDocument = DOC,
+    displayPath: string = "C:\\gglab\\A.shadergraph",
+): DocumentSnapshot {
+    return {
+        canonicalDocumentUri: CANONICAL_URI,
+        displayPath,
+        text: serializeShaderGraphDocument(document),
+        fileRevisionToken: REVISION,
+    };
+}
 
 function makeSession(
     provenance: DocumentProvenance,
@@ -58,16 +77,41 @@ function makeSession(
 }
 
 describe("document provenance and save target", () => {
-    it("a file-opened document owns its path for a plain Save", () => {
-        const session = makeSession(provenanceFromFile("C:\\gglab\\A.shadergraph"));
-        expect(saveTarget(session, false)).toBe("C:\\gglab\\A.shadergraph");
+    it("requires the native URI and revision token as one inseparable capability", () => {
+        expect(() =>
+            createSession(
+                SESSION_ID,
+                provenanceFromFile("C:\\gglab\\A.shadergraph"),
+                DOC,
+                CANONICAL_URI,
+            ),
+        ).toThrow(/requires both canonical URI and file revision token/);
     });
 
-    it("Save As always asks for a destination, even when a path is owned", () => {
+    it("never treats a display/provenance path as native save authority", () => {
+        const session = makeSession(provenanceFromFile("C:\\gglab\\A.shadergraph"));
+        expect(saveTarget(session, false)).toBeNull();
+    });
+
+    it("a host snapshot owns the canonical URI and revision required by plain Save", () => {
+        const session = createSession(
+            SESSION_ID,
+            provenanceFromFile("C:\\gglab\\A.shadergraph"),
+            DOC,
+            CANONICAL_URI,
+            REVISION,
+        );
+        expect(saveTarget(session, false)).toEqual({
+            canonicalDocumentUri: CANONICAL_URI,
+            expectedFileRevisionToken: REVISION,
+        });
+    });
+
+    it("Save As always asks for a destination, even when file provenance is known", () => {
         expect(saveTarget(makeSession(provenanceFromFile("C:\\gglab\\A.shadergraph")), true)).toBeNull();
     });
 
-    it("an imported (text-loaded) document owns NO path — plain Save must ask, never overwrite a previous file", () => {
+    it("an imported document owns NO save authority — plain Save must ask", () => {
         // The dangerous sequence: A.shadergraph was current, then the
         // document was replaced by a text import. The import must not
         // inherit A.shadergraph.
@@ -77,19 +121,21 @@ describe("document provenance and save target", () => {
         expect(saveTarget(session, true)).toBeNull();
     });
 
-    it("the seeded startup document is treated like an import (no path)", () => {
+    it("the seeded startup document is treated like an import (no save authority)", () => {
         expect(saveTarget(makeSession(provenanceFromImport()), false)).toBeNull();
     });
 
-    it("a successful save makes the document own that exact path", () => {
+    it("a successful save installs the host-returned URI, revision, path, and baseline", () => {
         const saved = sessionSaved(
             makeSession(provenanceFromImport()),
             SESSION_ID,
-            "C:\\gglab\\B.shadergraph",
-            serializeShaderGraphDocument(DOC),
+            savedSnapshot(DOC, "C:\\gglab\\B.shadergraph"),
         );
         expect(saved.provenance).toEqual({ kind: "file", path: "C:\\gglab\\B.shadergraph" });
-        expect(saveTarget(saved, false)).toBe("C:\\gglab\\B.shadergraph");
+        expect(saveTarget(saved, false)).toEqual({
+            canonicalDocumentUri: CANONICAL_URI,
+            expectedFileRevisionToken: REVISION,
+        });
     });
 });
 
@@ -138,8 +184,7 @@ describe("document identity and history ownership", () => {
         const result = sessionSaved(
             current,
             otherSessionId,
-            "C:\\gglab\\Other.shadergraph",
-            serializeShaderGraphDocument(DOC),
+            savedSnapshot(DOC, "C:\\gglab\\Other.shadergraph"),
         );
 
         expect(result).toBe(current);
@@ -217,8 +262,7 @@ describe("dirty — canonical bytes vs the saved baseline", () => {
         const saved = sessionSaved(
             changed,
             SESSION_ID,
-            "C:\\gglab\\A.shadergraph",
-            serializeShaderGraphDocument(mutated),
+            savedSnapshot(mutated),
         );
         expect(isDirty(saved)).toBe(false);
     });

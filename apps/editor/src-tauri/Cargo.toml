@@ -4,10 +4,12 @@ version = "0.1.0"
 description = "Thin desktop host for the GGLab Shader Graph Editor web frontend, plus the ShaderToolService process boundary."
 edition = "2021"
 
-# Two layers in one crate:
+# Three bounded responsibilities in one crate:
 #
 # - the thin desktop shell (main.rs): it hosts the React/Vite frontend and
-#   owns TWO official plugins (dialog, scoped fs) — the access model;
+#   owns the official dialog and scoped-fs plugins for auxiliary reads;
+# - the native document service: host-owned Open/Save As selection, canonical
+#   URI capabilities, exact revisioned snapshots, and CAS atomic save;
 # - the ShaderToolService (src/shader_tool/): the host-side implementation
 #   of the toolchain client's declared host boundary — exactly six tool
 #   allowlisted capabilities (discover / handshake / preview-handshake /
@@ -38,3 +40,7 @@ tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+url = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
