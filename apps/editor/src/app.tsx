@@ -85,7 +85,15 @@ import {
     type DocumentProvenance,
     type DocumentSession,
 } from "./document-session.js";
-import { createDocumentSessionId } from "./workspace-session.js";
+import {
+    activeWorkspaceDocument,
+    closeWorkspaceDocument,
+    createDocumentSessionId,
+    createWorkspaceSession,
+    openWorkspaceDocument,
+    updateWorkspaceDocument,
+    type WorkspaceSession,
+} from "./workspace-session.js";
 import { saveShortcutOf } from "./shortcuts.js";
 import { INSPECTOR_ZONES, INSPECTOR_ZONE_LABELS, inspectorZoneBadge, type InspectorZone, type InspectorZoneFacts } from "./inspector-tabs.js";
 // Type-only (erased at compile time): the official dialog option shapes,
@@ -130,6 +138,16 @@ interface DiagnosticSet {
     readonly passedText: string;
 }
 
+function requireActiveDocumentSession(
+    workspace: WorkspaceSession<DocumentSession>,
+): DocumentSession {
+    const active = activeWorkspaceDocument(workspace);
+    if (active === null) {
+        throw new Error("The editor Workspace must have an active DocumentSession.");
+    }
+    return active;
+}
+
 export function App() {
     // The seeded startup document and its initial session share ONE
     // instance so the baseline is exactly that document's canonical
@@ -143,18 +161,40 @@ export function App() {
         documentSessionSequence.current += 1;
         return createDocumentSessionId(`document-session-${documentSessionSequence.current}`);
     };
-    // The document lives only in session.history.present. History,
-    // provenance, and the saved baseline therefore move as one aggregate;
-    // there is no second React state to pair with the wrong document later.
-    const [session, setSession] = useState<DocumentSession>(() =>
-        createSession(allocateDocumentSessionId(), provenanceFromImport(), seed),
-    );
+    // WorkspaceSession owns the complete open-document records and the active
+    // identity. The canvas projects only the active DocumentSession; history,
+    // provenance, and baseline never live in a parallel app-level state.
+    const [workspace, setWorkspace] = useState<WorkspaceSession<DocumentSession>>(() => {
+        const initial = createSession(allocateDocumentSessionId(), provenanceFromImport(), seed);
+        const opened = openWorkspaceDocument(createWorkspaceSession<DocumentSession>(), initial);
+        if (opened.accepted === false) {
+            throw new Error(`The initial DocumentSession was refused: ${opened.refusal.reason}.`);
+        }
+        return opened.workspace;
+    });
+    const session = requireActiveDocumentSession(workspace);
     // Async host completions consult this synchronously updated identity.
     // A stale save must not update another document's baseline or let a
     // close guard close the replacement document.
     const currentDocumentSessionId = useRef(session.sessionId);
     const history = session.history;
     const document = history.present;
+    function updateDocumentSession(
+        documentSessionId: DocumentSession["sessionId"],
+        update: (current: DocumentSession) => DocumentSession,
+        missingDocument: "reject" | "ignore" = "reject",
+    ): void {
+        setWorkspace((current) => {
+            const result = updateWorkspaceDocument(current, documentSessionId, update);
+            if (result.accepted) {
+                return result.workspace;
+            }
+            if (missingDocument === "ignore" && result.refusal.reason === "document-not-open") {
+                return current;
+            }
+            throw new Error(`DocumentSession update was refused: ${result.refusal.reason}.`);
+        });
+    }
     const [operationNotes, setOperationNotes] = useState<readonly string[]>([]);
     const [descriptorState, setDescriptorState] = useState<DescriptorPanelState>({ kind: "empty" });
     const [savedText, setSavedText] = useState(() => SEED_DOCUMENT_TEXT);
@@ -290,7 +330,20 @@ export function App() {
         // opened.
         const replacement = createSession(allocateDocumentSessionId(), source, next);
         currentDocumentSessionId.current = replacement.sessionId;
-        setSession(replacement);
+        setWorkspace((current) => {
+            if (current.activeDocumentId === null) {
+                return current;
+            }
+            const closed = closeWorkspaceDocument(current, current.activeDocumentId);
+            if (closed.accepted === false) {
+                throw new Error(`Active DocumentSession close was refused: ${closed.refusal.reason}.`);
+            }
+            const opened = openWorkspaceDocument(closed.workspace, replacement);
+            if (opened.accepted === false) {
+                throw new Error(`Replacement DocumentSession open was refused: ${opened.refusal.reason}.`);
+            }
+            return opened.workspace;
+        });
         setOperationNotes([]);
         setSavedText(serializeShaderGraphDocument(next));
     };
@@ -356,10 +409,14 @@ export function App() {
                 }
             }
             await channel.writeText(path, text);
+            updateDocumentSession(
+                savedSessionId,
+                (current) => sessionSaved(current, savedSessionId, path, text),
+                "ignore",
+            );
             if (currentDocumentSessionId.current !== savedSessionId) {
                 return false;
             }
-            setSession((current) => sessionSaved(current, savedSessionId, path, text));
             setSavedText(text);
             setOperationNotes((previous) => [...previous, `Saved ${path} as the core's canonical .shadergraph bytes.`]);
             return true;
@@ -598,7 +655,9 @@ export function App() {
             if (!Object.is(result.document, document)) {
                 // One user intent = one history step (the label names it);
                 // the before/after pair is exactly what undo/redo restore.
-                setSession((previous) => recordDocumentChange(previous, result.document, label));
+                updateDocumentSession(session.sessionId, (previous) =>
+                    recordDocumentChange(previous, result.document, label),
+                );
                 // The revision moved: the derivative state (focus and
                 // emission preview) described the former revision and is
                 // now stale — the preview must never outlive its revision.
@@ -723,7 +782,7 @@ export function App() {
         if (canUndoHistory(history) === false) {
             return;
         }
-        setSession((previous) => undoDocumentChange(previous));
+        updateDocumentSession(session.sessionId, (previous) => undoDocumentChange(previous));
         clearCanvasInteractionState();
         invalidateRevisionDerivedState();
     };
@@ -731,7 +790,7 @@ export function App() {
         if (canRedoHistory(history) === false) {
             return;
         }
-        setSession((previous) => redoDocumentChange(previous));
+        updateDocumentSession(session.sessionId, (previous) => redoDocumentChange(previous));
         clearCanvasInteractionState();
         invalidateRevisionDerivedState();
     };
@@ -855,7 +914,7 @@ export function App() {
         // updates ONLY the position, preserving the node's existing
         // editor-state metadata (unknownFields, future presentation
         // fields). One drag stop = one intent = one history step.
-        setSession((previous) =>
+        updateDocumentSession(session.sessionId, (previous) =>
             recordDocumentChange(
                 previous,
                 withNodePosition(previous.history.present, nodeId, position),
@@ -871,7 +930,7 @@ export function App() {
         // own. The core services are re-asked as usual; placement never
         // changes emitted HLSL. ONE layout pass = ONE intent = ONE history
         // step (undo reverts the whole pass, not node by node).
-        setSession((previous) => {
+        updateDocumentSession(session.sessionId, (previous) => {
             const layout = autoLayout(previous.history.present);
             if (layout.nodeCount === 0) {
                 return previous;

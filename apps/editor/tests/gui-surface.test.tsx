@@ -992,12 +992,13 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(branched.present).toBe("z");
         });
 
-        it("wires the app: DocumentSession-owned history, refused ops OUT, provenance changes RESET, guarded keys, disabled buttons", () => {
+        it("wires the app: Workspace-owned active DocumentSession, refused ops OUT, provenance changes RESET, guarded keys, disabled buttons", () => {
             const app = read("../src/app.tsx");
-            // Identity, history, provenance, and baseline are one React state;
-            // the current document IS session.history.present.
-            expect(app).toMatch(/const \[session, setSession\] = useState<DocumentSession>/);
+            // Workspace owns the complete DocumentSession records and the
+            // current document IS activeSession.history.present.
+            expect(app).toMatch(/const \[workspace, setWorkspace\] = useState<WorkspaceSession<DocumentSession>>/);
             expect(app).toMatch(/createSession\(allocateDocumentSessionId\(\), provenanceFromImport\(\), seed\)/);
+            expect(app).toContain("const session = requireActiveDocumentSession(workspace)");
             expect(app).toMatch(/const history = session\.history;/);
             expect(app).toMatch(/const document = history\.present;/);
             // Applied changes record one labeled step; refused ones note but
@@ -1012,13 +1013,14 @@ describe("typed port presentation (core types → data categories)", () => {
             // Provenance transitions (open / import) establish a distinct
             // editing context with a fresh identity and history line.
             expect(app).toMatch(
-                /const replaceDocumentSession[\s\S]*?const replacement = createSession\(allocateDocumentSessionId\(\), source, next\)[\s\S]*?setSession\(replacement\)/,
+                /const replaceDocumentSession[\s\S]*?const replacement = createSession\(allocateDocumentSessionId\(\), source, next\)[\s\S]*?closeWorkspaceDocument[\s\S]*?openWorkspaceDocument/,
             );
             // An async save completion is identity-bound and cannot steal
             // the path/baseline of a replacement document.
             expect(app).toContain("const savedSessionId = session.sessionId");
             expect(app).toContain("currentDocumentSessionId.current = replacement.sessionId");
             expect(app).toContain("if (currentDocumentSessionId.current !== savedSessionId)");
+            expect(app).toMatch(/updateDocumentSession\(\s*savedSessionId/);
             expect(app).toContain("sessionSaved(current, savedSessionId, path, text)");
             // Keyboard: the guard predicate runs BEFORE the graph shortcut.
             expect(app).toMatch(/event\.key\.toLowerCase\(\) === "z"[\s\S]*?isEditingTextTarget\(event\.target\)/);

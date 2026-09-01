@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+    activeWorkspaceDocument,
     activateWorkspaceDocument,
     bindWorkspaceDocumentUri,
     canonicalDocumentUriFromHost,
@@ -8,6 +9,7 @@ import {
     createDocumentSessionId,
     createWorkspaceSession,
     openWorkspaceDocument,
+    updateWorkspaceDocument,
     type CanonicalDocumentUri,
     type DocumentSessionId,
     type WorkspaceDocumentHandle,
@@ -114,6 +116,131 @@ describe("workspace document identity", () => {
         const workspace = opened(upper, lower);
 
         expect(workspace.documents).toHaveLength(2);
+    });
+});
+
+describe("complete document record ownership", () => {
+    interface TestDocument extends WorkspaceDocumentHandle {
+        readonly title: string;
+        readonly revision: number;
+    }
+
+    function testDocument(
+        sessionId: string,
+        canonicalUri: string | null,
+        revision: number = 0,
+    ): TestDocument {
+        return {
+            ...document(sessionId, canonicalUri),
+            title: sessionId,
+            revision,
+        };
+    }
+
+    function testWorkspace(...documents: readonly TestDocument[]): WorkspaceSession<TestDocument> {
+        let workspace = createWorkspaceSession<TestDocument>();
+        for (const entry of documents) {
+            const result = openWorkspaceDocument(workspace, entry);
+            if (result.accepted === false) {
+                throw new Error(`fixture open refused: ${result.refusal.reason}`);
+            }
+            workspace = result.workspace;
+        }
+        return workspace;
+    }
+
+    it("returns the complete active document record", () => {
+        const first = testDocument("session-a", null);
+        const second = testDocument("session-b", null);
+        const workspace = testWorkspace(first, second);
+
+        expect(activeWorkspaceDocument(workspace)).toBe(second);
+        expect(activeWorkspaceDocument(createWorkspaceSession<TestDocument>())).toBeNull();
+    });
+
+    it("updates one document by session identity without moving active or Preview ownership", () => {
+        const first = testDocument("session-a", null);
+        const second = testDocument("session-b", null);
+        let workspace = testWorkspace(first, second);
+        const preview = commitWorkspacePreviewTarget(workspace, first.sessionId);
+        if (preview.accepted === false) {
+            throw new Error("fixture Preview target was refused");
+        }
+        workspace = preview.workspace;
+
+        const result = updateWorkspaceDocument(workspace, first.sessionId, (current) => ({
+            ...current,
+            revision: current.revision + 1,
+        }));
+
+        expect(result.accepted).toBe(true);
+        expect(result.workspace.documents).toEqual([{ ...first, revision: 1 }, second]);
+        expect(result.workspace.activeDocumentId).toBe(second.sessionId);
+        expect(result.workspace.preview.targetDocumentId).toBe(first.sessionId);
+    });
+
+    it("preserves the Workspace instance for a document update no-op", () => {
+        const only = testDocument("session-a", null);
+        const workspace = testWorkspace(only);
+
+        const result = updateWorkspaceDocument(workspace, only.sessionId, (current) => current);
+
+        expect(result).toEqual({ accepted: true, workspace });
+        expect(result.workspace).toBe(workspace);
+    });
+
+    it("refuses an updater that changes the document session identity", () => {
+        const only = testDocument("session-a", null);
+        const workspace = testWorkspace(only);
+        const returnedDocumentSessionId = id("session-b");
+
+        const result = updateWorkspaceDocument(workspace, only.sessionId, (current) => ({
+            ...current,
+            sessionId: returnedDocumentSessionId,
+        }));
+
+        expect(result).toEqual({
+            accepted: false,
+            workspace,
+            refusal: {
+                reason: "document-update-changed-session-id",
+                documentSessionId: only.sessionId,
+                returnedDocumentSessionId,
+            },
+        });
+    });
+
+    it("refuses a document update that collides with another canonical URI", () => {
+        const first = testDocument("session-a", "file:///D:/Shaders/A.shadergraph");
+        const second = testDocument("session-b", null);
+        const workspace = testWorkspace(first, second);
+
+        const result = updateWorkspaceDocument(workspace, second.sessionId, (current) => ({
+            ...current,
+            canonicalUri: first.canonicalUri,
+        }));
+
+        expect(result).toEqual({
+            accepted: false,
+            workspace,
+            refusal: {
+                reason: "canonical-document-uri-already-open",
+                canonicalUri: first.canonicalUri,
+                owningDocumentSessionId: first.sessionId,
+            },
+        });
+    });
+
+    it("binding a canonical URI preserves the complete document record", () => {
+        const only = testDocument("session-a", null, 7);
+        const workspace = testWorkspace(only);
+        const canonicalUri = uri("file:///D:/Shaders/A.shadergraph");
+
+        const result = bindWorkspaceDocumentUri(workspace, only.sessionId, canonicalUri);
+
+        expect(result.accepted).toBe(true);
+        expect(result.workspace.documents).toEqual([{ ...only, canonicalUri }]);
+        expect(activeWorkspaceDocument(result.workspace)).toEqual({ ...only, canonicalUri });
     });
 });
 

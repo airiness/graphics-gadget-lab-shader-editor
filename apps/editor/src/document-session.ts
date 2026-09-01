@@ -28,7 +28,11 @@ import {
     type DocumentHistory,
 } from "@gglab/editor-ui";
 import { serializeShaderGraphDocument, type ShaderGraphDocument } from "@gglab/shader-graph-core";
-import type { DocumentSessionId } from "./workspace-session.js";
+import type {
+    CanonicalDocumentUri,
+    DocumentSessionId,
+    WorkspaceDocumentHandle,
+} from "./workspace-session.js";
 
 export type DocumentProvenance =
     | { readonly kind: "file"; readonly path: string }
@@ -51,8 +55,10 @@ export function provenanceFromImport(): DocumentProvenance {
  * aggregate prevents active-document switching from pairing one document's
  * undo stack with another document's save state.
  */
-export interface DocumentSession {
+export interface DocumentSession extends WorkspaceDocumentHandle {
     readonly sessionId: DocumentSessionId;
+    /** Null until the native host supplies a canonical document URI. */
+    readonly canonicalUri: CanonicalDocumentUri | null;
     readonly history: DocumentHistory<ShaderGraphDocument>;
     readonly provenance: DocumentProvenance;
     /** Canonical serialization of the document in its last saved /
@@ -64,9 +70,11 @@ export function createSession(
     sessionId: DocumentSessionId,
     provenance: DocumentProvenance,
     document: ShaderGraphDocument,
+    canonicalUri: CanonicalDocumentUri | null = null,
 ): DocumentSession {
     return {
         sessionId,
+        canonicalUri,
         history: createHistory(document),
         provenance,
         savedBaseline: serializeShaderGraphDocument(document),

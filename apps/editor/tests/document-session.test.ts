@@ -24,7 +24,16 @@ import {
     type DocumentProvenance,
 } from "../src/document-session.js";
 import { serializeShaderGraphDocument, type ShaderGraphDocument } from "@gglab/shader-graph-core";
-import { createDocumentSessionId, type DocumentSessionId } from "../src/workspace-session.js";
+import {
+    activeWorkspaceDocument,
+    activateWorkspaceDocument,
+    commitWorkspacePreviewTarget,
+    createDocumentSessionId,
+    createWorkspaceSession,
+    openWorkspaceDocument,
+    updateWorkspaceDocument,
+    type DocumentSessionId,
+} from "../src/workspace-session.js";
 
 const DOC: ShaderGraphDocument = {
     schemaVersion: 1,
@@ -92,6 +101,7 @@ describe("document identity and history ownership", () => {
         const changed = recordDocumentChange(initial, changedDocument, "changed graph id");
 
         expect(changed.sessionId).toBe(SESSION_ID);
+        expect(changed.canonicalUri).toBeNull();
         expect(changed.provenance).toBe(initial.provenance);
         expect(changed.savedBaseline).toBe(initial.savedBaseline);
         expect(changed.history.present).toBe(changedDocument);
@@ -134,6 +144,57 @@ describe("document identity and history ownership", () => {
 
         expect(result).toBe(current);
         expect(result.provenance).toEqual({ kind: "imported" });
+    });
+});
+
+describe("WorkspaceSession and DocumentSession composition", () => {
+    it("keeps independent histories and baselines while active and Preview ownership move separately", () => {
+        const firstDocument: ShaderGraphDocument = { ...DOC, graphId: "first" };
+        const secondDocument: ShaderGraphDocument = { ...DOC, graphId: "second" };
+        const first = makeSession(
+            provenanceFromFile("C:\\gglab\\First.shadergraph"),
+            firstDocument,
+            createDocumentSessionId("first-session"),
+        );
+        const second = makeSession(
+            provenanceFromImport(),
+            secondDocument,
+            createDocumentSessionId("second-session"),
+        );
+        let workspace = createWorkspaceSession<typeof first>();
+        for (const documentSession of [first, second]) {
+            const opened = openWorkspaceDocument(workspace, documentSession);
+            if (opened.accepted === false) {
+                throw new Error(`fixture open refused: ${opened.refusal.reason}`);
+            }
+            workspace = opened.workspace;
+        }
+        const preview = commitWorkspacePreviewTarget(workspace, second.sessionId);
+        if (preview.accepted === false) {
+            throw new Error("fixture Preview target was refused");
+        }
+        workspace = preview.workspace;
+
+        const changedFirstDocument: ShaderGraphDocument = { ...firstDocument, graphId: "first-changed" };
+        const updated = updateWorkspaceDocument(workspace, first.sessionId, (current) =>
+            recordDocumentChange(current, changedFirstDocument, "changed first document"),
+        );
+        if (updated.accepted === false) {
+            throw new Error(`fixture update refused: ${updated.refusal.reason}`);
+        }
+        workspace = updated.workspace;
+
+        expect(activeWorkspaceDocument(workspace)).toBe(second);
+        expect(workspace.preview.targetDocumentId).toBe(second.sessionId);
+        expect(isDirty(workspace.documents[0]!)).toBe(true);
+        expect(workspace.documents[0]!.history.past).toHaveLength(1);
+        expect(isDirty(workspace.documents[1]!)).toBe(false);
+        expect(workspace.documents[1]).toBe(second);
+
+        const activated = activateWorkspaceDocument(workspace, first.sessionId);
+        expect(activated.accepted).toBe(true);
+        expect(activeWorkspaceDocument(activated.workspace)?.history.present).toBe(changedFirstDocument);
+        expect(activated.workspace.preview.targetDocumentId).toBe(second.sessionId);
     });
 });
 

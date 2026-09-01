@@ -60,13 +60,18 @@ export interface WorkspacePreviewTargetState {
     readonly targetDocumentId: DocumentSessionId | null;
 }
 
-export interface WorkspaceSession {
-    readonly documents: readonly WorkspaceDocumentHandle[];
+export interface WorkspaceSession<
+    TDocument extends WorkspaceDocumentHandle = WorkspaceDocumentHandle,
+> {
+    /** The complete open-document records owned by this Workspace. */
+    readonly documents: readonly TDocument[];
     readonly activeDocumentId: DocumentSessionId | null;
     readonly preview: WorkspacePreviewTargetState;
 }
 
-export function createWorkspaceSession(): WorkspaceSession {
+export function createWorkspaceSession<
+    TDocument extends WorkspaceDocumentHandle = WorkspaceDocumentHandle,
+>(): WorkspaceSession<TDocument> {
     return {
         documents: [],
         activeDocumentId: null,
@@ -87,31 +92,40 @@ export type WorkspaceRefusal =
           readonly reason: "canonical-document-uri-already-open";
           readonly canonicalUri: CanonicalDocumentUri;
           readonly owningDocumentSessionId: DocumentSessionId;
+      }
+    | {
+          readonly reason: "document-update-changed-session-id";
+          readonly documentSessionId: DocumentSessionId;
+          readonly returnedDocumentSessionId: DocumentSessionId;
       };
 
-export type WorkspaceTransition =
+export type WorkspaceTransition<
+    TDocument extends WorkspaceDocumentHandle = WorkspaceDocumentHandle,
+> =
     | {
           readonly accepted: true;
           /** Same instance for an accepted no-op; a new instance for a change. */
-          readonly workspace: WorkspaceSession;
+          readonly workspace: WorkspaceSession<TDocument>;
       }
     | {
           readonly accepted: false;
           /** A refusal never mutates the input workspace. */
-          readonly workspace: WorkspaceSession;
+          readonly workspace: WorkspaceSession<TDocument>;
           readonly refusal: WorkspaceRefusal;
       };
 
-export type OpenWorkspaceDocumentResult =
+export type OpenWorkspaceDocumentResult<
+    TDocument extends WorkspaceDocumentHandle = WorkspaceDocumentHandle,
+> =
     | {
           readonly accepted: true;
-          readonly workspace: WorkspaceSession;
+          readonly workspace: WorkspaceSession<TDocument>;
           readonly disposition: "opened" | "activated-existing";
           readonly documentSessionId: DocumentSessionId;
       }
     | {
           readonly accepted: false;
-          readonly workspace: WorkspaceSession;
+          readonly workspace: WorkspaceSession<TDocument>;
           readonly refusal: Extract<WorkspaceRefusal, { readonly reason: "document-session-id-already-open" }>;
       };
 
@@ -123,10 +137,10 @@ export type OpenWorkspaceDocumentResult =
  * Opening an already-open file activates its existing session without moving
  * the Preview target.
  */
-export function openWorkspaceDocument(
-    workspace: WorkspaceSession,
-    document: WorkspaceDocumentHandle,
-): OpenWorkspaceDocumentResult {
+export function openWorkspaceDocument<TDocument extends WorkspaceDocumentHandle>(
+    workspace: WorkspaceSession<TDocument>,
+    document: TDocument,
+): OpenWorkspaceDocumentResult<TDocument> {
     const existingById = findDocument(workspace, document.sessionId);
     if (existingById !== undefined) {
         if (existingById.canonicalUri === document.canonicalUri) {
@@ -174,10 +188,10 @@ export function openWorkspaceDocument(
 }
 
 /** Activate a tab without changing explicit Preview ownership. */
-export function activateWorkspaceDocument(
-    workspace: WorkspaceSession,
+export function activateWorkspaceDocument<TDocument extends WorkspaceDocumentHandle>(
+    workspace: WorkspaceSession<TDocument>,
     documentSessionId: DocumentSessionId,
-): WorkspaceTransition {
+): WorkspaceTransition<TDocument> {
     if (findDocument(workspace, documentSessionId) === undefined) {
         return refusedDocumentNotOpen(workspace, documentSessionId);
     }
@@ -191,10 +205,10 @@ export function activateWorkspaceDocument(
  * attached, the PreviewCoordinator must stop/await the old ownership binding
  * before it commits this transition.
  */
-export function commitWorkspacePreviewTarget(
-    workspace: WorkspaceSession,
+export function commitWorkspacePreviewTarget<TDocument extends WorkspaceDocumentHandle>(
+    workspace: WorkspaceSession<TDocument>,
     documentSessionId: DocumentSessionId | null,
-): WorkspaceTransition {
+): WorkspaceTransition<TDocument> {
     if (documentSessionId !== null && findDocument(workspace, documentSessionId) === undefined) {
         return refusedDocumentNotOpen(workspace, documentSessionId);
     }
@@ -215,11 +229,11 @@ export function commitWorkspacePreviewTarget(
  * A URI already owned by another open session is a conflict, never an implicit
  * merge of two editing contexts.
  */
-export function bindWorkspaceDocumentUri(
-    workspace: WorkspaceSession,
+export function bindWorkspaceDocumentUri<TDocument extends WorkspaceDocumentHandle>(
+    workspace: WorkspaceSession<TDocument>,
     documentSessionId: DocumentSessionId,
     canonicalUri: CanonicalDocumentUri,
-): WorkspaceTransition {
+): WorkspaceTransition<TDocument> {
     const document = findDocument(workspace, documentSessionId);
     if (document === undefined) {
         return refusedDocumentNotOpen(workspace, documentSessionId);
@@ -254,6 +268,78 @@ export function bindWorkspaceDocumentUri(
     };
 }
 
+/** Return the complete active document record, or null for an empty Workspace. */
+export function activeWorkspaceDocument<TDocument extends WorkspaceDocumentHandle>(
+    workspace: WorkspaceSession<TDocument>,
+): TDocument | null {
+    if (workspace.activeDocumentId === null) {
+        return null;
+    }
+    return findDocument(workspace, workspace.activeDocumentId) ?? null;
+}
+
+/**
+ * Update one open document by its ephemeral session identity.
+ *
+ * The reducer preserves Workspace ownership invariants around the update:
+ * document identity cannot change, and a changed canonical URI cannot collide
+ * with another open document. This is the route for history, baseline,
+ * selection, diagnostics, and other per-document state updates once their
+ * complete records are stored in `WorkspaceSession.documents`.
+ */
+export function updateWorkspaceDocument<TDocument extends WorkspaceDocumentHandle>(
+    workspace: WorkspaceSession<TDocument>,
+    documentSessionId: DocumentSessionId,
+    update: (document: TDocument) => TDocument,
+): WorkspaceTransition<TDocument> {
+    const index = workspace.documents.findIndex((candidate) => candidate.sessionId === documentSessionId);
+    const current = workspace.documents[index];
+    if (index < 0 || current === undefined) {
+        return refusedDocumentNotOpen(workspace, documentSessionId);
+    }
+
+    const next = update(current);
+    if (next.sessionId !== documentSessionId) {
+        return {
+            accepted: false,
+            workspace,
+            refusal: {
+                reason: "document-update-changed-session-id",
+                documentSessionId,
+                returnedDocumentSessionId: next.sessionId,
+            },
+        };
+    }
+    if (next === current) {
+        return { accepted: true, workspace };
+    }
+    if (next.canonicalUri !== null) {
+        const existingOwner = workspace.documents.find(
+            (candidate) =>
+                candidate.canonicalUri === next.canonicalUri &&
+                candidate.sessionId !== documentSessionId,
+        );
+        if (existingOwner !== undefined) {
+            return {
+                accepted: false,
+                workspace,
+                refusal: {
+                    reason: "canonical-document-uri-already-open",
+                    canonicalUri: next.canonicalUri,
+                    owningDocumentSessionId: existingOwner.sessionId,
+                },
+            };
+        }
+    }
+
+    const documents = [...workspace.documents];
+    documents[index] = next;
+    return {
+        accepted: true,
+        workspace: { ...workspace, documents },
+    };
+}
+
 /**
  * Remove one open context. Closing the Preview target clears Preview ownership.
  * Closing the active tab chooses the next tab at that index, then the previous
@@ -261,10 +347,10 @@ export function bindWorkspaceDocumentUri(
  * The caller must complete unsaved-change handling and Preview Runtime teardown
  * before committing this final close transition.
  */
-export function closeWorkspaceDocument(
-    workspace: WorkspaceSession,
+export function closeWorkspaceDocument<TDocument extends WorkspaceDocumentHandle>(
+    workspace: WorkspaceSession<TDocument>,
     documentSessionId: DocumentSessionId,
-): WorkspaceTransition {
+): WorkspaceTransition<TDocument> {
     const index = workspace.documents.findIndex((candidate) => candidate.sessionId === documentSessionId);
     if (index < 0) {
         return refusedDocumentNotOpen(workspace, documentSessionId);
@@ -292,26 +378,26 @@ export function closeWorkspaceDocument(
     };
 }
 
-function findDocument(
-    workspace: WorkspaceSession,
+function findDocument<TDocument extends WorkspaceDocumentHandle>(
+    workspace: WorkspaceSession<TDocument>,
     documentSessionId: DocumentSessionId,
-): WorkspaceDocumentHandle | undefined {
+): TDocument | undefined {
     return workspace.documents.find((candidate) => candidate.sessionId === documentSessionId);
 }
 
-function activateExisting(
-    workspace: WorkspaceSession,
+function activateExisting<TDocument extends WorkspaceDocumentHandle>(
+    workspace: WorkspaceSession<TDocument>,
     documentSessionId: DocumentSessionId,
-): WorkspaceSession {
+): WorkspaceSession<TDocument> {
     return workspace.activeDocumentId === documentSessionId
         ? workspace
         : { ...workspace, activeDocumentId: documentSessionId };
 }
 
-function refusedDocumentNotOpen(
-    workspace: WorkspaceSession,
+function refusedDocumentNotOpen<TDocument extends WorkspaceDocumentHandle>(
+    workspace: WorkspaceSession<TDocument>,
     documentSessionId: DocumentSessionId,
-): Extract<WorkspaceTransition, { readonly accepted: false }> {
+): Extract<WorkspaceTransition<TDocument>, { readonly accepted: false }> {
     return {
         accepted: false,
         workspace,
