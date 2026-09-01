@@ -1,10 +1,11 @@
 # GGLab Shader Graph Editor — Authoring Architecture
 
-> Status: Proposed Architecture v0.4  
+> Status: Proposed Architecture v0.5
+>
 > Scope: Shader Graph authoring model, first-class authoring frontends (GUI and CLI), editor application architecture, graph-to-HLSL compilation, Shader Toolchain integration, diagnostics, preview, and the minimum GGLab Runtime integration seam  
 > Authority relationship: Extends the authoring side of `GGLab_Shader_System_Architecture.md`; does not replace Shader Toolchain or Runtime architecture  
 > Primary target: Windows desktop development workflow for Graphics Gadget Lab, plus a headless CLI surface for the same workflow  
-> Revision note: v0.3 adds the first-class CLI authoring frontend (machine/automation authoring over the same headless core) as a normative product boundary. v0.2 folds the architecture-review amendment and subsequent review closure into this single normative proposal. v0.4 records the Slice 2 owner decisions: the strict native-build readiness gate (no bypass), the Toolchain Client as a sibling domain of ShaderGraphCore, the narrow Tauri ShaderToolService with Rust as bounded execution only, service-owned staging of generated sources, target as explicit build configuration, the CLI build deferral, and the external ownership of the toolchain handshake wire contract.
+> Revision note: v0.5 records owner acceptance of the Preview Milestone B cross-repository DX12 success/failure/recovery qualification on 2026-09-01. v0.4 records the Slice 2 owner decisions: the strict native-build readiness gate (no bypass), the Toolchain Client as a sibling domain of ShaderGraphCore, the narrow Tauri ShaderToolService with Rust as bounded execution only, service-owned staging of generated sources, target as explicit build configuration, the CLI build deferral, and the external ownership of the toolchain handshake wire contract. v0.3 adds the first-class CLI authoring frontend (machine/automation authoring over the same headless core) as a normative product boundary. v0.2 folds the architecture-review amendment and subsequent review closure into this single normative proposal.
 
 ---
 
@@ -1545,9 +1546,11 @@ that line through an identity-only Tauri boundary: a successful initial
 publication admits candidate/session-scoped Runtime launch, live processes own
 host-issued identities, observation polling runs only while attached, and
 explicit/editor/service teardown stops the child. The surface presents the
-cross-linked Current/LastGood/Stale/Rejected state; cross-repository live
-success/failure/recovery qualification is the remaining Milestone B step. A
-live session cannot silently cross artifact roots: switching to another tool
+cross-linked Current/LastGood/Stale/Rejected state. Owner acceptance of the
+cross-repository DX12 success/failure/recovery qualification was recorded on
+2026-09-01, completing Preview Milestone B. Vulkan Preview remains gated on
+Vulkan production-backend readiness. A live session cannot silently cross
+artifact roots: switching to another tool
 deployment requires the attached Runtime to exit before a new build is issued.
 Material Programs remain separate.
 
@@ -1984,8 +1987,9 @@ Deliver:
   harness, as investigative evidence only; it never changes the tool's
   `unproven` state and never enters the editor's product path;
 - no function-only stage-acceptance smoke. The permanent main GGLab gate is
-  the current qualification authority; the next real Editor product smoke is
-  the Preview Milestone B path after the standalone Preview Lab is accepted.
+  the current qualification authority; the completed live Editor product smoke
+  is the Preview Milestone B path, which followed acceptance of the standalone
+  Preview Lab.
 
 Acceptance:
 
@@ -2017,10 +2021,11 @@ native compile diagnostic
 
 ## Slice 4 — GGLab Shader Graph Preview Lab
 
-Milestone A and the code portions of Milestone B are implemented across the
-main and Editor repositories. Remaining acceptance is the cross-repository
-live success/failure/recovery qualification; it does not broaden the Material
-Program scope.
+Milestone A and Milestone B are complete across the main and Editor
+repositories. Owner acceptance of the cross-repository DX12
+success/failure/recovery qualification was recorded on 2026-09-01. This closure
+does not broaden the Material Program scope, and it does not claim Vulkan
+Preview readiness before the Vulkan production backend is enabled.
 
 Deliver:
 

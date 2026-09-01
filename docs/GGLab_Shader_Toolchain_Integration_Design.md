@@ -1,6 +1,6 @@
 # GGLab Shader Editor — Toolchain Integration Design
 
-> Status: Construction-level design (active stage, started 2026-08-24)
+> Status: Construction-level design; Preview Milestone B closure recorded 2026-09-01
 > Correctness amendment (2026-08-30): a generated surface function is not a complete shader-program entry. The earlier function-only `NativeCompileRequest` composition and its product-path acceptance are withdrawn; the corrected qualification and Preview ownership are defined below.
 > Scope: how the shader editor CONSUMES the external Shader Toolchain contract and completes the toolchain-integration stage: tool discovery, the strict readiness gate, the narrow host service, native compile request composition, generated-source staging, revisioned build state, the Build Inspector, the test model, and the implementation order.
 > Authority relationship: Implements the owner decisions recorded in `GGLab_Shader_Graph_Editor_Architecture.md` (§19 – §22, §25, §31 stage record, 2026-08-24). It does not modify the baseline; where the two differ, the baseline wins and this document is a defect to report.
@@ -891,11 +891,11 @@ contract exists):*
 
 *Product stage-acceptance smoke:* the former function-only Editor smoke is
 withdrawn. Current generated-function qualification is the permanent main
-GGLab gate, which owns a valid qualification `PSMain`. The next real Editor
-product smoke is the live Preview smoke in Preview Milestone B; it is admitted
-only after the Preview-specific handshake and full-program operation are
-implemented. A failure remains explicit evidence and never becomes a silent
-skip.
+GGLab gate, which owns a valid qualification `PSMain`. The real Editor product
+smoke is the live Preview smoke completed in Preview Milestone B; it was
+admitted only after the Preview-specific handshake and full-program operation
+were implemented. A failure remains explicit evidence and never becomes a
+silent skip.
 
 ---
 
@@ -912,9 +912,9 @@ skip.
   intent/attempt binding and §12's transport.
 - **Material Program / general Runtime integration** — remains a separate,
   later design. The narrow live Editor Preview bridge is no longer deferred:
-  Milestone A is complete and Q4/Q5/Q7 authorize Milestone B under the distinct
-  Pixel/`PSMain`, immutable publication, identity, version-handshake, and
-  last-good contract in the GGLab docs repository's
+  Milestones A and B are complete under the distinct Pixel/`PSMain`, immutable
+  publication, identity, version-handshake, and last-good contract in the
+  GGLab docs repository's
   `GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md`.
 - **Node inspector and the remaining canvas interaction refinements** — the
   owner's deferred list; they land after the toolchain loop closes.
@@ -1038,16 +1038,17 @@ are valid inputs to the later Preview operation.
 and never claim a Shader Artifact. The permanent main GGLab gate is the
 recorded qualification authority.
 
-**Next product milestone — owned by the Preview design.** The standalone
+**Preview product milestone — owned by the Preview design.** The standalone
 Preview Lab is complete (GraphicsGadgetLab PR #175, merge `d6a2b75d`) and
 Q4/Q5/Q7 have final owner approval. Main-repository Milestone B Steps 1–4 now
 publish the dedicated Preview handshake, `build-preview`, immutable publication
 handoff, session pointer, attached launch, and Runtime observation contracts.
 The Editor now consumes those contracts through strict Toolchain Client/Tauri
 boundaries, same-session single-flight orchestration, success-first attached
-startup, and honest current/last-good/stale UI. The next step is Milestone B
-cross-repository success/failure/recovery qualification on DX12, followed by
-Vulkan only when its production backend is enabled.
+startup, and honest current/last-good/stale UI. Owner acceptance of the
+cross-repository DX12 success/failure/recovery qualification was recorded on
+2026-09-01, completing Milestone B. Vulkan follows only when its production
+backend is enabled and is not implied by this DX12 closure.
 
 **Global exit criteria for the stage:**
 
