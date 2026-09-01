@@ -56,6 +56,12 @@ export interface PreviewInputContractSelection {
 export type PreviewInputContractMismatch =
     | { readonly reason: "unsupported-profile-line"; readonly profileId: string; readonly profileVersion: number }
     | { readonly reason: "descriptor-profile-mismatch" }
+    | {
+          readonly reason: "generated-function-mismatch";
+          readonly field: "name" | "stage" | "returnValue.objectName";
+          readonly expected: string;
+          readonly observed: string;
+      }
     | { readonly reason: "graph-parameter-count-mismatch"; readonly expected: number; readonly observed: number }
     | {
           readonly reason: "graph-parameter-mismatch";
@@ -84,6 +90,36 @@ function graphVisibleInputMatches(descriptor: SurfaceProfileDescriptor): boolean
         descriptor.graphVisibleInputs[0]?.id === "uv0" &&
         descriptor.graphVisibleInputs[0].type === "float2"
     );
+}
+
+function generatedFunctionMismatch(
+    descriptor: SurfaceProfileDescriptor,
+): Extract<PreviewInputContractMismatch, { readonly reason: "generated-function-mismatch" }> | null {
+    if (descriptor.generatedFunction.name !== "EvaluateSurface") {
+        return {
+            reason: "generated-function-mismatch",
+            field: "name",
+            expected: "EvaluateSurface",
+            observed: descriptor.generatedFunction.name,
+        };
+    }
+    if (descriptor.generatedFunction.stage !== "pixel") {
+        return {
+            reason: "generated-function-mismatch",
+            field: "stage",
+            expected: "pixel",
+            observed: descriptor.generatedFunction.stage,
+        };
+    }
+    if (descriptor.generatedFunction.returnValue.objectName !== "SurfaceData") {
+        return {
+            reason: "generated-function-mismatch",
+            field: "returnValue.objectName",
+            expected: "SurfaceData",
+            observed: descriptor.generatedFunction.returnValue.objectName,
+        };
+    }
+    return null;
 }
 
 function textureBindingPairMatches(descriptor: SurfaceProfileDescriptor): boolean {
@@ -129,6 +165,10 @@ export function selectPreviewInputContract(
         descriptor.profileVersion !== document.profileVersion
     ) {
         return { matched: false, mismatch: { reason: "descriptor-profile-mismatch" } };
+    }
+    const generatedFunction = generatedFunctionMismatch(descriptor);
+    if (generatedFunction !== null) {
+        return { matched: false, mismatch: generatedFunction };
     }
 
     const observed = document.parameters.map(parameterFact).sort((left, right) =>

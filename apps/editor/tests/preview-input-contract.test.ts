@@ -78,6 +78,47 @@ describe("the frozen Preview input contracts", () => {
     });
 
     it.each([
+        ["name", "ShadeSurface"],
+        ["stage", "vertex"],
+        ["returnValue.objectName", "OtherSurfaceData"],
+    ] as const)("rejects a changed generated-function %s", (field, value) => {
+        // The strict descriptor reader already rejects a non-pixel stage.
+        // Mutate an accepted value here so this test independently freezes
+        // the downstream Preview selector's complete ABI gate as well.
+        const changed = structuredClone(descriptor(canonicalV1Fixture));
+        const generatedFunction = changed.generatedFunction as unknown as Record<string, unknown>;
+        if (field === "returnValue.objectName") {
+            const returnValue = generatedFunction["returnValue"] as Record<string, unknown>;
+            returnValue["objectName"] = value;
+        } else {
+            generatedFunction[field] = value;
+        }
+
+        expect(
+            selectPreviewInputContract(
+                document(1, [
+                    parameter("p.metal", "ScalarParameter", "float"),
+                    parameter("p.tint", "VectorParameter", "float3"),
+                ]),
+                changed,
+            ),
+        ).toEqual({
+            matched: false,
+            mismatch: {
+                reason: "generated-function-mismatch",
+                field,
+                expected:
+                    field === "name"
+                        ? "EvaluateSurface"
+                        : field === "stage"
+                          ? "pixel"
+                          : "SurfaceData",
+                observed: value,
+            },
+        });
+    });
+
+    it.each([
         [
             "stable id",
             [parameter("p.other", "ScalarParameter", "float"), parameter("p.tint", "VectorParameter", "float3")],

@@ -32,6 +32,7 @@ import {
     type HostToolBoundary,
     type NativePreviewBuildRequest,
     type PreviewAttemptOutcome,
+    type PreviewBuildLine,
     type PreviewEligibility,
     type PreviewEligibilityRequirement,
     type PreviewHandshakeProcessOutcome,
@@ -147,6 +148,7 @@ export type PreviewHandshakeAttemptRecord =
 export type PreviewBuildGateReason =
     | PreviewCompositionRefusal
     | { readonly reason: "ordinary-tool-not-compatible"; readonly toolStatus: ToolCompatibilityState["status"] }
+    | { readonly reason: "attached-runtime-launching" }
     | { readonly reason: "attached-runtime-deployment-mismatch" }
     | { readonly reason: "preview-proof-missing" }
     | { readonly reason: "preview-ineligible"; readonly eligibility: PreviewEligibility }
@@ -275,6 +277,16 @@ function handshakeKey(candidate: ToolCandidate, requirement: PreviewEligibilityR
     ].join("\u0000");
 }
 
+function candidatesShareDeployment(left: ToolCandidate, right: ToolCandidate): boolean {
+    return left.toolPath === right.toolPath;
+}
+
+function lineForDeployment(line: PreviewBuildLine, candidate: ToolCandidate): PreviewBuildLine {
+    return {
+        attempts: line.attempts.filter((attempt) => candidatesShareDeployment(attempt.candidate, candidate)),
+    };
+}
+
 export class PreviewBuildFlow {
     private sessionState: PreviewBuildSession;
     private lastHandshakeState: PreviewHandshakeAttemptRecord | null = null;
@@ -287,8 +299,14 @@ export class PreviewBuildFlow {
     private buildQueue: Promise<void> = Promise.resolve();
     private latestBuildRequestOrdinal = 0;
     private activeBuild: { readonly buildId: BuildId; cancelRequested: boolean } | null = null;
-    private acceptedObservationState: PreviewObservation | null = null;
-    private lastObservationRefreshState: PreviewObservationRefresh | null = null;
+    private acceptedObservationState: {
+        readonly candidate: ToolCandidate;
+        readonly observation: PreviewObservation;
+    } | null = null;
+    private lastObservationRefreshState: {
+        readonly candidate: ToolCandidate | null;
+        readonly refresh: PreviewObservationRefresh;
+    } | null = null;
     private observationLane: Promise<PreviewObservationRefresh> | null = null;
     private runtimeStateValue: AttachedPreviewRuntimeState = { kind: "idle" };
     private runtimeLaunchLane: Promise<AttachedPreviewLaunch> | null = null;
@@ -321,15 +339,36 @@ export class PreviewBuildFlow {
     }
 
     get acceptedObservation(): PreviewObservation | null {
-        return this.acceptedObservationState;
+        const candidate = this.currentDeploymentCandidate();
+        return candidate !== null && this.acceptedObservationState !== null &&
+            candidatesShareDeployment(this.acceptedObservationState.candidate, candidate)
+            ? this.acceptedObservationState.observation
+            : null;
     }
 
     get lastObservationRefresh(): PreviewObservationRefresh | null {
-        return this.lastObservationRefreshState;
+        if (this.lastObservationRefreshState === null) {
+            return null;
+        }
+        const candidate = this.currentDeploymentCandidate();
+        return this.lastObservationRefreshState.candidate === null ||
+            (candidate !== null && candidatesShareDeployment(this.lastObservationRefreshState.candidate, candidate))
+            ? this.lastObservationRefreshState.refresh
+            : null;
     }
 
     get runtimeState(): AttachedPreviewRuntimeState {
         return this.runtimeStateValue;
+    }
+
+    get initialPublicationAvailable(): boolean {
+        const candidate = this.currentDeploymentCandidate();
+        if (candidate === null) {
+            return false;
+        }
+        return lineForDeployment(this.sessionState.line, candidate).attempts.some(
+            (attempt) => attempt.state === "settled" && attempt.outcome.kind === "published",
+        );
     }
 
     private compose(input: PreviewCompositionInput): PreviewComposition {
@@ -477,9 +516,17 @@ export class PreviewBuildFlow {
                 eligibility: null,
             };
         }
+        if (this.runtimeStateValue.kind === "launching") {
+            return {
+                admitted: false,
+                reasons: [{ reason: "attached-runtime-launching" }],
+                request: null,
+                eligibility: null,
+            };
+        }
         if (
             this.runtimeCandidateValue !== null &&
-            this.runtimeCandidateValue.toolPath !== tool.candidate.toolPath
+            !candidatesShareDeployment(this.runtimeCandidateValue, tool.candidate)
         ) {
             return {
                 admitted: false,
@@ -645,12 +692,13 @@ export class PreviewBuildFlow {
         if (this.observationLane !== null) {
             return this.observationLane;
         }
-        const latest = [...this.sessionState.line.attempts].sort(
+        const candidate = this.currentDeploymentCandidate();
+        const latest = candidate === null ? undefined : [...lineForDeployment(this.sessionState.line, candidate).attempts].sort(
             (left, right) => right.attemptSequence - left.attemptSequence,
         )[0];
         if (latest === undefined) {
             const record: PreviewObservationRefresh = { kind: "no-attempt" };
-            this.lastObservationRefreshState = record;
+            this.lastObservationRefreshState = { candidate, refresh: record };
             return Promise.resolve(record);
         }
         const promise = this.runObservationRefresh(this.observationCandidate(latest.candidate)).finally(() => {
@@ -662,6 +710,19 @@ export class PreviewBuildFlow {
         return promise;
     }
 
+    private currentDeploymentCandidate(): ToolCandidate | null {
+        if (this.runtimeCandidateValue !== null) {
+            return this.observationCandidate(this.runtimeCandidateValue);
+        }
+        const currentTool = this.toolPort.current();
+        if ("candidate" in currentTool) {
+            return currentTool.candidate;
+        }
+        return [...this.sessionState.line.attempts].sort(
+            (left, right) => right.attemptSequence - left.attemptSequence,
+        )[0]?.candidate ?? null;
+    }
+
     private observationCandidate(latestAttemptCandidate: ToolCandidate): ToolCandidate {
         const runtimeCandidate = this.runtimeCandidateValue;
         if (runtimeCandidate === null) {
@@ -670,7 +731,7 @@ export class PreviewBuildFlow {
         const currentTool = this.toolPort.current();
         if (
             "candidate" in currentTool &&
-            currentTool.candidate.toolPath === runtimeCandidate.toolPath
+            candidatesShareDeployment(currentTool.candidate, runtimeCandidate)
         ) {
             return currentTool.candidate;
         }
@@ -693,7 +754,8 @@ export class PreviewBuildFlow {
             if (read.status === "rejected") {
                 record = { kind: "record-rejected", rejection: read.rejection };
             } else {
-                const projection = projectPreviewRuntime(this.sessionState.line, null, read.observation);
+                const deploymentLine = lineForDeployment(this.sessionState.line, candidate);
+                const projection = projectPreviewRuntime(deploymentLine, null, read.observation);
                 if (projection.observationBinding !== "bound") {
                     if (projection.observationBinding === "none") {
                         throw new Error("a decoded Preview observation cannot have no binding");
@@ -703,11 +765,15 @@ export class PreviewBuildFlow {
                         binding: projection.observationBinding,
                     };
                 } else {
-                    const update = acceptPreviewObservation(this.acceptedObservationState, read.observation);
+                    const current = this.acceptedObservationState !== null &&
+                        candidatesShareDeployment(this.acceptedObservationState.candidate, candidate)
+                        ? this.acceptedObservationState.observation
+                        : null;
+                    const update = acceptPreviewObservation(current, read.observation);
                     if (!update.accepted) {
                         record = { kind: "ordering-rejected", rejection: update.rejection };
                     } else {
-                        this.acceptedObservationState = update.observation;
+                        this.acceptedObservationState = { candidate, observation: update.observation };
                         record = {
                             kind: "accepted",
                             changed: update.changed,
@@ -717,7 +783,7 @@ export class PreviewBuildFlow {
                 }
             }
         }
-        this.lastObservationRefreshState = record;
+        this.lastObservationRefreshState = { candidate, refresh: record };
         return record;
     }
 
@@ -730,7 +796,15 @@ export class PreviewBuildFlow {
             gate.admitted && gate.request !== null && gate.eligibility?.status === "eligible"
                 ? previewBuildIntentOf(gate.request, gate.eligibility.facts)
                 : null;
-        return projectPreviewRuntime(this.sessionState.line, intent, this.acceptedObservationState);
+        const candidate = this.currentDeploymentCandidate();
+        if (candidate === null) {
+            return projectPreviewRuntime(this.sessionState.line, intent, null);
+        }
+        const observation = this.acceptedObservationState !== null &&
+            candidatesShareDeployment(this.acceptedObservationState.candidate, candidate)
+            ? this.acceptedObservationState.observation
+            : null;
+        return projectPreviewRuntime(lineForDeployment(this.sessionState.line, candidate), intent, observation);
     }
 
     /** Success-first attached launch. A strict Preview build result is the
@@ -748,7 +822,8 @@ export class PreviewBuildFlow {
                 runtimeId: this.runtimeStateValue.runtimeId,
             });
         }
-        const published = [...this.sessionState.line.attempts]
+        const candidate = this.currentDeploymentCandidate();
+        const published = candidate === null ? undefined : [...lineForDeployment(this.sessionState.line, candidate).attempts]
             .sort((left, right) => right.attemptSequence - left.attemptSequence)
             .find(
                 (attempt) =>

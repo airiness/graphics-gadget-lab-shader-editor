@@ -156,14 +156,14 @@ function previewHandshakeOk(): string {
     });
 }
 
-function previewBuildOk(attemptSequence: number): string {
+function previewBuildOk(attemptSequence: number, publicationId = PUBLICATION_ID): string {
     return JSON.stringify({
         command: "build-preview",
         success: true,
         status: "ok",
         exitCode: 0,
         attemptSequence,
-        publicationId: PUBLICATION_ID,
+        publicationId,
         shaderArtifactId: "c2".repeat(32),
         baseRegistryId: "d3".repeat(32),
         previewRegistryId: "e4".repeat(32),
@@ -559,6 +559,56 @@ describe("Preview Runtime observation orchestration", () => {
         expect(port.state).toEqual({ status: "unavailable" });
         expect(flow.acceptedObservation).toBeNull();
     });
+
+    it("scopes accepted observations and LastGood projection to one deployment", async () => {
+        const nextPublication = "b2".repeat(32);
+        const boundary = fake({
+            previewBuild: [
+                { stdout: previewBuildOk(1), exitCode: 0 },
+                { stdout: previewBuildOk(2, nextPublication), exitCode: 0 },
+            ],
+        });
+        const observation = observations([
+            { kind: "read", bytes: observationBytes(1, PUBLICATION_ID) },
+            { kind: "read", bytes: observationBytes(2, nextPublication) },
+        ]);
+        const port = new TestToolPort();
+        const flow = new PreviewBuildFlow(boundary, port, SESSION_ID, observation, runtimes());
+        const input = composition();
+
+        await publish(flow, input);
+        await expect(flow.refreshObservation()).resolves.toMatchObject({ kind: "accepted" });
+        expect(flow.acceptedObservation?.loadedPublicationRef).toBe(PUBLICATION_ID);
+
+        port.state = compatible(CANDIDATE_C);
+        expect(flow.acceptedObservation).toBeNull();
+        expect(flow.runtimeProjection(input)).toMatchObject({
+            freshness: "idle",
+            lastGoodPublicationId: null,
+            observationBinding: "none",
+        });
+
+        await prove(flow, input);
+        const next = await flow.buildPreview(input);
+        if (!next.issued) {
+            throw new Error("the second deployment's Preview build must issue");
+        }
+        await next.outcome;
+        expect(flow.runtimeProjection(input)).toMatchObject({
+            freshness: "pending",
+            lastGoodPublicationId: null,
+            observationBinding: "none",
+        });
+
+        await expect(flow.refreshObservation()).resolves.toMatchObject({ kind: "accepted" });
+        expect(observation.lastRead).toEqual({ candidate: CANDIDATE_C, sessionId: SESSION_ID });
+        expect(flow.runtimeProjection(input)).toMatchObject({
+            freshness: "current",
+            currentPublicationId: nextPublication,
+            lastGoodPublicationId: nextPublication,
+            observationBinding: "bound",
+        });
+    });
 });
 
 describe("Attached Preview Runtime lifecycle", () => {
@@ -606,6 +656,35 @@ describe("Attached Preview Runtime lifecycle", () => {
             runtimeIdentity: "runtime-a",
             exit: { runtimeId: { sequence: 1 }, kind: "exited", exitCode: 0 },
         });
+    });
+
+    it("freezes Preview builds until an attached Runtime finishes launching", async () => {
+        const boundary = fake();
+        const runtime = runtimes([{ kind: "launched", runtimeIdentity: "runtime-a" }], true);
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), runtime);
+        const input = composition();
+        await publish(flow, input);
+        const buildCallsBeforeLaunch = boundary.previewBuildCalls;
+
+        const pendingLaunch = flow.launchAttachedPreview();
+        expect(flow.runtimeState).toEqual({ kind: "launching" });
+        expect(flow.buildGate(input)).toMatchObject({
+            admitted: false,
+            reasons: [{ reason: "attached-runtime-launching" }],
+        });
+        await expect(flow.buildPreview(input)).resolves.toMatchObject({
+            issued: false,
+            reason: "gate-refused",
+        });
+        expect(boundary.previewBuildCalls).toBe(buildCallsBeforeLaunch);
+
+        expect(runtime.releaseLaunch()).toBe(true);
+        const launched = await pendingLaunch;
+        expect(flow.buildGate(input).admitted).toBe(true);
+        if (launched.launched) {
+            await flow.stopAttachedPreview();
+            await launched.exited;
+        }
     });
 
     it("stops only the host-issued runtime and transitions through stopping", async () => {

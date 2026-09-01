@@ -255,10 +255,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
         handshakeInFlight: flow?.previewHandshakeInFlight ?? false,
         buildInFlight,
         launchInFlight,
-        initialPublicationAvailable:
-            flow?.session.line.attempts.some(
-                (attempt) => attempt.state === "settled" && attempt.outcome.kind === "published",
-            ) ?? false,
+        initialPublicationAvailable: flow?.initialPublicationAvailable ?? false,
         previewHandshake,
         buildPreview,
         launchPreview,
