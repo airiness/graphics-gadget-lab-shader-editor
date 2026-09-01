@@ -14,10 +14,11 @@
  *   composition's verdict) — nothing here is computed twice or owned.
  */
 
-export const INSPECTOR_ZONES = ["contract", "document", "emission", "build"] as const;
+export const INSPECTOR_ZONES = ["selection", "contract", "document", "emission", "build"] as const;
 export type InspectorZone = (typeof INSPECTOR_ZONES)[number];
 
 export const INSPECTOR_ZONE_LABELS: Readonly<Record<InspectorZone, string>> = {
+    selection: "Selection",
     contract: "Contract & checks",
     document: "Document",
     emission: "Emission",
@@ -35,6 +36,8 @@ export interface InspectorZoneBadge {
 /** The zone facts — plain values, each with exactly one owner upstream
  *  (the badge only renders them). */
 export interface InspectorZoneFacts {
+    /** Selection: the canvas session's current single-node selection. */
+    readonly selection: { readonly nodeSelected: boolean };
     /** Contract & checks: the graph verdicts, the contract sets, and the
      *  load verdict (absent load = nothing to fail). */
     readonly checks: { readonly ok: boolean; readonly problemCount: number };
@@ -54,6 +57,10 @@ const problemLabel = (count: number): string => `${count} problem${count === 1 ?
  *  structured — the tab is the zone's always-visible state row. */
 export function inspectorZoneBadge(zone: InspectorZone, facts: InspectorZoneFacts): InspectorZoneBadge {
     switch (zone) {
+        case "selection":
+            return facts.selection.nodeSelected
+                ? { variant: "default", label: "selected" }
+                : { variant: "default", label: "none" };
         case "contract":
             if (facts.checks.ok) {
                 return { variant: "ok", label: "ok" };

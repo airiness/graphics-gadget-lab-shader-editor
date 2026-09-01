@@ -16,6 +16,7 @@ describe("the app shell renders without throwing", () => {
         // The zone strip is rendered (the ampersand is entity-encoded in
         // HTML output) — and each zone's live badge states itself:
         expect(html).toContain("gglab-inspector-tabs");
+        expect(html).toContain("Selection");
         expect(html).toContain("Contract &amp; checks");
         for (const label of ["Document", "Emission", "Native build"]) {
             expect(html).toContain(label);

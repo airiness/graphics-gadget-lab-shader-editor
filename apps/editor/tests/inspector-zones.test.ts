@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { INSPECTOR_ZONES, INSPECTOR_ZONE_LABELS, inspectorZoneBadge, type InspectorZoneFacts } from "../src/inspector-tabs.js";
 
 const facts = (patch: Partial<InspectorZoneFacts> = {}): InspectorZoneFacts => ({
+    selection: { nodeSelected: false },
     checks: { ok: true, problemCount: 0 },
     document: { dirty: false },
     emission: { state: "none", problemCount: 0 },
@@ -16,11 +17,19 @@ const facts = (patch: Partial<InspectorZoneFacts> = {}): InspectorZoneFacts => (
 });
 
 describe("inspector zones — the live state row of each tab", () => {
-    it("exposes exactly four zones, each with a stable label", () => {
-        expect(INSPECTOR_ZONES).toEqual(["contract", "document", "emission", "build"]);
+    it("exposes exactly five zones, each with a stable label", () => {
+        expect(INSPECTOR_ZONES).toEqual(["selection", "contract", "document", "emission", "build"]);
         for (const zone of INSPECTOR_ZONES) {
             expect(INSPECTOR_ZONE_LABELS[zone]).toBeTruthy();
         }
+    });
+
+    it("selection: states whether contextual node properties are available", () => {
+        expect(inspectorZoneBadge("selection", facts())).toEqual({ variant: "default", label: "none" });
+        expect(inspectorZoneBadge("selection", facts({ selection: { nodeSelected: true } }))).toEqual({
+            variant: "default",
+            label: "selected",
+        });
     });
 
     it("contract & checks: ok stays ok; a failing zone states the complete problem count", () => {

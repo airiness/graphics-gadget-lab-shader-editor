@@ -1137,10 +1137,9 @@ describe("typed port presentation (core types → data categories)", () => {
 
     // ---- golden graphs (the fixed smoke scenes) ----------------------------
     // ---- constant values: the only values owned by the document ----------
-    // Capability here, presentation later: the core-judged gate is the
-    // deliverable; the Inspector UX waits for the node-inspector design
-    // (selection-driven, with real node identity).
-    describe("constant values (core-judged gate; presentation deferred to the node-inspector design)", () => {
+    // The contextual Inspector edits through this core-judged gate. It
+    // never invents a second graph mutation path or a global constants table.
+    describe("constant values (core-judged gate behind the contextual node Inspector)", () => {
         // threeNodeDocument (in the node-deletion describe above) has the
         // constant family: n.a Float = 1, n.b Float3 = [1,1,1], n.c Float =
         // 2 — with placed positions.
@@ -1206,19 +1205,17 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(result.refusal?.reason).toContain("not a catalog constant");
         });
 
-        it("the gate stays on the package surface — and the deferred presentation must not leak back in", () => {
-            // The core-judged operation is a capability (UI and CLI both
-            // must reach through it); the Inspector presentation was an
-            // intentional deferral, so no constants table, draft
-            // machinery, or field chrome may survive in the app.
+        it("the contextual Inspector reaches the shared gate without adding another mutation path", () => {
             const barrel = read("../../../packages/editor-ui/src/index.ts");
             expect(barrel).toContain("setConstantValue");
             expect(barrel).toContain("ConstantValue");
+            expect(barrel).toContain("NodePropertiesPanel");
             const app = read("../src/app.tsx");
-            expect(app).not.toContain("gglab-constant-");
-            expect(app).not.toContain("commitConstantValue");
+            expect(app).toContain("setConstantValue(document, nodeId, value)");
+            expect(app).toContain('setInspectorZone("selection")');
+            expect(app).toContain("onConstantValueCommit={onConstantValueCommit}");
             const css = read("../src/app.css");
-            expect(css).not.toContain(".gglab-constant-");
+            expect(css).toContain(".gglab-node-property-grid");
         });
     });
 

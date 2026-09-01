@@ -13,6 +13,7 @@ import {
     removeConnection,
     removeConnectionsAtPort,
     removeNode,
+    setConstantValue,
     reconnectConnection,
     isEditingTextTarget,
     createHistory,
@@ -37,6 +38,7 @@ import {
     FlowViewport,
     Input,
     LayoutIcon,
+    NodePropertiesPanel,
     PanelCloseIcon,
     PanelOpenIcon,
     TrashIcon,
@@ -44,6 +46,7 @@ import {
     type AuthoringDropPayload,
     type AuthoringResult,
     type CanvasFocus,
+    type ConstantValue,
     FileIcon,
     type ConnectionRequest,
     type DescriptorPanelState,
@@ -503,6 +506,10 @@ export function App() {
     const descriptor: SurfaceProfileDescriptor | null = descriptorState.kind === "ready" ? descriptorState.descriptor : null;
 
     const flow = useMemo(() => documentToFlow(document, focus, selectedConnectionId, selectedNodeId), [document, focus, selectedConnectionId, selectedNodeId]);
+    const selectedNode = useMemo(
+        () => document.nodes.find((node) => node.id === selectedNodeId) ?? null,
+        [document, selectedNodeId],
+    );
 
     const graphSets = useMemo<readonly DiagnosticSet[]>(() => {
         const validation = validateShaderGraph(document);
@@ -580,6 +587,12 @@ export function App() {
         setOperationNotes((previous) => [...previous, reason]);
     }
 
+    const onConstantValueCommit = (nodeId: string, value: ConstantValue): boolean => {
+        const result = setConstantValue(document, nodeId, value);
+        applyAuthoring(result, `changed value on ${nodeId}`);
+        return result.applied;
+    };
+
     function selectDiagnostic(diagnostic: ShaderGraphDiagnostic): void {
         // Navigation intent → target resolved against the document from the
         // diagnostic's own dataPath anchor (never parsed from prose).
@@ -635,6 +648,8 @@ export function App() {
         setSelectedNodeId(nodeId);
         setSelectedConnectionId(null);
         setEdgeMenu(null);
+        setInspectorOpen(true);
+        setInspectorZone("selection");
     };
     const onCanvasClick = (): void => {
         setSelectedConnectionId(null);
@@ -653,6 +668,8 @@ export function App() {
         setEdgeMenu(null);
         setReconnectArmed(null);
         setNodeMenu({ nodeId, x: anchor.x, y: anchor.y });
+        setInspectorOpen(true);
+        setInspectorZone("selection");
     };
     const onEdgeContextMenu = (event: { clientX: number; clientY: number }, connectionId: string): void => {
         // Right-click selects (if needed) and offers the one destructive
@@ -966,6 +983,7 @@ export function App() {
     // above (design section 13, surface note) — the badges render, they
     // own nothing: one source of truth per fact stands.
     const inspectorZoneFacts: InspectorZoneFacts = {
+        selection: { nodeSelected: selectedNode !== null },
         checks: {
             ok: graphOk && contractOk && (loadResult === null || loadResult.ok),
             problemCount:
@@ -1170,6 +1188,12 @@ export function App() {
                                 );
                             })}
                         </div>
+                        {inspectorZone === "selection" && (
+                            <NodePropertiesPanel
+                                node={selectedNode}
+                                onConstantValueCommit={onConstantValueCommit}
+                            />
+                        )}
                         {inspectorZone === "contract" && (
                             <>
                             <DescriptorPanel state={descriptorState} onStateChange={onDescriptorStateChange} openDescriptorFile={openDescriptorFile} />
