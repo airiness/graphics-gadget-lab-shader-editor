@@ -1,11 +1,11 @@
 # GGLab Shader Graph Editor — Authoring Architecture
 
-> Status: Proposed Architecture v0.5
+> Status: Proposed Architecture v0.6
 >
 > Scope: Shader Graph authoring model, first-class authoring frontends (GUI and CLI), editor application architecture, graph-to-HLSL compilation, Shader Toolchain integration, diagnostics, preview, and the minimum GGLab Runtime integration seam  
 > Authority relationship: Extends the authoring side of `GGLab_Shader_System_Architecture.md`; does not replace Shader Toolchain or Runtime architecture  
 > Primary target: Windows desktop development workflow for Graphics Gadget Lab, plus a headless CLI surface for the same workflow  
-> Revision note: v0.5 records owner acceptance of the Preview Milestone B cross-repository DX12 success/failure/recovery qualification on 2026-09-01. v0.4 records the Slice 2 owner decisions: the strict native-build readiness gate (no bypass), the Toolchain Client as a sibling domain of ShaderGraphCore, the narrow Tauri ShaderToolService with Rust as bounded execution only, service-owned staging of generated sources, target as explicit build configuration, the CLI build deferral, and the external ownership of the toolchain handshake wire contract. v0.3 adds the first-class CLI authoring frontend (machine/automation authoring over the same headless core) as a normative product boundary. v0.2 folds the architecture-review amendment and subsequent review closure into this single normative proposal.
+> Revision note: v0.6 records owner acceptance of the Vulkan attached Preview qualification and closes Preview Milestone B as a dual-backend DX12/Vulkan product path on 2026-09-01. v0.5 recorded the earlier Preview Milestone B cross-repository DX12 success/failure/recovery qualification. v0.4 records the Slice 2 owner decisions: the strict native-build readiness gate (no bypass), the Toolchain Client as a sibling domain of ShaderGraphCore, the narrow Tauri ShaderToolService with Rust as bounded execution only, service-owned staging of generated sources, target as explicit build configuration, the CLI build deferral, and the external ownership of the toolchain handshake wire contract. v0.3 adds the first-class CLI authoring frontend (machine/automation authoring over the same headless core) as a normative product boundary. v0.2 folds the architecture-review amendment and subsequent review closure into this single normative proposal.
 
 ---
 
@@ -1538,7 +1538,7 @@ known implementation defect and must be removed or disabled until a reviewed
 full-program operation exists. The fixed input contracts, standalone Preview
 Program, ordinary runtime catalog mappings, visualizer, and milestone order were
 approved and completed in Milestone A (GraphicsGadgetLab PR #175, merge
-`d6a2b75d`). Q4, Q5, and Q7 are now approved for Milestone B by
+`d6a2b75d`). Q4, Q5, and Q7 were approved and implemented for Milestone B under
 `GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md`. The main repository has
 published the Preview handshake, `build-preview`, immutable publication/session
 coordination, and attached Runtime observation path. The Editor now consumes
@@ -1547,10 +1547,10 @@ publication admits candidate/session-scoped Runtime launch, live processes own
 host-issued identities, observation polling runs only while attached, and
 explicit/editor/service teardown stops the child. The surface presents the
 cross-linked Current/LastGood/Stale/Rejected state. Owner acceptance of the
-cross-repository DX12 success/failure/recovery qualification was recorded on
-2026-09-01, completing Preview Milestone B. Vulkan Preview remains gated on
-Vulkan production-backend readiness. A live session cannot silently cross
-artifact roots: switching to another tool
+cross-repository DX12 success/failure/recovery qualification and Vulkan
+attached Preview qualification was recorded on 2026-09-01, completing Preview
+Milestone B for both production graphics backends. A live session cannot
+silently cross artifact roots: switching to another tool
 deployment requires the attached Runtime to exit before a new build is issued.
 Material Programs remain separate.
 
@@ -1602,7 +1602,11 @@ Preview backend enablement follows **GGLab production backend readiness**.
 
 ShaderGraph work must not become the mechanism for bringing an immature backend to parity.
 
-At the initial implementation point, DX12 is expected to be the default preview backend because it is the mature production path. This is an implementation policy, not a permanent architectural statement that Vulkan is secondary.
+The initial implementation used DX12 as the default Preview backend. Both DX12
+and Vulkan attached Preview paths are now qualified, while target selection
+remains explicit and candidate-scoped compatibility/readiness proof remains
+mandatory for every operation. The default is a product preference, not an
+architectural statement that one backend is semantically secondary.
 
 ## 26.4 Future thin preview host
 
@@ -2023,9 +2027,9 @@ native compile diagnostic
 
 Milestone A and Milestone B are complete across the main and Editor
 repositories. Owner acceptance of the cross-repository DX12
-success/failure/recovery qualification was recorded on 2026-09-01. This closure
-does not broaden the Material Program scope, and it does not claim Vulkan
-Preview readiness before the Vulkan production backend is enabled.
+success/failure/recovery qualification and Vulkan attached Preview
+qualification was recorded on 2026-09-01. This dual-backend closure does not
+broaden the Material Program scope.
 
 Deliver:
 

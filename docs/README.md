@@ -18,6 +18,11 @@ the normative home for the shader editor's architecture.
   `ShaderToolService`, generated-source staging, revisioned build state,
   the Build Inspector model, and the fake-process test model.
 
+- `GGLab_Shader_Graph_Preview_Milestone_B_Closure.md` — final Editor-side
+  qualification record for the dual-backend DX12/Vulkan attached Preview
+  product path. Cross-project Preview architecture and final qualification
+  authority remain in the GGLab docs repository.
+
 This document originated in the GGLab docs repository and was transferred
 into this repository when the shader editor began owning its own
 documentation.

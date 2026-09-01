@@ -1,6 +1,7 @@
 # GGLab Shader Graph Preview Milestone B Closure
 
 > Status: Closed / dual-backend qualified 2026-09-01
+>
 > Authority relationship: Final Shader Editor-side qualification record for the live Preview Milestone B product path. The cross-project Preview contract remains owned by the GGLab docs repository's `GGLab_Shader_Graph_Preview_Program_And_Lab_Design.md` and final closure record.
 
 Shader Graph Preview Milestone B is complete.
@@ -9,6 +10,18 @@ Shader Graph Preview Milestone B is complete.
 DX12 attached Preview    qualified
 Vulkan attached Preview  qualified
 ```
+
+The accepted source coordinate was:
+
+| Repository | Qualified revision |
+|---|---|
+| Main GGLab | `ad40b36f` |
+| Shader Editor | `eb96689` |
+
+These revisions identify the source state; exact executable observation remains
+required at every process boundary. The owner-observed transient candidate,
+session, attempt, publication, and Runtime observation values are not recreated
+when their literal values were not retained in the repository record.
 
 The Vulkan qualification used the real Shader Editor -> `gglab-shaderc build-preview` -> immutable Preview publication -> attached GraphicsGadgetLab Runtime path.
 
@@ -19,6 +32,7 @@ Mode                         Attached Shader Editor publication
 Eligibility                  Current
 Profile                      gglab.surface v2
 Preview Input Contract       gglab.preview-input.surface.texture2d
+ProgramRef                   gglab.shader.shader-graph-preview::pixel.surface-v2
 Entry                        PSMain
 Backend                      Vulkan
 Target                       gglab-vulkan13 / SPIR-V
@@ -26,7 +40,7 @@ Runtime activation error     None
 Runtime rejection code       None
 ```
 
-The candidate, loaded, and last-good Publication identities matched. Runtime diagnostics reported PASS for attached publication mapping, the Preview parameter block, deterministic primitive fixtures, current-generation Preview-pass execution, and Texture2D v2 production bindless binding.
+The candidate-publication, loaded-publication, and last-good-publication identities matched. Runtime diagnostics reported PASS for attached publication mapping, the Preview parameter block, deterministic primitive fixtures, current-generation Preview-pass execution, and Texture2D v2 production bindless binding.
 
 The Editor-side tool proof simultaneously exposed both supported targets:
 
@@ -35,7 +49,10 @@ gglab-dx12
 gglab-vulkan13
 ```
 
-This record supersedes earlier milestone-state wording in `GGLab_Shader_Graph_Editor_Architecture.md` and `GGLab_Shader_Toolchain_Integration_Design.md` that described Vulkan Preview as gated on future production-backend readiness or as outside the Milestone B closure.
+`GGLab_Shader_Graph_Editor_Architecture.md` and
+`GGLab_Shader_Toolchain_Integration_Design.md` now record the same dual-backend
+closure directly. This evidence record does not override contradictory active
+architecture text.
 
 The closed architecture remains unchanged:
 

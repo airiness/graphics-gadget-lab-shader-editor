@@ -1,6 +1,6 @@
 # GGLab Shader Editor — Toolchain Integration Design
 
-> Status: Construction-level design; Preview Milestone B closure recorded 2026-09-01
+> Status: Construction-level design; dual-backend Preview Milestone B closure recorded 2026-09-01
 > Correctness amendment (2026-08-30): a generated surface function is not a complete shader-program entry. The earlier function-only `NativeCompileRequest` composition and its product-path acceptance are withdrawn; the corrected qualification and Preview ownership are defined below.
 > Scope: how the shader editor CONSUMES the external Shader Toolchain contract and completes the toolchain-integration stage: tool discovery, the strict readiness gate, the narrow host service, native compile request composition, generated-source staging, revisioned build state, the Build Inspector, the test model, and the implementation order.
 > Authority relationship: Implements the owner decisions recorded in `GGLab_Shader_Graph_Editor_Architecture.md` (§19 – §22, §25, §31 stage record, 2026-08-24). It does not modify the baseline; where the two differ, the baseline wins and this document is a defect to report.
@@ -1046,9 +1046,10 @@ handoff, session pointer, attached launch, and Runtime observation contracts.
 The Editor now consumes those contracts through strict Toolchain Client/Tauri
 boundaries, same-session single-flight orchestration, success-first attached
 startup, and honest current/last-good/stale UI. Owner acceptance of the
-cross-repository DX12 success/failure/recovery qualification was recorded on
-2026-09-01, completing Milestone B. Vulkan follows only when its production
-backend is enabled and is not implied by this DX12 closure.
+cross-repository DX12 success/failure/recovery qualification and Vulkan
+attached Preview qualification was recorded on 2026-09-01, completing
+Milestone B for both production graphics backends. Every operation still
+requires exact candidate-scoped target and Preview compatibility proof.
 
 **Global exit criteria for the stage:**
 
