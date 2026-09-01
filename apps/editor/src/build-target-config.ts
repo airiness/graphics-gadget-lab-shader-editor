@@ -38,3 +38,15 @@ export function createBuildTargetConfiguration(target: string = DEFAULT_BUILD_TA
 export function setBuildTarget(configuration: BuildTargetConfiguration, target: string): BuildTargetConfiguration {
     return configuration.target === target ? configuration : { target };
 }
+
+/** Visible target choices for the current render. Proven tool targets are
+ * capability facts, not configuration authority: the current and development
+ * default values stay visible even while no proof exists or a tool omits them. */
+export function buildTargetOptions(
+    configuration: BuildTargetConfiguration,
+    supportedTargets: readonly string[] | null,
+): readonly string[] {
+    return Array.from(
+        new Set([configuration.target, DEFAULT_BUILD_TARGET, ...(supportedTargets ?? [])]),
+    );
+}

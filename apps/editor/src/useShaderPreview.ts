@@ -26,6 +26,7 @@ import {
     createTauriToolBoundary,
     toolBoundaryAvailable,
 } from "./toolchain-host.js";
+import { describePreviewAttemptOutcome } from "./preview-attempt-summary.js";
 
 const OBSERVATION_POLL_INTERVAL_MS = 250;
 
@@ -181,10 +182,10 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             bump((value) => value + 1);
             const outcome: PreviewAttemptOutcome = await launch.outcome;
             if (outcome.kind !== "published") {
-                note("refusal", `Preview attempt #${launch.attemptSequence} settled as ${outcome.kind}.`);
+                note("refusal", describePreviewAttemptOutcome(launch.attemptSequence, outcome));
                 return;
             }
-            note("ok", `Preview publication ${outcome.envelope.publicationId.slice(0, 12)}… produced.`);
+            note("ok", describePreviewAttemptOutcome(launch.attemptSequence, outcome));
             const runtime = flow.runtimeState;
             if (runtime.kind !== "running" && runtime.kind !== "stopping") {
                 await launchPreview();

@@ -66,7 +66,7 @@ import {
     type ShaderGraphDiagnostic,
     type SurfaceProfileDescriptor,
 } from "@gglab/shader-graph-core";
-import { DEFAULT_BUILD_TARGET } from "./build-target-config.js";
+import { buildTargetOptions, DEFAULT_BUILD_TARGET } from "./build-target-config.js";
 import type { BuildInspectorRow } from "./build-inspector.js";
 import { createDesktopFileChannel, isDesktopHost, type FileChannel } from "./host-io.js";
 import { useNativeBuild } from "./useNativeBuild.js";
@@ -939,10 +939,13 @@ export function App() {
         nativeFlow: native.flow,
     });
 
-    const nativeTargetOptions = useMemo(() => {
-        const supported = native.flow?.supportedTargets ?? null;
-        return Array.from(new Set<string>([native.target.target, DEFAULT_BUILD_TARGET, ...(supported ?? [])]));
-    }, [native.flow, native.target.target]);
+    // The flow object is stable while handshake facts change inside it. Read
+    // supportedTargets on every render so a completed handshake immediately
+    // adds newly proven choices such as gglab-vulkan13.
+    const nativeTargetOptions = buildTargetOptions(
+        native.target,
+        native.flow?.supportedTargets ?? null,
+    );
 
     // Discovery-config picks (design section 5, rules 1 and 2): the
     // native dialog seam belongs to the file channel (desktop host only —
