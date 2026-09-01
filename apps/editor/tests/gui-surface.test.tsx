@@ -992,10 +992,13 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(branched.present).toBe("z");
         });
 
-        it("wires the app: history-owned document, refused ops OUT, provenance changes RESET, guarded keys, disabled buttons", () => {
+        it("wires the app: DocumentSession-owned history, refused ops OUT, provenance changes RESET, guarded keys, disabled buttons", () => {
             const app = read("../src/app.tsx");
-            // The document IS history.present (no second source of truth).
-            expect(app).toMatch(/const \[history, setHistory\] = useState\(\(\) => createHistory\(seed\)\)/);
+            // Identity, history, provenance, and baseline are one React state;
+            // the current document IS session.history.present.
+            expect(app).toMatch(/const \[session, setSession\] = useState<DocumentSession>/);
+            expect(app).toMatch(/createSession\(allocateDocumentSessionId\(\), provenanceFromImport\(\), seed\)/);
+            expect(app).toMatch(/const history = session\.history;/);
             expect(app).toMatch(/const document = history\.present;/);
             // Applied changes record one labeled step; refused ones note but
             // never record.
@@ -1004,10 +1007,19 @@ describe("typed port presentation (core types → data categories)", () => {
             // and invalidates the revision-derived state.
             const applied = app.match(/function applyAuthoring\([^\n]*\{[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
             expect(applied).toContain("if (!Object.is(result.document, document)) {");
-            expect(applied).toContain("recordHistory(previous, result.document, label)");
+            expect(applied).toContain("recordDocumentChange(previous, result.document, label)");
             expect(applied).toContain("invalidateRevisionDerivedState()");
-            // Provenance transitions (open / import) reset the line.
-            expect(app).toMatch(/const replaceDocumentSession[\s\S]*?setHistory\(createHistory\(next\)\)/);
+            // Provenance transitions (open / import) establish a distinct
+            // editing context with a fresh identity and history line.
+            expect(app).toMatch(
+                /const replaceDocumentSession[\s\S]*?const replacement = createSession\(allocateDocumentSessionId\(\), source, next\)[\s\S]*?setSession\(replacement\)/,
+            );
+            // An async save completion is identity-bound and cannot steal
+            // the path/baseline of a replacement document.
+            expect(app).toContain("const savedSessionId = session.sessionId");
+            expect(app).toContain("currentDocumentSessionId.current = replacement.sessionId");
+            expect(app).toContain("if (currentDocumentSessionId.current !== savedSessionId)");
+            expect(app).toContain("sessionSaved(current, savedSessionId, path, text)");
             // Keyboard: the guard predicate runs BEFORE the graph shortcut.
             expect(app).toMatch(/event\.key\.toLowerCase\(\) === "z"[\s\S]*?isEditingTextTarget\(event\.target\)/);
             expect(app).toMatch(/if \(event\.shiftKey\) \{\s*onRedo\(\);\s*\} else \{\s*onUndo\(\);/);

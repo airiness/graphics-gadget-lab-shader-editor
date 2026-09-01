@@ -1,6 +1,6 @@
 /**
- * Document session — where the CURRENT document came from, what its last
- * saved state was, and whether the current state differs from it.
+ * Document session — the ephemeral identity, current document/history,
+ * provenance, and saved baseline of one open editing context.
  *
  * Load-bearing invariants (kept in one place, so the UI and the close
  * guard both use the same rules):
@@ -20,7 +20,15 @@
  *   document — an imported document can never silently overwrite a file
  *   that a previous document owned.
  */
+import {
+    createHistory,
+    recordHistory,
+    redoHistory,
+    undoHistory,
+    type DocumentHistory,
+} from "@gglab/editor-ui";
 import { serializeShaderGraphDocument, type ShaderGraphDocument } from "@gglab/shader-graph-core";
+import type { DocumentSessionId } from "./workspace-session.js";
 
 export type DocumentProvenance =
     | { readonly kind: "file"; readonly path: string }
@@ -38,31 +46,83 @@ export function provenanceFromImport(): DocumentProvenance {
 }
 
 /**
- * The full session record for a document that just became current
- * (open, text import, or the seeded startup document): its provenance
- * and the canonical bytes of THIS state as the new baseline.
+ * The full editing context for one document. The current graph lives only in
+ * `history.present`; keeping history and the persistence baseline in this
+ * aggregate prevents active-document switching from pairing one document's
+ * undo stack with another document's save state.
  */
 export interface DocumentSession {
+    readonly sessionId: DocumentSessionId;
+    readonly history: DocumentHistory<ShaderGraphDocument>;
     readonly provenance: DocumentProvenance;
     /** Canonical serialization of the document in its last saved /
      * last established state. */
     readonly savedBaseline: string;
 }
 
-export function createSession(provenance: DocumentProvenance, document: ShaderGraphDocument): DocumentSession {
-    return { provenance, savedBaseline: serializeShaderGraphDocument(document) };
+export function createSession(
+    sessionId: DocumentSessionId,
+    provenance: DocumentProvenance,
+    document: ShaderGraphDocument,
+): DocumentSession {
+    return {
+        sessionId,
+        history: createHistory(document),
+        provenance,
+        savedBaseline: serializeShaderGraphDocument(document),
+    };
 }
 
-/** A session established by a successful save of `savedBytes` to `path`. */
-export function sessionSaved(path: string, savedBytes: string): DocumentSession {
-    return { provenance: provenanceFromFile(path), savedBaseline: savedBytes };
+/** Record one accepted authoring intent in this document's own history. */
+export function recordDocumentChange(
+    session: DocumentSession,
+    document: ShaderGraphDocument,
+    label: string,
+): DocumentSession {
+    const history = recordHistory(session.history, document, label);
+    return history === session.history ? session : { ...session, history };
+}
+
+/** Move this document one history step back. */
+export function undoDocumentChange(session: DocumentSession): DocumentSession {
+    const history = undoHistory(session.history);
+    return history === session.history ? session : { ...session, history };
+}
+
+/** Move this document one history step forward. */
+export function redoDocumentChange(session: DocumentSession): DocumentSession {
+    const history = redoHistory(session.history);
+    return history === session.history ? session : { ...session, history };
+}
+
+/**
+ * Apply a successful save to the editing context that initiated it.
+ *
+ * Saving is asynchronous. If another document became active before the write
+ * completed, its session identity differs and the completion is stale for the
+ * current context; it must not steal the path or saved baseline.
+ */
+export function sessionSaved(
+    session: DocumentSession,
+    savedSessionId: DocumentSessionId,
+    path: string,
+    savedBytes: string,
+): DocumentSession {
+    if (session.sessionId !== savedSessionId) {
+        return session;
+    }
+    return {
+        ...session,
+        provenance: provenanceFromFile(path),
+        savedBaseline: savedBytes,
+    };
 }
 
 /** Dirty: the current document's canonical bytes differ from the
  * baseline (a byte comparison over canonical forms = a structural
  * comparison, by the core's determinism). */
-export function isDirty(document: ShaderGraphDocument, session: DocumentSession): boolean {
-    return serializeShaderGraphDocument(document) !== session.savedBaseline;
+export function isDirty(session: DocumentSession): boolean {
+    return serializeShaderGraphDocument(session.history.present) !== session.savedBaseline;
 }
 
 /**

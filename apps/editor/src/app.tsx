@@ -16,10 +16,6 @@ import {
     setConstantValue,
     reconnectConnection,
     isEditingTextTarget,
-    createHistory,
-    recordHistory,
-    undoHistory,
-    redoHistory,
     canUndoHistory,
     canRedoHistory,
     UndoIcon,
@@ -72,7 +68,24 @@ import { createDesktopFileChannel, isDesktopHost, type FileChannel } from "./hos
 import { useNativeBuild } from "./useNativeBuild.js";
 import { useShaderPreview } from "./useShaderPreview.js";
 import type { NativeBuildReadiness } from "./native-build-readiness.js";
-import { basenameOf, closeAction, createSession, isDirty, provenanceFromImport, provenanceFromFile, saveTarget, sessionSaved, sessionTitle, type CloseChoice, type DocumentProvenance, type DocumentSession } from "./document-session.js";
+import {
+    basenameOf,
+    closeAction,
+    createSession,
+    isDirty,
+    provenanceFromImport,
+    provenanceFromFile,
+    recordDocumentChange,
+    redoDocumentChange,
+    saveTarget,
+    sessionSaved,
+    sessionTitle,
+    undoDocumentChange,
+    type CloseChoice,
+    type DocumentProvenance,
+    type DocumentSession,
+} from "./document-session.js";
+import { createDocumentSessionId } from "./workspace-session.js";
 import { saveShortcutOf } from "./shortcuts.js";
 import { INSPECTOR_ZONES, INSPECTOR_ZONE_LABELS, inspectorZoneBadge, type InspectorZone, type InspectorZoneFacts } from "./inspector-tabs.js";
 // Type-only (erased at compile time): the official dialog option shapes,
@@ -122,11 +135,25 @@ export function App() {
     // instance so the baseline is exactly that document's canonical
     // bytes.
     const [seed] = useState(() => seedDocument());
-    // The document lives INSIDE the history (present), so undo/redo and
-    // the "authoring result" path are the SAME state transition — no
-    // second source of truth to drift. Provenance changes (open / import)
-    // do not append: they RESET the history around the new document.
-    const [history, setHistory] = useState(() => createHistory(seed));
+    // One local allocator is sufficient for ephemeral identities inside this
+    // Workspace lifetime. Persisted graphId and file paths are deliberately
+    // not substituted for this identity.
+    const documentSessionSequence = useRef(0);
+    const allocateDocumentSessionId = () => {
+        documentSessionSequence.current += 1;
+        return createDocumentSessionId(`document-session-${documentSessionSequence.current}`);
+    };
+    // The document lives only in session.history.present. History,
+    // provenance, and the saved baseline therefore move as one aggregate;
+    // there is no second React state to pair with the wrong document later.
+    const [session, setSession] = useState<DocumentSession>(() =>
+        createSession(allocateDocumentSessionId(), provenanceFromImport(), seed),
+    );
+    // Async host completions consult this synchronously updated identity.
+    // A stale save must not update another document's baseline or let a
+    // close guard close the replacement document.
+    const currentDocumentSessionId = useRef(session.sessionId);
+    const history = session.history;
     const document = history.present;
     const [operationNotes, setOperationNotes] = useState<readonly string[]>([]);
     const [descriptorState, setDescriptorState] = useState<DescriptorPanelState>({ kind: "empty" });
@@ -171,14 +198,9 @@ export function App() {
     // Desktop slice 1: native document I/O channel (absent in the browser
     // — the web build keeps the text save/load surface only).
     const [fileChannel, setFileChannel] = useState<FileChannel | null>(null);
-    // The full document session: provenance (where the current document
-    // came from) + the canonical bytes of its last saved state. The
-    // Save target is derived from the provenance — never from leftover
-    // state of a previous document.
-    const [session, setSession] = useState<DocumentSession>(() => createSession(provenanceFromImport(), seed));
     // Dirty = current canonical bytes ≠ baseline (core determinism makes
     // the byte comparison a structural one).
-    const dirty = useMemo(() => isDirty(document, session), [document, session]);
+    const dirty = useMemo(() => isDirty(session), [session]);
     useEffect(() => {
         let cancelled = false;
         void (async () => {
@@ -261,13 +283,14 @@ export function App() {
     const replaceDocumentSession = (next: ShaderGraphDocument, source: DocumentProvenance): void => {
         // A new document is a NEW history line, not an undoable step —
         // and every canvas state bound to the old document is stale.
-        setHistory(createHistory(next));
         clearCanvasInteractionState();
         invalidateRevisionDerivedState();
         // A new document becomes the new baseline — the session is not
         // dirty merely because its text was imported or a file was
         // opened.
-        setSession(createSession(source, next));
+        const replacement = createSession(allocateDocumentSessionId(), source, next);
+        currentDocumentSessionId.current = replacement.sessionId;
+        setSession(replacement);
         setOperationNotes([]);
         setSavedText(serializeShaderGraphDocument(next));
     };
@@ -322,6 +345,7 @@ export function App() {
             return false;
         }
         try {
+            const savedSessionId = session.sessionId;
             const text = serializeShaderGraphDocument(document);
             let path = saveTarget(session, as);
             if (path === null) {
@@ -332,7 +356,10 @@ export function App() {
                 }
             }
             await channel.writeText(path, text);
-            setSession(sessionSaved(path, text));
+            if (currentDocumentSessionId.current !== savedSessionId) {
+                return false;
+            }
+            setSession((current) => sessionSaved(current, savedSessionId, path, text));
             setSavedText(text);
             setOperationNotes((previous) => [...previous, `Saved ${path} as the core's canonical .shadergraph bytes.`]);
             return true;
@@ -571,7 +598,7 @@ export function App() {
             if (!Object.is(result.document, document)) {
                 // One user intent = one history step (the label names it);
                 // the before/after pair is exactly what undo/redo restore.
-                setHistory((previous) => recordHistory(previous, result.document, label));
+                setSession((previous) => recordDocumentChange(previous, result.document, label));
                 // The revision moved: the derivative state (focus and
                 // emission preview) described the former revision and is
                 // now stale — the preview must never outlive its revision.
@@ -696,7 +723,7 @@ export function App() {
         if (canUndoHistory(history) === false) {
             return;
         }
-        setHistory((previous) => undoHistory(previous));
+        setSession((previous) => undoDocumentChange(previous));
         clearCanvasInteractionState();
         invalidateRevisionDerivedState();
     };
@@ -704,7 +731,7 @@ export function App() {
         if (canRedoHistory(history) === false) {
             return;
         }
-        setHistory((previous) => redoHistory(previous));
+        setSession((previous) => redoDocumentChange(previous));
         clearCanvasInteractionState();
         invalidateRevisionDerivedState();
     };
@@ -828,7 +855,13 @@ export function App() {
         // updates ONLY the position, preserving the node's existing
         // editor-state metadata (unknownFields, future presentation
         // fields). One drag stop = one intent = one history step.
-        setHistory((previous) => recordHistory(previous, withNodePosition(previous.present, nodeId, position), `placed ${nodeId}`));
+        setSession((previous) =>
+            recordDocumentChange(
+                previous,
+                withNodePosition(previous.history.present, nodeId, position),
+                `placed ${nodeId}`,
+            ),
+        );
     };
 
     const onAutoLayout = (): void => {
@@ -838,16 +871,16 @@ export function App() {
         // own. The core services are re-asked as usual; placement never
         // changes emitted HLSL. ONE layout pass = ONE intent = ONE history
         // step (undo reverts the whole pass, not node by node).
-        setHistory((previous) => {
-            const layout = autoLayout(previous.present);
+        setSession((previous) => {
+            const layout = autoLayout(previous.history.present);
             if (layout.nodeCount === 0) {
                 return previous;
             }
-            let placed = previous.present;
+            let placed = previous.history.present;
             for (const [id, position] of Object.entries(layout.positions)) {
                 placed = withNodePosition(placed, id, position);
             }
-            return recordHistory(previous, placed, "automatic layout");
+            return recordDocumentChange(previous, placed, "automatic layout");
         });
         // Fit once the projection has picked up the new positions.
         requestAnimationFrame(() => fitRef.current?.());
