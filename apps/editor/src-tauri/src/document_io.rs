@@ -78,6 +78,7 @@ pub enum DocumentSaveOutcome {
 pub enum DocumentIoError {
     InvalidRequest { detail: String },
     Unauthorized { canonical_document_uri: String },
+    IdentityInvalidated { canonical_document_uri: String },
     NotFound { detail: String },
     TooLarge { size: u64, limit: u64 },
     InvalidUtf8 { detail: String },
@@ -137,6 +138,29 @@ impl DocumentFileService {
         self.read_authorized(canonical_uri, &document)
     }
 
+    /// Admit one canonical file proven by bounded Workspace discovery.
+    /// Discovery supplies display provenance only; the returned URI is the
+    /// sole subsequent read/save authority exposed to the WebView.
+    pub(crate) fn register_discovered_document(
+        &self,
+        canonical_path: PathBuf,
+        display_path: String,
+    ) -> Result<String, DocumentIoError> {
+        let canonical_uri = canonical_document_uri(&canonical_path)?;
+        let document = AuthorizedDocument {
+            canonical_path,
+            display_path,
+        };
+        self.registered_documents
+            .lock()
+            .map_err(|_| DocumentIoError::Io {
+                operation: "update document authority registry".to_string(),
+                detail: "the registry lock was poisoned".to_string(),
+            })?
+            .insert(canonical_uri.clone(), document);
+        Ok(canonical_uri)
+    }
+
     /// Compare the current token and atomically replace the authorized file.
     pub fn save(
         &self,
@@ -157,7 +181,7 @@ impl DocumentFileService {
         let document = self.authorized_document(&request.canonical_document_uri)?;
         let current = match self.read_authorized(&request.canonical_document_uri, &document) {
             Ok(snapshot) => snapshot,
-            Err(DocumentIoError::NotFound { .. }) => {
+            Err(DocumentIoError::NotFound { .. } | DocumentIoError::IdentityInvalidated { .. }) => {
                 return Ok(DocumentSaveOutcome::Conflict {
                     canonical_document_uri: request.canonical_document_uri.clone(),
                     expected_file_revision_token: Some(
@@ -184,7 +208,7 @@ impl DocumentFileService {
         // an earlier watcher event or metadata observation.
         let observed = match self.read_authorized(&request.canonical_document_uri, &document) {
             Ok(snapshot) => snapshot.file_revision_token,
-            Err(DocumentIoError::NotFound { .. }) => {
+            Err(DocumentIoError::NotFound { .. } | DocumentIoError::IdentityInvalidated { .. }) => {
                 return Ok(conflict(
                     request.canonical_document_uri.clone(),
                     Some(request.expected_file_revision_token.clone()),
@@ -313,6 +337,20 @@ impl DocumentFileService {
         canonical_uri: &str,
         document: &AuthorizedDocument,
     ) -> Result<DocumentSnapshot, DocumentIoError> {
+        let observed_path = document.canonical_path.canonicalize().map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                DocumentIoError::NotFound {
+                    detail: format!("the authorized document no longer exists: {canonical_uri}"),
+                }
+            } else {
+                io_error("revalidate canonical document identity", error)
+            }
+        })?;
+        if observed_path != document.canonical_path {
+            return Err(DocumentIoError::IdentityInvalidated {
+                canonical_document_uri: canonical_uri.to_string(),
+            });
+        }
         let file = File::open(&document.canonical_path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 DocumentIoError::NotFound {
@@ -413,7 +451,7 @@ fn validate_document_size(bytes: &[u8]) -> Result<(), DocumentIoError> {
     })
 }
 
-fn canonical_document_uri(path: &Path) -> Result<String, DocumentIoError> {
+pub(crate) fn canonical_document_uri(path: &Path) -> Result<String, DocumentIoError> {
     url::Url::from_file_path(path)
         .map(|value| value.to_string())
         .map_err(|_| DocumentIoError::InvalidRequest {
@@ -586,6 +624,36 @@ mod tests {
             .read_snapshot("file:///C:/not-authorized.shadergraph")
             .unwrap_err();
         assert!(matches!(error, DocumentIoError::Unauthorized { .. }));
+    }
+
+    #[test]
+    fn an_invalidated_registered_identity_is_a_save_conflict() {
+        let directory = test_directory("identity-invalidated");
+        std::fs::create_dir(directory.join("sub")).unwrap();
+        let path = directory.join("A.shadergraph");
+        std::fs::write(&path, b"base").unwrap();
+        let canonical_path = path.canonicalize().unwrap();
+        let canonical_uri = canonical_document_uri(&canonical_path).unwrap();
+        let service = DocumentFileService::new();
+        service.registered_documents.lock().unwrap().insert(
+            canonical_uri.clone(),
+            AuthorizedDocument {
+                canonical_path: directory.join("sub/../A.shadergraph"),
+                display_path: path.to_string_lossy().into_owned(),
+            },
+        );
+
+        let outcome = service
+            .save(&SaveDocumentRequest {
+                canonical_document_uri: canonical_uri,
+                expected_file_revision_token: hash_bytes(b"base"),
+                text: "local".to_string(),
+            })
+            .unwrap();
+
+        assert!(matches!(outcome, DocumentSaveOutcome::Conflict { .. }));
+        assert_eq!(std::fs::read(&path).unwrap(), b"base");
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

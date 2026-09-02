@@ -4,11 +4,13 @@ import {
     activateWorkspaceDocument,
     bindWorkspaceDocumentUri,
     canonicalDocumentUriFromHost,
+    canonicalWorkspaceUriFromHost,
     closeWorkspaceDocument,
     commitWorkspacePreviewTarget,
     createDocumentSessionId,
     createWorkspaceSession,
     openWorkspaceDocument,
+    setWorkspaceRoot,
     updateWorkspaceDocument,
     type CanonicalDocumentUri,
     type DocumentSessionId,
@@ -44,6 +46,20 @@ function opened(...documents: readonly WorkspaceDocumentHandle[]): WorkspaceSess
 }
 
 describe("workspace document identity", () => {
+    it("owns the host-canonical Workspace root independently of open documents", () => {
+        const initial = opened(document("session-a", null));
+        const root = {
+            canonicalWorkspaceUri: canonicalWorkspaceUriFromHost("file:///D:/Shaders"),
+            displayPath: "D:\\Shaders",
+        };
+
+        const rooted = setWorkspaceRoot(initial, root);
+
+        expect(rooted.workspaceRoot).toEqual(root);
+        expect(rooted.documents).toBe(initial.documents);
+        expect(setWorkspaceRoot(rooted, root)).toBe(rooted);
+    });
+
     it("de-duplicates a saved file only by the exact host-canonical URI", () => {
         const first = document("session-a", "file:///D:/Shaders/Surface.shadergraph");
         const duplicateRequest = document("session-b", "file:///D:/Shaders/Surface.shadergraph");

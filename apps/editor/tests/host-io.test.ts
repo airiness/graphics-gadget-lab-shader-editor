@@ -17,7 +17,13 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createDesktopFileChannel, isDesktopHost, type DesktopHost } from "../src/host-io.js";
+import {
+    createDesktopFileChannel,
+    isDesktopHost,
+    workspaceDiscoveryRevisionTokenFromHost,
+    type DesktopHost,
+} from "../src/host-io.js";
+import { canonicalWorkspaceUriFromHost } from "../src/workspace-session.js";
 
 const FAKE_DOCUMENT_TEXT = '{"schemaVersion":1,"graphId":"g","profile":"gglab.surface","profileVersion":1,"parameters":[],"nodes":[],"connections":[],"editorMetadata":{"nodes":{}}}';
 
@@ -28,16 +34,41 @@ const HOST_SNAPSHOT = {
     fileRevisionToken: "revision-a",
 };
 
+const HOST_WORKSPACE_ROOT = {
+    canonicalWorkspaceUri: "file:///C:/gglab/workspace/",
+    displayPath: "C:\\gglab\\workspace",
+};
+
+const HOST_WORKSPACE_SNAPSHOT = {
+    root: HOST_WORKSPACE_ROOT,
+    documents: [
+        {
+            relativePath: "Materials/Surface.shadergraph",
+            canonicalDocumentUri:
+                "file:///C:/gglab/workspace/Materials/Surface.shadergraph",
+        },
+    ],
+    discoveryRevisionToken: "workspace-revision-a",
+};
+
+interface FakeChannel {
+    readonly emit: (message: unknown) => void;
+}
+
 /// Record every injected host call before delegating to an override/default.
 function fakeHost(
-    overrides: Partial<Pick<DesktopHost, "invoke" | "openDialog" | "readTextFile">> = {},
+    overrides: Partial<
+        Pick<DesktopHost, "invoke" | "createChannel" | "openDialog" | "readTextFile">
+    > = {},
 ): {
     host: DesktopHost;
     invokes: Array<{ command: string; args?: Record<string, unknown> }>;
+    channels: FakeChannel[];
     opens: Array<Record<string, unknown>>;
     reads: string[];
 } {
     const invokes: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    const channels: FakeChannel[] = [];
     const opens: Array<Record<string, unknown>> = [];
     const reads: string[] = [];
     const host: DesktopHost = {
@@ -45,6 +76,25 @@ function fakeHost(
             invokes.push(args === undefined ? { command } : { command, args });
             if (overrides.invoke !== undefined) {
                 return Promise.resolve(overrides.invoke(command, args));
+            }
+            if (command === "shader-workspace-choose-root") {
+                return Promise.resolve(HOST_WORKSPACE_ROOT);
+            }
+            if (command === "shader-workspace-discover") {
+                const channel = args?.["channel"] as FakeChannel | undefined;
+                channel?.emit({
+                    kind: "changed",
+                    discoveryId: { sequence: 7 },
+                    snapshot: HOST_WORKSPACE_SNAPSHOT,
+                });
+                return Promise.resolve({ sequence: 7 });
+            }
+            if (command === "shader-workspace-cancel-discovery") {
+                return Promise.resolve({
+                    discoveryId: args?.["discoveryId"],
+                    cancellationRequested: true,
+                    alreadySettled: false,
+                });
             }
             if (command === "shader-document-save" || command === "shader-document-save-as") {
                 const request = args?.["request"] as { text?: unknown } | undefined;
@@ -54,6 +104,14 @@ function fakeHost(
                 });
             }
             return Promise.resolve(HOST_SNAPSHOT);
+        },
+        createChannel: (onMessage) => {
+            if (overrides.createChannel !== undefined) {
+                return overrides.createChannel(onMessage);
+            }
+            const channel: FakeChannel = { emit: onMessage };
+            channels.push(channel);
+            return channel;
         },
         openDialog: (options) => {
             opens.push(options ?? {});
@@ -70,7 +128,7 @@ function fakeHost(
             return Promise.resolve(FAKE_DOCUMENT_TEXT);
         },
     };
-    return { host, invokes, opens, reads };
+    return { host, invokes, channels, opens, reads };
 }
 
 describe("host/file abstraction (native document I/O)", () => {
@@ -247,6 +305,175 @@ describe("host/file abstraction (native document I/O)", () => {
     });
 });
 
+describe("host/file abstraction (bounded Workspace I/O)", () => {
+    it("admits a Workspace root only through the host-owned directory dialog", async () => {
+        const { host, invokes, opens } = fakeHost();
+
+        const root = await createDesktopFileChannel(host).chooseWorkspaceRoot();
+
+        expect(root).toEqual(HOST_WORKSPACE_ROOT);
+        expect(invokes).toEqual([{ command: "shader-workspace-choose-root" }]);
+        expect(opens).toHaveLength(0);
+    });
+
+    it("returns a cancellable discovery attempt and materializes its changed snapshot", async () => {
+        const { host, invokes, channels } = fakeHost();
+        const channel = createDesktopFileChannel(host);
+        const rootUri = canonicalWorkspaceUriFromHost(
+            HOST_WORKSPACE_ROOT.canonicalWorkspaceUri,
+        );
+
+        const attempt = await channel.discoverWorkspace(rootUri);
+        const settlement = await attempt.result;
+
+        expect(attempt.discoveryId).toEqual({ sequence: 7 });
+        expect(settlement).toEqual({
+            kind: "changed",
+            discoveryId: { sequence: 7 },
+            snapshot: HOST_WORKSPACE_SNAPSHOT,
+        });
+        expect(channels).toHaveLength(1);
+        expect(invokes).toEqual([
+            {
+                command: "shader-workspace-discover",
+                args: {
+                    request: {
+                        canonicalWorkspaceUri: rootUri,
+                        observedDiscoveryRevisionToken: null,
+                    },
+                    channel: channels[0],
+                },
+            },
+        ]);
+    });
+
+    it("uses the prior discovery token as a refresh observation and accepts unchanged", async () => {
+        const { host } = fakeHost({
+            invoke: async (command, args) => {
+                if (command !== "shader-workspace-discover") {
+                    return HOST_WORKSPACE_ROOT;
+                }
+                (args?.["channel"] as FakeChannel).emit({
+                    kind: "unchanged",
+                    discoveryId: { sequence: 8 },
+                    canonicalWorkspaceUri: HOST_WORKSPACE_ROOT.canonicalWorkspaceUri,
+                    discoveryRevisionToken: "workspace-revision-a",
+                });
+                return { sequence: 8 };
+            },
+        });
+        const rootUri = canonicalWorkspaceUriFromHost(
+            HOST_WORKSPACE_ROOT.canonicalWorkspaceUri,
+        );
+        const token = workspaceDiscoveryRevisionTokenFromHost("workspace-revision-a");
+
+        const attempt = await createDesktopFileChannel(host).discoverWorkspace(rootUri, token);
+
+        await expect(attempt.result).resolves.toEqual({
+            kind: "unchanged",
+            discoveryId: { sequence: 8 },
+            canonicalWorkspaceUri: rootUri,
+            discoveryRevisionToken: token,
+        });
+    });
+
+    it("cancels by host-issued discovery identity and validates the outcome", async () => {
+        const { host, invokes } = fakeHost();
+        const outcome = await createDesktopFileChannel(host).cancelWorkspaceDiscovery({
+            sequence: 7,
+        });
+
+        expect(outcome).toEqual({
+            discoveryId: { sequence: 7 },
+            cancellationRequested: true,
+            alreadySettled: false,
+        });
+        expect(invokes).toEqual([
+            {
+                command: "shader-workspace-cancel-discovery",
+                args: { discoveryId: { sequence: 7 } },
+            },
+        ]);
+    });
+
+    it("rejects a cancellation outcome for another discovery identity", async () => {
+        const { host } = fakeHost({
+            invoke: async () => ({
+                discoveryId: { sequence: 99 },
+                cancellationRequested: true,
+                alreadySettled: false,
+            }),
+        });
+
+        await expect(
+            createDesktopFileChannel(host).cancelWorkspaceDiscovery({ sequence: 7 }),
+        ).rejects.toThrow(/cancelled a different Workspace discovery identity/);
+    });
+
+    it("rejects a non-portable relative path from the host", async () => {
+        const { host } = fakeHost({
+            invoke: async (_command, args) => {
+                (args?.["channel"] as FakeChannel).emit({
+                    kind: "changed",
+                    discoveryId: { sequence: 7 },
+                    snapshot: {
+                        ...HOST_WORKSPACE_SNAPSHOT,
+                        documents: [
+                            {
+                                relativePath: "../escape.shadergraph",
+                                canonicalDocumentUri:
+                                    "file:///C:/gglab/escape.shadergraph",
+                            },
+                        ],
+                    },
+                });
+                return { sequence: 7 };
+            },
+        });
+        const attempt = await createDesktopFileChannel(host).discoverWorkspace(
+            canonicalWorkspaceUriFromHost(HOST_WORKSPACE_ROOT.canonicalWorkspaceUri),
+        );
+
+        await expect(attempt.result).rejects.toThrow(/non-portable Workspace document/);
+    });
+
+    it("rejects mismatched admission/settlement identities", async () => {
+        const { host } = fakeHost({
+            invoke: async (_command, args) => {
+                (args?.["channel"] as FakeChannel).emit({
+                    kind: "cancelled",
+                    discoveryId: { sequence: 99 },
+                });
+                return { sequence: 7 };
+            },
+        });
+        const attempt = await createDesktopFileChannel(host).discoverWorkspace(
+            canonicalWorkspaceUriFromHost(HOST_WORKSPACE_ROOT.canonicalWorkspaceUri),
+        );
+
+        await expect(attempt.result).rejects.toThrow(/different Workspace discovery identity/);
+    });
+
+    it("rejects a settlement bound to another canonical Workspace", async () => {
+        const { host } = fakeHost({
+            invoke: async (_command, args) => {
+                (args?.["channel"] as FakeChannel).emit({
+                    kind: "unchanged",
+                    discoveryId: { sequence: 7 },
+                    canonicalWorkspaceUri: "file:///C:/other/",
+                    discoveryRevisionToken: "workspace-revision-a",
+                });
+                return { sequence: 7 };
+            },
+        });
+        const attempt = await createDesktopFileChannel(host).discoverWorkspace(
+            canonicalWorkspaceUriFromHost(HOST_WORKSPACE_ROOT.canonicalWorkspaceUri),
+        );
+
+        await expect(attempt.result).rejects.toThrow(/different canonical Workspace URI/);
+    });
+});
+
 describe("desktop host wiring (this repo's tauri surface)", () => {
     const rootDir = dirname(fileURLToPath(new URL(import.meta.url, import.meta.url)));
     const tauriDir = resolve(rootDir, "../src-tauri");
@@ -282,9 +509,10 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         );
     });
 
-    it("exposes exactly the bounded document, tool, and Preview command surface (EXACT set)", async () => {
+    it("exposes exactly the bounded Workspace, document, tool, and Preview surface", async () => {
         const libRs = await readFile(resolve(tauriDir, "src/lib.rs"), "utf8");
         const documentIoRs = await readFile(resolve(tauriDir, "src/document_io.rs"), "utf8");
+        const workspaceIoRs = await readFile(resolve(tauriDir, "src/workspace_io.rs"), "utf8");
         const mainRs = await readFile(resolve(tauriDir, "src/main.rs"), "utf8");
         // The shell keeps the two official plugins for scoped auxiliary
         // reads. Document Open/Save As dialogs are host-owned.
@@ -313,6 +541,9 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
             "shader-tool-discover",
             "shader-tool-handshake",
             "shader-tool-preview-handshake",
+            "shader-workspace-cancel-discovery",
+            "shader-workspace-choose-root",
+            "shader-workspace-discover",
         ]);
         // No raw arbitrary-path parameter exists on the document command
         // surface. The native service resolves only host-issued URI
@@ -321,6 +552,11 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         expect(documentIoRs).toContain("expected_file_revision_token");
         expect(documentIoRs).toContain("atomic_replace");
         expect(documentIoRs).toContain("Unauthorized");
+        expect(workspaceIoRs).toContain("registered_workspaces");
+        expect(workspaceIoRs).toContain("is_contained");
+        expect(workspaceIoRs).toContain("file_type.is_symlink()");
+        expect(workspaceIoRs).toContain("MAX_DISCOVERY_ENTRIES");
+        expect(workspaceIoRs).toContain("observed_discovery_revision_token");
         const documentCapabilitySignatures = [
             ...libRs.matchAll(
                 /async fn shader_document_(?:read_snapshot|save)\(([\s\S]*?)\)\s*->/g,
@@ -328,6 +564,15 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         ].map((match) => match[1] as string);
         expect(documentCapabilitySignatures).toHaveLength(2);
         for (const signature of documentCapabilitySignatures) {
+            expect(signature).not.toMatch(/\bpath\s*:/);
+        }
+        const workspaceCapabilitySignatures = [
+            ...libRs.matchAll(
+                /(?:async )?fn shader_workspace_(?:choose_root|discover|cancel_discovery)\(([\s\S]*?)\)\s*->/g,
+            ),
+        ].map((match) => match[1] as string);
+        expect(workspaceCapabilitySignatures).toHaveLength(3);
+        for (const signature of workspaceCapabilitySignatures) {
             expect(signature).not.toMatch(/\bpath\s*:/);
         }
         expect(mainRs).not.toContain("#[tauri::command]");

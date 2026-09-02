@@ -265,6 +265,8 @@ export function App() {
             setFileChannel(
                 createDesktopFileChannel({
                     invoke: (command, args) => core.invoke(command, args),
+                    createChannel: (onMessage) =>
+                        new core.Channel<unknown>((message) => onMessage(message)),
                     // The host-io slots are intentionally generic
                     // (Record<string, unknown> options); the official API
                     // types live here, at the composition root — the single

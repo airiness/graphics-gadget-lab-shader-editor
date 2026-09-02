@@ -6,6 +6,7 @@
  * that those adapters must use:
  *
  *   DocumentSessionId        -> one open editing context;
+ *   CanonicalWorkspaceUri    -> one host-identified Workspace root;
  *   CanonicalDocumentUri     -> one host-identified on-disk file;
  *   activeDocumentId         -> the tab being edited;
  *   preview.targetDocumentId -> the explicitly selected Preview target.
@@ -18,6 +19,7 @@
  */
 
 declare const documentSessionIdBrand: unique symbol;
+declare const canonicalWorkspaceUriBrand: unique symbol;
 declare const canonicalDocumentUriBrand: unique symbol;
 
 export type DocumentSessionId = string & {
@@ -26,6 +28,10 @@ export type DocumentSessionId = string & {
 
 export type CanonicalDocumentUri = string & {
     readonly [canonicalDocumentUriBrand]: "CanonicalDocumentUri";
+};
+
+export type CanonicalWorkspaceUri = string & {
+    readonly [canonicalWorkspaceUriBrand]: "CanonicalWorkspaceUri";
 };
 
 /** Tag a caller-created ephemeral session identity after basic validation. */
@@ -49,6 +55,20 @@ export function canonicalDocumentUriFromHost(value: string): CanonicalDocumentUr
     return value as CanonicalDocumentUri;
 }
 
+/** Accept a canonical Workspace URI returned by the native host. */
+export function canonicalWorkspaceUriFromHost(value: string): CanonicalWorkspaceUri {
+    if (value.trim() === "") {
+        throw new Error("A host-canonical Workspace URI must not be empty.");
+    }
+    return value as CanonicalWorkspaceUri;
+}
+
+export interface WorkspaceRootHandle {
+    readonly canonicalWorkspaceUri: CanonicalWorkspaceUri;
+    /** Presentation-only host path; never a WebView filesystem authority. */
+    readonly displayPath: string;
+}
+
 export interface WorkspaceDocumentHandle {
     readonly sessionId: DocumentSessionId;
     /** Null until an untitled/imported document is saved to a host-owned URI. */
@@ -63,6 +83,8 @@ export interface WorkspacePreviewTargetState {
 export interface WorkspaceSession<
     TDocument extends WorkspaceDocumentHandle = WorkspaceDocumentHandle,
 > {
+    /** Null until the host admits one directory as this Workspace's root. */
+    readonly workspaceRoot: WorkspaceRootHandle | null;
     /** The complete open-document records owned by this Workspace. */
     readonly documents: readonly TDocument[];
     readonly activeDocumentId: DocumentSessionId | null;
@@ -73,10 +95,28 @@ export function createWorkspaceSession<
     TDocument extends WorkspaceDocumentHandle = WorkspaceDocumentHandle,
 >(): WorkspaceSession<TDocument> {
     return {
+        workspaceRoot: null,
         documents: [],
         activeDocumentId: null,
         preview: { targetDocumentId: null },
     };
+}
+
+/** Record the host-owned root without deriving filesystem facts in JS. */
+export function setWorkspaceRoot<
+    TDocument extends WorkspaceDocumentHandle = WorkspaceDocumentHandle,
+>(
+    workspace: WorkspaceSession<TDocument>,
+    workspaceRoot: WorkspaceRootHandle | null,
+): WorkspaceSession<TDocument> {
+    if (
+        workspace.workspaceRoot?.canonicalWorkspaceUri ===
+            workspaceRoot?.canonicalWorkspaceUri &&
+        workspace.workspaceRoot?.displayPath === workspaceRoot?.displayPath
+    ) {
+        return workspace;
+    }
+    return { ...workspace, workspaceRoot };
 }
 
 export type WorkspaceRefusal =
