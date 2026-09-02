@@ -18,6 +18,7 @@ import {
     recordDocumentChange,
     redoDocumentChange,
     saveTarget,
+    sessionReloaded,
     sessionSaved,
     sessionTitle,
     undoDocumentChange,
@@ -189,6 +190,65 @@ describe("document identity and history ownership", () => {
 
         expect(result).toBe(current);
         expect(result.provenance).toEqual({ kind: "imported" });
+    });
+
+    it("reloads the same file into the existing identity and resets local history", () => {
+        const changed = recordDocumentChange(
+            createSession(
+                SESSION_ID,
+                provenanceFromFile("C:\\gglab\\A.shadergraph"),
+                DOC,
+                CANONICAL_URI,
+                REVISION,
+            ),
+            { ...DOC, graphId: "local-change" },
+            "changed graph id",
+        );
+        const externalDocument = { ...DOC, graphId: "external-change" };
+        const reloaded = sessionReloaded(
+            changed,
+            SESSION_ID,
+            {
+                ...savedSnapshot(externalDocument),
+                // Deliberately non-canonical: reload establishes a clean
+                // semantic baseline instead of treating JSON layout as an edit.
+                text: JSON.stringify(externalDocument),
+            },
+            externalDocument,
+        );
+
+        expect(reloaded.sessionId).toBe(SESSION_ID);
+        expect(reloaded.history.present).toBe(externalDocument);
+        expect(reloaded.history.past).toEqual([]);
+        expect(reloaded.history.future).toEqual([]);
+        expect(reloaded.fileRevisionToken).toBe(REVISION);
+        expect(isDirty(reloaded)).toBe(false);
+    });
+
+    it("never applies a reload completion to another session or another canonical URI", () => {
+        const session = createSession(
+            SESSION_ID,
+            provenanceFromFile("C:\\gglab\\A.shadergraph"),
+            DOC,
+            CANONICAL_URI,
+            REVISION,
+        );
+        const otherSessionId = createDocumentSessionId("document-session-b");
+
+        expect(sessionReloaded(session, otherSessionId, savedSnapshot(), DOC)).toBe(session);
+        expect(() =>
+            sessionReloaded(
+                session,
+                SESSION_ID,
+                {
+                    ...savedSnapshot(),
+                    canonicalDocumentUri: canonicalDocumentUriFromHost(
+                        "file:///C:/gglab/B.shadergraph",
+                    ),
+                },
+                DOC,
+            ),
+        ).toThrow(/DocumentSession's canonical URI/);
     });
 });
 

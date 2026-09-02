@@ -767,6 +767,38 @@ mod tests {
     }
 
     #[test]
+    fn a_save_as_conflict_can_be_deliberately_overwritten_by_observed_revision() {
+        let directory = test_directory("save-as-explicit-overwrite");
+        let path = directory.join("A.shadergraph");
+        std::fs::write(&path, b"existing").unwrap();
+        let service = DocumentFileService::new();
+
+        let conflict = service
+            .save_as_selected_path(path.clone(), "local")
+            .unwrap();
+        let DocumentSaveOutcome::Conflict {
+            canonical_document_uri,
+            observed_file_revision_token: Some(observed_file_revision_token),
+            ..
+        } = conflict
+        else {
+            panic!("an existing Save As destination should return its observed revision");
+        };
+
+        let outcome = service
+            .save(&SaveDocumentRequest {
+                canonical_document_uri,
+                expected_file_revision_token: observed_file_revision_token,
+                text: "local".to_string(),
+            })
+            .unwrap();
+
+        assert!(matches!(outcome, DocumentSaveOutcome::Saved { .. }));
+        assert_eq!(std::fs::read(&path).unwrap(), b"local");
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn save_as_atomically_creates_a_new_authorized_document() {
         let directory = test_directory("save-as-new");
         let path = directory.join("A.shadergraph");

@@ -357,6 +357,12 @@ body {
     box-shadow: var(--shadow-2);
 }
 
+/* Conflict resolution can expose four explicit choices; give their shared
+   button system enough room while still wrapping safely on a narrow window. */
+.gglab-save-conflict-card {
+    width: min(640px, calc(100vw - 48px));
+}
+
 .gglab-close-prompt-title {
     margin: 0 0 8px;
     font-size: var(--type-display);

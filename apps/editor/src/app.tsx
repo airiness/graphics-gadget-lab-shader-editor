@@ -64,7 +64,13 @@ import {
 } from "@gglab/shader-graph-core";
 import { buildTargetOptions, DEFAULT_BUILD_TARGET } from "./build-target-config.js";
 import type { BuildInspectorRow } from "./build-inspector.js";
-import { createDesktopFileChannel, isDesktopHost, type FileChannel } from "./host-io.js";
+import {
+    createDesktopFileChannel,
+    isDesktopHost,
+    type DocumentSnapshot,
+    type DocumentSaveOutcome,
+    type FileChannel,
+} from "./host-io.js";
 import { useNativeBuild } from "./useNativeBuild.js";
 import { useShaderPreview } from "./useShaderPreview.js";
 import type { NativeBuildReadiness } from "./native-build-readiness.js";
@@ -78,6 +84,7 @@ import {
     recordDocumentChange,
     redoDocumentChange,
     saveTarget,
+    sessionReloaded,
     sessionSaved,
     sessionTitle,
     undoDocumentChange,
@@ -85,6 +92,12 @@ import {
     type DocumentProvenance,
     type DocumentSession,
 } from "./document-session.js";
+import {
+    documentSaveConflictActions,
+    type DocumentSaveConflictAction,
+    type DocumentSaveConflictOrigin,
+    type PendingDocumentSaveConflict,
+} from "./document-save-conflict.js";
 import {
     activeWorkspaceDocument,
     closeWorkspaceDocument,
@@ -177,6 +190,10 @@ export function App() {
     // A stale save must not update another document's baseline or let a
     // close guard close the replacement document.
     const currentDocumentSessionId = useRef(session.sessionId);
+    const workspaceRef = useRef(workspace);
+    useEffect(() => {
+        workspaceRef.current = workspace;
+    }, [workspace]);
     const history = session.history;
     const document = history.present;
     function updateDocumentSession(
@@ -238,6 +255,24 @@ export function App() {
     // Desktop native document I/O channel (absent in the browser
     // — the web build keeps the text save/load surface only).
     const [fileChannel, setFileChannel] = useState<FileChannel | null>(null);
+    // A CAS failure retains the exact local bytes and originating session
+    // until the user makes an explicit decision. The ref closes the small
+    // gap before React commits state, so a repeated shortcut cannot replace
+    // an unanswered conflict with a second save attempt.
+    const [saveConflict, setSaveConflict] = useState<PendingDocumentSaveConflict | null>(null);
+    const saveConflictRef = useRef<PendingDocumentSaveConflict | null>(null);
+    const [conflictResolutionInFlight, setConflictResolutionInFlight] = useState(false);
+    const conflictResolutionInFlightRef = useRef(false);
+    const installSaveConflict = (next: PendingDocumentSaveConflict): void => {
+        saveConflictRef.current = next;
+        setSaveConflict(next);
+    };
+    const dismissSaveConflict = (): void => {
+        saveConflictRef.current = null;
+        setSaveConflict(null);
+        conflictResolutionInFlightRef.current = false;
+        setConflictResolutionInFlight(false);
+    };
     // Dirty = current canonical bytes ≠ baseline (core determinism makes
     // the byte comparison a structural one).
     const dirty = useMemo(() => isDirty(session), [session]);
@@ -406,55 +441,228 @@ export function App() {
      * atomic replacement. Save As has a host-owned dialog and never silently
      * overwrites an existing destination.
      */
-    /** Save to the session's target; resolve with success. Saving
-     * establishes the new baseline (the saved bytes) — the document is
-     * clean from that moment. */
+    const defaultSaveName = (documentSession: DocumentSession): string =>
+        documentSession.provenance.kind === "file"
+            ? basenameOf(documentSession.provenance.path)
+            : "Untitled.shadergraph";
+
+    const pendingConflict = (
+        savedSessionId: DocumentSession["sessionId"],
+        origin: DocumentSaveConflictOrigin,
+        localText: string,
+        defaultName: string,
+        outcome: Extract<DocumentSaveOutcome, { readonly kind: "conflict" }>,
+    ): PendingDocumentSaveConflict => ({
+        sessionId: savedSessionId,
+        origin,
+        canonicalDocumentUri: outcome.canonicalDocumentUri,
+        observedFileRevisionToken: outcome.observedFileRevisionToken,
+        destinationOwnerSessionId:
+            workspaceRef.current.documents.find(
+                (candidate) =>
+                    candidate.canonicalUri === outcome.canonicalDocumentUri &&
+                    candidate.sessionId !== savedSessionId,
+            )?.sessionId ?? null,
+        localText,
+        defaultName,
+    });
+
+    const finishSuccessfulSave = (
+        savedSessionId: DocumentSession["sessionId"],
+        snapshot: DocumentSnapshot,
+    ): boolean => {
+        updateDocumentSession(
+            savedSessionId,
+            (current) => sessionSaved(current, savedSessionId, snapshot),
+            "ignore",
+        );
+        if (currentDocumentSessionId.current !== savedSessionId) {
+            if (saveConflictRef.current?.sessionId === savedSessionId) {
+                dismissSaveConflict();
+            }
+            return false;
+        }
+        dismissSaveConflict();
+        setSavedText(snapshot.text);
+        setOperationNotes((previous) => [
+            ...previous,
+            `Saved ${snapshot.displayPath} as the core's canonical .shadergraph bytes.`,
+        ]);
+        return true;
+    };
+
+    const showSaveConflict = (conflict: PendingDocumentSaveConflict): void => {
+        installSaveConflict(conflict);
+        const ownerMessage =
+            conflict.destinationOwnerSessionId === null
+                ? ""
+                : " The destination is already owned by another open document, so it cannot be overwritten from this session.";
+        setOperationNotes((previous) => [
+            ...previous,
+            `Save conflict: the destination changed on disk; the local document was retained (${conflict.canonicalDocumentUri}).${ownerMessage}`,
+        ]);
+    };
+
+    /** Save to the session's target and resolve with success. A conflict is
+     * not a failed-write footnote: it becomes an explicit user decision. */
     const saveDocument = async (as: boolean): Promise<boolean> => {
         const channel = fileChannel;
-        if (channel === null) {
+        if (channel === null || saveConflictRef.current !== null) {
             return false;
         }
         try {
             const savedSessionId = session.sessionId;
             const text = serializeShaderGraphDocument(document);
+            const name = defaultSaveName(session);
             const target = saveTarget(session, as);
+            const origin: DocumentSaveConflictOrigin = target === null ? "save-as" : "save";
             const outcome =
                 target === null
-                    ? await channel.saveDocumentAs(
-                          session.provenance.kind === "file"
-                              ? basenameOf(session.provenance.path)
-                              : "Untitled.shadergraph",
-                          text,
-                      )
+                    ? await channel.saveDocumentAs(name, text)
                     : await channel.saveDocument({ ...target, text });
             if (outcome.kind === "cancelled") {
                 return false;
             }
             if (outcome.kind === "conflict") {
-                setOperationNotes((previous) => [
-                    ...previous,
-                    `Save conflict: the destination changed on disk; the local document was not written (${outcome.canonicalDocumentUri}).`,
-                ]);
+                // The initiating document may have been replaced while a
+                // native dialog/write was pending. Never put its conflict in
+                // front of a different active document.
+                if (currentDocumentSessionId.current !== savedSessionId) {
+                    return false;
+                }
+                showSaveConflict(pendingConflict(savedSessionId, origin, text, name, outcome));
                 return false;
             }
-            const snapshot = outcome.snapshot;
-            updateDocumentSession(
-                savedSessionId,
-                (current) => sessionSaved(current, savedSessionId, snapshot),
-                "ignore",
-            );
-            if (currentDocumentSessionId.current !== savedSessionId) {
-                return false;
-            }
-            setSavedText(snapshot.text);
-            setOperationNotes((previous) => [
-                ...previous,
-                `Saved ${snapshot.displayPath} as the core's canonical .shadergraph bytes.`,
-            ]);
-            return true;
+            return finishSuccessfulSave(savedSessionId, outcome.snapshot);
         } catch (error) {
             setOperationNotes((previous) => [...previous, `Save failed (${error instanceof Error ? error.message : String(error)}).`]);
             return false;
+        }
+    };
+
+    /** Resolve an explicit save-conflict choice against the exact local bytes
+     * and session that produced it. Overwrite is a new CAS attempt against
+     * the host-observed revision — external changes can still win and cause
+     * the prompt to remain with a newer observed revision. */
+    const resolveSaveConflict = async (action: DocumentSaveConflictAction): Promise<void> => {
+        const channel = fileChannel;
+        const conflict = saveConflictRef.current;
+        if (
+            channel === null ||
+            conflict === null ||
+            conflictResolutionInFlightRef.current ||
+            !documentSaveConflictActions(conflict).includes(action)
+        ) {
+            return;
+        }
+        if (action === "cancel") {
+            dismissSaveConflict();
+            setOperationNotes((previous) => [...previous, "Save conflict cancelled; the local document remains unchanged."]);
+            return;
+        }
+        if (currentDocumentSessionId.current !== conflict.sessionId) {
+            dismissSaveConflict();
+            return;
+        }
+
+        conflictResolutionInFlightRef.current = true;
+        setConflictResolutionInFlight(true);
+        try {
+            if (action === "reload") {
+                const snapshot = await channel.readDocumentSnapshot(conflict.canonicalDocumentUri);
+                if (currentDocumentSessionId.current !== conflict.sessionId) {
+                    dismissSaveConflict();
+                    return;
+                }
+                if (snapshot.canonicalDocumentUri !== conflict.canonicalDocumentUri) {
+                    throw new Error("the host returned a different canonical URI for reload");
+                }
+                const parsed = parseShaderGraphDocument(snapshot.text);
+                if (parsed.ok === false || parsed.value === null) {
+                    setLoadResult({
+                        title: "Reload result",
+                        ok: false,
+                        diagnostics: parsed.diagnostics,
+                        passedText: "",
+                    });
+                    setOperationNotes((previous) => [
+                        ...previous,
+                        "Reload refused: the external file is not a valid ShaderGraph document; local changes were retained.",
+                    ]);
+                    return;
+                }
+                const reloadedDocument = parsed.value;
+                clearCanvasInteractionState();
+                invalidateRevisionDerivedState();
+                updateDocumentSession(
+                    conflict.sessionId,
+                    (current) =>
+                        sessionReloaded(
+                            current,
+                            conflict.sessionId,
+                            snapshot,
+                            reloadedDocument,
+                        ),
+                    "ignore",
+                );
+                dismissSaveConflict();
+                setSavedText(serializeShaderGraphDocument(reloadedDocument));
+                setLoadResult({
+                    title: "Reload result",
+                    ok: true,
+                    diagnostics: parsed.diagnostics,
+                    passedText: `Reloaded ${snapshot.displayPath}; local changes and their undo history were discarded as chosen.`,
+                });
+                setOperationNotes((previous) => [
+                    ...previous,
+                    `Reloaded ${snapshot.displayPath} from disk.`,
+                ]);
+                requestAnimationFrame(() => fitRef.current?.());
+                return;
+            }
+
+            let outcome: DocumentSaveOutcome;
+            if (action === "overwrite") {
+                const observedRevision = conflict.observedFileRevisionToken;
+                if (observedRevision === null) {
+                    throw new Error("overwrite requires an observed file revision");
+                }
+                outcome = await channel.saveDocument({
+                    canonicalDocumentUri: conflict.canonicalDocumentUri,
+                    expectedFileRevisionToken: observedRevision,
+                    text: conflict.localText,
+                });
+            } else {
+                outcome = await channel.saveDocumentAs(conflict.defaultName, conflict.localText);
+            }
+            if (outcome.kind === "cancelled") {
+                return; // the conflict prompt stays; no choice was completed
+            }
+            if (outcome.kind === "conflict") {
+                if (currentDocumentSessionId.current !== conflict.sessionId) {
+                    dismissSaveConflict();
+                    return;
+                }
+                showSaveConflict(
+                    pendingConflict(
+                        conflict.sessionId,
+                        action === "save-as" ? "save-as" : conflict.origin,
+                        conflict.localText,
+                        conflict.defaultName,
+                        outcome,
+                    ),
+                );
+                return;
+            }
+            finishSuccessfulSave(conflict.sessionId, outcome.snapshot);
+        } catch (error) {
+            setOperationNotes((previous) => [
+                ...previous,
+                `Conflict resolution failed; the local document was retained (${error instanceof Error ? error.message : String(error)}).`,
+            ]);
+        } finally {
+            conflictResolutionInFlightRef.current = false;
+            setConflictResolutionInFlight(false);
         }
     };
 
@@ -554,6 +762,13 @@ export function App() {
                 return;
             }
             unlisten = await getCurrentWindow().onCloseRequested(async (event) => {
+                if (saveConflictRef.current !== null) {
+                    // Conflict resolution already owns the foreground
+                    // decision. Do not stack an unsaved-close question over
+                    // it or let a second Save race the retained local bytes.
+                    event.preventDefault();
+                    return;
+                }
                 if (!dirtyRef.current) {
                     setOperationNotes((previous) => [...previous, "Close guard: clean session — closing."]);
                     return; // not prevented → the api wrapper destroys the window
@@ -1125,6 +1340,8 @@ export function App() {
         },
         build: { ready: native.ready },
     };
+    const saveConflictActions =
+        saveConflict === null ? [] : documentSaveConflictActions(saveConflict);
 
     return (
         <div className="gglab-app">
@@ -1670,6 +1887,69 @@ export function App() {
                     )}
                 </aside>
             </div>
+            {saveConflict !== null && (
+                <div
+                    className="gglab-close-prompt"
+                    role="alertdialog"
+                    aria-modal="true"
+                    aria-label="Save conflict"
+                >
+                    <div className="gglab-close-prompt-card gglab-save-conflict-card">
+                        <h2 className="gglab-close-prompt-title">
+                            {saveConflict.origin === "save"
+                                ? "File changed on disk"
+                                : "Destination already exists"}
+                        </h2>
+                        <p className="gglab-close-prompt-text">
+                            {saveConflict.destinationOwnerSessionId !== null
+                                ? "Another open document already owns this destination. Choose another file or cancel; the two editing contexts will not be merged."
+                                : saveConflict.observedFileRevisionToken === null
+                                  ? "The destination is missing or its identity changed. An unguarded overwrite is unavailable; reload, choose another file, or cancel."
+                                  : saveConflict.origin === "save"
+                                    ? "The on-disk file changed after this document was opened. Reload discards local changes; overwrite deliberately replaces the observed disk revision; Save As keeps both versions."
+                                    : "The selected destination already exists. Overwrite deliberately replaces its observed revision; Choose Another keeps the existing file."}
+                        </p>
+                        <ButtonGroup className="flex flex-wrap justify-end">
+                            {saveConflictActions.includes("reload") && (
+                                <Button
+                                    variant="primary"
+                                    onClick={() => void resolveSaveConflict("reload")}
+                                    disabled={conflictResolutionInFlight}
+                                >
+                                    Reload from Disk
+                                </Button>
+                            )}
+                            {saveConflictActions.includes("overwrite") && (
+                                <Button
+                                    variant="destructive"
+                                    onClick={() => void resolveSaveConflict("overwrite")}
+                                    disabled={conflictResolutionInFlight}
+                                >
+                                    {saveConflict.origin === "save"
+                                        ? "Overwrite Disk File"
+                                        : "Overwrite Existing"}
+                                </Button>
+                            )}
+                            {saveConflictActions.includes("save-as") && (
+                                <Button
+                                    variant={saveConflict.origin === "save-as" ? "primary" : "secondary"}
+                                    onClick={() => void resolveSaveConflict("save-as")}
+                                    disabled={conflictResolutionInFlight}
+                                >
+                                    {saveConflict.origin === "save" ? "Save As…" : "Choose Another…"}
+                                </Button>
+                            )}
+                            <Button
+                                variant="ghost"
+                                onClick={() => void resolveSaveConflict("cancel")}
+                                disabled={conflictResolutionInFlight}
+                            >
+                                Cancel
+                            </Button>
+                        </ButtonGroup>
+                    </div>
+                </div>
+            )}
             {closePrompt && (
                 <div className="gglab-close-prompt" role="alertdialog" aria-label="Unsaved changes">
                     <div className="gglab-close-prompt-card">

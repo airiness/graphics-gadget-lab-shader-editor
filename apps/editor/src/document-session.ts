@@ -137,6 +137,39 @@ export function sessionSaved(
     };
 }
 
+/**
+ * Replace the current revision with a freshly read snapshot of the SAME file.
+ *
+ * Reload is a conflict-resolution action, not a new open: it preserves the
+ * ephemeral session identity while discarding local history and establishing
+ * the disk document as the new clean baseline. The host-returned URI must
+ * match the URI requested by this session; reload may never silently retarget
+ * an editing context.
+ */
+export function sessionReloaded(
+    session: DocumentSession,
+    reloadedSessionId: DocumentSessionId,
+    snapshot: DocumentSnapshot,
+    document: ShaderGraphDocument,
+): DocumentSession {
+    if (session.sessionId !== reloadedSessionId) {
+        return session;
+    }
+    if (session.canonicalUri !== snapshot.canonicalDocumentUri) {
+        throw new Error("A reload snapshot must belong to the DocumentSession's canonical URI.");
+    }
+    return {
+        ...session,
+        fileRevisionToken: snapshot.fileRevisionToken,
+        history: createHistory(document),
+        provenance: provenanceFromFile(snapshot.displayPath),
+        // The graph reader may accept non-canonical input. Dirty state is a
+        // comparison of canonical document states, so a successful reload is
+        // clean even when the external writer used another JSON layout.
+        savedBaseline: serializeShaderGraphDocument(document),
+    };
+}
+
 /** Dirty: the current document's canonical bytes differ from the
  * baseline (a byte comparison over canonical forms = a structural
  * comparison, by the core's determinism). */
