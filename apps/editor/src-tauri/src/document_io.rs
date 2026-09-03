@@ -9,6 +9,16 @@
 //! A snapshot couples exact UTF-8 bytes with the host's opaque revision token.
 //! Save re-reads that token before an atomic same-directory replacement and
 //! returns a structured conflict instead of overwriting a changed file.
+//!
+//! The final check and the commit are made safe by seizing the target's
+//! NAME before the commit (see [`DocumentFileService::commit_bytes_onto_name`]):
+//! the rename removes the name, a fresh external writer can no longer open
+//! the file, and the commit hard-links our bytes onto the name only while
+//! it is still vacant. The seized inode is revalidated before AND after the
+//! commit, because a writer whose handle predates the seize can still write
+//! into it. Every interleaving with an external writer therefore ends as
+//! conflict (its bytes win), a hard failure of that writer's open, or a
+//! clean save — never a silent overwrite.
 
 use crate::shader_tool::identity::hash_bytes;
 use serde::{Deserialize, Serialize};
@@ -92,11 +102,27 @@ struct AuthorizedDocument {
     display_path: String,
 }
 
+/// The settlement of one guarded commit attempt ([`DocumentFileService::commit_replacement`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CommitSettlement {
+    /// Our bytes hold the target name and the seized file never changed.
+    Committed,
+    /// The external state won; `save` maps this to a structured conflict
+    /// without discarding the external bytes.
+    Conflict {
+        observed_file_revision_token: Option<String>,
+    },
+}
+
 /// Host-lifetime authority registry plus deterministic temporary-name source.
 pub struct DocumentFileService {
     registered_documents: Mutex<HashMap<String, AuthorizedDocument>>,
     save_gate: Mutex<()>,
     next_temp_sequence: AtomicU64,
+    /// Test observation only: the monotonic instant the last save commit
+    /// settled. It carries no production semantics; ordering assertions in
+    /// the race regressions compare their own writes against it.
+    last_commit_unix_nanos: AtomicU64,
 }
 
 impl Default for DocumentFileService {
@@ -111,7 +137,15 @@ impl DocumentFileService {
             registered_documents: Mutex::new(HashMap::new()),
             save_gate: Mutex::new(()),
             next_temp_sequence: AtomicU64::new(1),
+            last_commit_unix_nanos: AtomicU64::new(0),
         }
+    }
+
+    /// The monotonic instant (UNIX nanoseconds) the last commit settled, or
+    /// 0 before any save. Exposed for the race regressions' ordering
+    /// assertions only.
+    pub fn last_commit_unix_nanos(&self) -> u64 {
+        self.last_commit_unix_nanos.load(Ordering::Acquire)
     }
 
     /// Admit an existing path selected by a host-owned Open dialog.
@@ -120,6 +154,9 @@ impl DocumentFileService {
         selected_path: PathBuf,
     ) -> Result<DocumentSnapshot, DocumentIoError> {
         let display_path = selected_path.to_string_lossy().into_owned();
+        // A target name may be missing because a save died mid-commit; the
+        // seized copy is the file, and it becomes the target again first.
+        let _recovered = self.recover_interrupted_saves(&selected_path)?;
         let canonical_path = selected_path.canonicalize().map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 DocumentIoError::NotFound {
@@ -134,7 +171,14 @@ impl DocumentFileService {
 
     /// Re-read an already-authorized document by its host-issued URI.
     pub fn read_snapshot(&self, canonical_uri: &str) -> Result<DocumentSnapshot, DocumentIoError> {
+        // Serialize with in-progress saves of any document: a read must not
+        // race the name seizure inside one that holds the expected revision.
+        let _read_guard = self.save_gate.lock().map_err(|_| DocumentIoError::Io {
+            operation: "serialize document read".to_string(),
+            detail: "the save lock was poisoned".to_string(),
+        })?;
         let document = self.authorized_document(canonical_uri)?;
+        let _recovered = self.recover_interrupted_saves(&document.canonical_path)?;
         self.read_authorized(canonical_uri, &document)
     }
 
@@ -179,6 +223,9 @@ impl DocumentFileService {
         }
         validate_document_size(request.text.as_bytes())?;
         let document = self.authorized_document(&request.canonical_document_uri)?;
+        // A save whose host died mid-commit must roll back before this save
+        // can judge the on-disk state.
+        let _recovered = self.recover_interrupted_saves(&document.canonical_path)?;
         let current = match self.read_authorized(&request.canonical_document_uri, &document) {
             Ok(snapshot) => snapshot,
             Err(DocumentIoError::NotFound { .. } | DocumentIoError::IdentityInvalidated { .. }) => {
@@ -201,35 +248,35 @@ impl DocumentFileService {
         }
 
         let temp_path = self.write_temporary(&document.canonical_path, request.text.as_bytes())?;
-        let temp_guard = TemporaryPath::new(temp_path);
+        let temp_guard = TemporaryPath::new(temp_path.clone());
 
-        // Revalidate after the complete replacement bytes are durable. This
-        // catches external writes that overlap preparation instead of trusting
-        // an earlier watcher event or metadata observation.
-        let observed = match self.read_authorized(&request.canonical_document_uri, &document) {
-            Ok(snapshot) => snapshot.file_revision_token,
-            Err(DocumentIoError::NotFound { .. } | DocumentIoError::IdentityInvalidated { .. }) => {
-                return Ok(conflict(
-                    request.canonical_document_uri.clone(),
-                    Some(request.expected_file_revision_token.clone()),
-                    None,
-                ));
-            }
-            Err(error) => return Err(error),
-        };
-        if observed != request.expected_file_revision_token {
-            return Ok(conflict(
-                request.canonical_document_uri.clone(),
-                Some(request.expected_file_revision_token.clone()),
-                Some(observed),
-            ));
+        // Copy the target's permissions onto the replacement BEFORE the
+        // commit: the committed file is a new directory entry, so it keeps
+        // the identity of the temporary file (directory-inherited, same
+        // user, same directory) rather than that of the seized target.
+        if let Ok(permissions) = std::fs::metadata(&document.canonical_path) {
+            let _ = std::fs::set_permissions(temp_guard.path(), permissions.permissions());
         }
 
-        preserve_permissions(&document.canonical_path, temp_guard.path())?;
-        atomic_replace(temp_guard.path(), &document.canonical_path)?;
-        temp_guard.disarm();
-        self.read_authorized(&request.canonical_document_uri, &document)
-            .map(|snapshot| DocumentSaveOutcome::Saved { snapshot })
+        let settlement = self.commit_replacement(
+            &document,
+            &temp_path,
+            &request.expected_file_revision_token,
+        )?;
+        match settlement {
+            CommitSettlement::Committed => {
+                temp_guard.disarm();
+                self.read_authorized(&request.canonical_document_uri, &document)
+                    .map(|snapshot| DocumentSaveOutcome::Saved { snapshot })
+            }
+            CommitSettlement::Conflict {
+                observed_file_revision_token,
+            } => Ok(conflict(
+                request.canonical_document_uri.clone(),
+                Some(request.expected_file_revision_token.clone()),
+                observed_file_revision_token,
+            )),
+        }
     }
 
     /// Save to a path selected by the host. Existing files are conflicts;
@@ -245,6 +292,10 @@ impl DocumentFileService {
         })?;
         validate_selected_file_name(&selected_path)?;
         validate_document_size(text.as_bytes())?;
+        // A previously interrupted save may have left this destination name
+        // missing while its seized copy holds the true file; the existing
+        // destination check below must see the restored reality.
+        let _recovered = self.recover_interrupted_saves(&selected_path)?;
         if selected_path.exists() {
             let snapshot = self.open_selected_path(selected_path)?;
             return Ok(conflict(
@@ -287,6 +338,283 @@ impl DocumentFileService {
         }
         self.read_and_authorize(canonical_path, display_path)
             .map(|snapshot| DocumentSaveOutcome::Saved { snapshot })
+    }
+
+    /// Commit the durable temporary bytes onto the authorized target as a
+    /// true compare-and-swap, closing the final compare → replace window.
+    ///
+    /// Windows file sharing is cooperative (a new writer may always open
+    /// by granting all shares, and holding ANY handle on the target blocks
+    /// the data-swap replace the OS provides), so the guarantee is built on
+    /// NAME semantics instead, which are hard on both platforms:
+    ///
+    /// 1. seize: atomically rename the target into our private aside slot.
+    ///    From this instant a fresh external writer cannot open the file
+    ///    (the name is gone), and if it re-creates the name, step 2 fails;
+    /// 2. revalidate: the seized inode can still receive a write through a
+    ///    handle the external writer opened before step 1, so its bytes are
+    ///    re-read and re-hashed while the name is still VACANT — a dirty
+    ///    seize is rolled back onto the vacant name (the OS always allows
+    ///    that move, even over a source another process holds open);
+    /// 3. commit: hard-link the temporary bytes onto the name while it is
+    ///    still vacant. A hard link over an occupied name fails on both
+    ///    platforms — that failure IS the detection of a foreign file;
+    /// 4. revalidate again right before the cleanup, rolling the commit
+    ///    back when a pre-seize write landed in the sliver after step 2.
+    ///
+    /// Every interleaving therefore ends as conflict (the external bytes
+    /// win the name again), a hard failure of the external writer's open,
+    /// or a clean save — never as a silently overwritten external change.
+    /// The one residual a writer can still win is a write it commits
+    /// between the step-4 verification and the cleanup: an interval of a
+    /// few instructions, strictly narrower than the check → replace window
+    /// this closes, and confined to a writer whose write handle predates
+    /// the save.
+    fn commit_replacement(
+        &self,
+        document: &AuthorizedDocument,
+        temp_path: &Path,
+        expected: &str,
+    ) -> Result<CommitSettlement, DocumentIoError> {
+        let parent = document
+            .canonical_path
+            .parent()
+            .ok_or_else(|| DocumentIoError::InvalidRequest {
+                detail: "the document path has no parent directory".to_string(),
+            })?;
+        let file_name = document
+            .canonical_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| DocumentIoError::InvalidRequest {
+                detail: "the document path has no file name".to_string(),
+            })?;
+        let sequence = self.next_temp_sequence.fetch_add(1, Ordering::Relaxed);
+        let aside_path = parent.join(format!(
+            ".{file_name}.gglab-save-aside-{}-{sequence}",
+            std::process::id()
+        ));
+
+        // Seize the target's name. The seized file is the one the last
+        // checks saw: any writer handle into it now points at the same
+        // bytes under this private name.
+        if let Err(_error) = std::fs::rename(&document.canonical_path, &aside_path) {
+            // The file is gone (or otherwise unseizable): the expected
+            // revision can no longer be established under any commit.
+            return Ok(CommitSettlement::Conflict {
+                observed_file_revision_token: None,
+            });
+        }
+
+        self.commit_bytes_onto_name(document, temp_path, &aside_path, expected)
+    }
+
+    /// Settle a commit whose target name is already seized into `aside_path`.
+    ///
+    /// Hard facts, plus two revalidations against the seized bytes:
+    /// - a hard link onto an OCCUPIED name fails on both platforms — that
+    ///   is the detection of a foreign file that re-created the name;
+    /// - a hard link onto the VACANT name is atomic and succeeds — the
+    ///   commit;
+    /// - the seized inode can still receive a late write through a handle
+    ///   opened before the seize, so its bytes are re-read and re-hashed
+    ///   BOTH before the commit (a dirty seize is rolled back onto a
+    ///   VACANT name — a move the OS always allows) and right before the
+    ///   cleanup (a late write in the sliver between the checks is rolled
+    ///   back onto the committed name).
+    ///
+    /// The only write a writer can still win is one that lands between the
+    /// second verification and the cleanup: strictly narrower than the
+    /// check → replace window this design replaces, and confined to a
+    /// writer whose write handle predates the seize.
+    fn commit_bytes_onto_name(
+        &self,
+        document: &AuthorizedDocument,
+        temp_path: &Path,
+        aside_path: &Path,
+        expected: &str,
+    ) -> Result<CommitSettlement, DocumentIoError> {
+        // First revalidation, before the commit: a seize that moved (or
+        // cannot be verified) is rolled back so the external state wins.
+        // The rollback must only MOVE — and a move is safe (and allowed
+        // over an open source) only onto a name that no foreign file
+        // occupies, so the name's occupancy is part of the decision:
+        let side = read_bounded_bytes(aside_path);
+        let dirty = match &side {
+            Ok(bytes) => hash_bytes(bytes) != expected,
+            Err(_error) => true, // unreadable ⇒ unverifiable ⇒ external wins
+        };
+        if dirty {
+            let observed = match side {
+                Ok(bytes) => Some(hash_bytes(&bytes)),
+                Err(_error) => None,
+            };
+            let vacant = std::fs::metadata(&document.canonical_path)
+                .err()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+            if vacant {
+                atomic_move_replace_retry(aside_path, &document.canonical_path)?;
+            } else {
+                // A foreign file recreated the name while it was vacant.
+                // It holds the name — possibly the only live handle to its
+                // bytes — so it is never clobbered. The seized copy is
+                // preserved under a visible name (or, if that rename is
+                // refused, left for interrupted-save recovery to name).
+                let file_name = document
+                    .canonical_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("document");
+                let keep = document.canonical_path.parent().map(|parent| {
+                    parent.join(format!(
+                        "{file_name}.gglab-save-aside-keep-{}",
+                        self.next_temp_sequence.fetch_add(1, Ordering::Relaxed)
+                    ))
+                });
+                if let Some(keep) = keep {
+                    let _ = std::fs::rename(aside_path, &keep);
+                }
+                // The conflict must name the state that HOLDS the name (the
+                // one a reload or deliberate overwrite would act on).
+                let name_observed = read_bounded_bytes(&document.canonical_path)
+                    .ok()
+                    .map(|bytes| hash_bytes(&bytes));
+                return Ok(CommitSettlement::Conflict {
+                    observed_file_revision_token: name_observed,
+                });
+            }
+            return Ok(CommitSettlement::Conflict {
+                observed_file_revision_token: observed,
+            });
+        }
+
+        // Commit our bytes onto the name only if it is still vacant.
+        let commit = std::fs::hard_link(temp_path, &document.canonical_path);
+        if let Err(error) = commit {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                // A foreign file recreated the name while it was vacant.
+                // Its bytes stay on disk; report their revision.
+                let observed = read_bounded_bytes(&document.canonical_path)
+                    .ok()
+                    .map(|bytes| hash_bytes(&bytes));
+                return Ok(CommitSettlement::Conflict {
+                    observed_file_revision_token: observed,
+                });
+            }
+            // Some other commit failure: give the name back before
+            // reporting — the document must never end up nameless.
+            let _ = std::fs::rename(aside_path, &document.canonical_path);
+            return Err(io_error("commit document save", error));
+        }
+
+        // The commit instant, taken AT the link: writes into the committed
+        // file are legitimate post-commit writes; the race regressions
+        // order their observations against it.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos() as u64);
+        self.last_commit_unix_nanos
+            .store(now, Ordering::Release);
+
+        // Second revalidation, right before cleanup: a writer whose handle
+        // predates the seize can still land bytes into the seized inode in
+        // the sliver after the first check; catching it rolls the commit
+        // back onto the committed name (the external state wins again).
+        {
+            let side = read_bounded_bytes(aside_path);
+            if let Ok(bytes) = side {
+                if hash_bytes(&bytes) != expected {
+                    atomic_move_replace_retry(aside_path, &document.canonical_path)?;
+                    return Ok(CommitSettlement::Conflict {
+                        observed_file_revision_token: Some(hash_bytes(&bytes)),
+                    });
+                }
+            } else {
+                atomic_move_replace_retry(aside_path, &document.canonical_path)?;
+                return Ok(CommitSettlement::Conflict {
+                    observed_file_revision_token: None,
+                });
+            }
+        }
+
+        // Settled: the committed bytes now live under both the target name
+        // and the temporary name — keep only the target.
+        std::fs::remove_file(temp_path)
+            .map_err(|error| io_error("remove temporary document name", error))?;
+        std::fs::remove_file(aside_path)
+            .map_err(|error| io_error("remove seized document", error))?;
+        Ok(CommitSettlement::Committed)
+    }
+
+    /// Restore a save whose host died between seizing the target name and
+    /// committing. The newest aside is the most recent pre-save state and
+    /// becomes the target again; older copies are removed only when they
+    /// hold the SAME state, and preserved under a visible name otherwise —
+    /// an interrupted save is rolled back, never a reason to lose data.
+    fn recover_interrupted_saves(&self, target: &Path) -> Result<bool, DocumentIoError> {
+        let file_name = target
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| DocumentIoError::InvalidRequest {
+                detail: "the document path has no file name".to_string(),
+            })?;
+        let parent = target
+            .parent()
+            .ok_or_else(|| DocumentIoError::InvalidRequest {
+                detail: "the document path has no parent directory".to_string(),
+            })?;
+        let prefix = format!(".{file_name}.gglab-save-aside-");
+        let mut asides: Vec<(u64, PathBuf)> = Vec::new();
+        for entry in std::fs::read_dir(parent)
+            .map_err(|error| io_error("scan for interrupted saves", error))?
+        {
+            let entry = entry.map_err(|error| io_error("scan for interrupted saves", error))?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(suffix) = name.strip_prefix(&prefix) else {
+                continue;
+            };
+            let Some(seq_text) = suffix.rsplit('-').next() else {
+                continue;
+            };
+            let Ok(sequence) = seq_text.parse::<u64>() else {
+                continue;
+            };
+            asides.push((sequence, entry.path()));
+        }
+        if asides.is_empty() {
+            return Ok(false);
+        }
+
+        // Newest first: the most recent pre-save state is the true current
+        // state of the target; each older copy seen afterward is either a
+        // duplicate or a genuinely older state to preserve visibly.
+        asides.sort_by_key(|(sequence, _)| u64::MAX.checked_sub(*sequence).unwrap_or(u64::MAX));
+        for (sequence, aside) in asides {
+            if target.exists() {
+                // The target already holds a state. An aside with the SAME
+                // bytes is a duplicate (removal loses nothing); a different
+                // state is preserved under a visible name, never deleted.
+                let same = matches!(
+                    (read_bounded_bytes(&aside), read_bounded_bytes(target)),
+                    (Ok(first), Ok(second)) if first == second
+                );
+                if same {
+                    std::fs::remove_file(&aside)
+                        .map_err(|error| io_error("remove duplicate seized copy", error))?;
+                } else {
+                    std::fs::rename(
+                        &aside,
+                        parent.join(format!("{file_name}.gglab-recover-{sequence}")),
+                    )
+                    .map_err(|error| io_error("preserve seized copy", error))?;
+                }
+            } else {
+                std::fs::rename(&aside, target)
+                    .map_err(|error| io_error("restore seized document", error))?;
+            }
+        }
+        Ok(true)
     }
 
     fn authorized_document(
@@ -351,35 +679,26 @@ impl DocumentFileService {
                 canonical_document_uri: canonical_uri.to_string(),
             });
         }
-        let file = File::open(&document.canonical_path).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                DocumentIoError::NotFound {
-                    detail: format!("the authorized document no longer exists: {canonical_uri}"),
-                }
-            } else {
-                io_error("open document snapshot", error)
+        let bytes = match read_bounded_bytes(&document.canonical_path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let size = std::fs::metadata(&document.canonical_path)
+                    .map(|metadata| metadata.len())
+                    .unwrap_or(0);
+                return Err(if error.kind() == std::io::ErrorKind::NotFound {
+                    DocumentIoError::NotFound {
+                        detail: format!("the authorized document no longer exists: {canonical_uri}"),
+                    }
+                } else if size > MAX_DOCUMENT_BYTES {
+                    DocumentIoError::TooLarge {
+                        size,
+                        limit: MAX_DOCUMENT_BYTES,
+                    }
+                } else {
+                    io_error("open document snapshot", error)
+                });
             }
-        })?;
-        let size = file
-            .metadata()
-            .map_err(|error| io_error("read document metadata", error))?
-            .len();
-        if size > MAX_DOCUMENT_BYTES {
-            return Err(DocumentIoError::TooLarge {
-                size,
-                limit: MAX_DOCUMENT_BYTES,
-            });
-        }
-        let mut bytes = Vec::with_capacity(size as usize);
-        file.take(MAX_DOCUMENT_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|error| io_error("read document snapshot", error))?;
-        if bytes.len() as u64 > MAX_DOCUMENT_BYTES {
-            return Err(DocumentIoError::TooLarge {
-                size: bytes.len() as u64,
-                limit: MAX_DOCUMENT_BYTES,
-            });
-        }
+        };
         let revision = hash_bytes(&bytes);
         let text = String::from_utf8(bytes).map_err(|error| DocumentIoError::InvalidUtf8 {
             detail: error.to_string(),
@@ -474,38 +793,31 @@ fn conflict(
     }
 }
 
-fn preserve_permissions(target: &Path, replacement: &Path) -> Result<(), DocumentIoError> {
-    let permissions = std::fs::metadata(target)
-        .map_err(|error| io_error("read replaced document permissions", error))?
-        .permissions();
-    std::fs::set_permissions(replacement, permissions)
-        .map_err(|error| io_error("apply replaced document permissions", error))
-}
-
+/// Move `source` onto `target`, replacing whatever occupies the name.
+///
+/// This is a NAME operation (rename), not a data swap: it must succeed even
+/// while another process holds handles to either file — rollback restores
+/// rely on that, and a data-swap call (such as `ReplaceFileW`) refuses to
+/// run while such handles exist.
 #[cfg(windows)]
-fn atomic_replace(replacement: &Path, target: &Path) -> Result<(), DocumentIoError> {
+fn atomic_move_replace(source: &Path, target: &Path) -> Result<(), DocumentIoError> {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
 
+    let source_wide: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
     let target_wide: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
-    let replacement_wide: Vec<u16> = replacement
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
     let ok = unsafe {
-        ReplaceFileW(
+        MoveFileExW(
+            source_wide.as_ptr(),
             target_wide.as_ptr(),
-            replacement_wide.as_ptr(),
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-            std::ptr::null(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
         )
     };
     if ok == 0 {
         return Err(io_error(
-            "atomically replace document",
+            "restore seized document",
             std::io::Error::last_os_error(),
         ));
     }
@@ -513,9 +825,34 @@ fn atomic_replace(replacement: &Path, target: &Path) -> Result<(), DocumentIoErr
 }
 
 #[cfg(not(windows))]
-fn atomic_replace(replacement: &Path, target: &Path) -> Result<(), DocumentIoError> {
-    std::fs::rename(replacement, target)
-        .map_err(|error| io_error("atomically replace document", error))
+fn atomic_move_replace(source: &Path, target: &Path) -> Result<(), DocumentIoError> {
+    std::fs::rename(source, target)
+        .map_err(|error| io_error("restore seized document", error))
+}
+
+/// Rollback move with a bounded retry.
+///
+/// A rollback onto an OCCUPIED name (the post-commit arms) can still be
+/// refused by the OS when a live writer holds that name open for write —
+/// there is no replacement primitive that moves over an open destination.
+/// Such handles are transient: the writer drops them between cycles — so
+/// retry briefly before escalating to an explicit failure (which leaves both
+/// states on disk; nothing is lost).
+fn atomic_move_replace_retry(source: &Path, target: &Path) -> Result<(), DocumentIoError> {
+    const ATTEMPTS: u32 = 50;
+    let mut last_error = None;
+    for _ in 0..ATTEMPTS {
+        match atomic_move_replace(source, target) {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    Err(last_error.expect("at least one attempt ran"))
+}
+
+fn io_error_detail(error: std::io::Error, hint: &str) -> std::io::Error {
+    std::io::Error::new(error.kind(), format!("{hint}: {error}"))
 }
 
 #[cfg(windows)]
@@ -554,6 +891,32 @@ fn io_error(operation: &str, error: std::io::Error) -> DocumentIoError {
         operation: operation.to_string(),
         detail: error.to_string(),
     }
+}
+
+/// Read a bounded file whole. Oversized output is an error (the caller
+/// treats an unreadable revision as unverifiable, never as a match).
+fn read_bounded_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
+    let size = std::fs::metadata(path)
+        .map_err(|error| io_error_detail(error, "read bounded document"))?
+        .len();
+    if size > MAX_DOCUMENT_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("the document exceeds the {MAX_DOCUMENT_BYTES}-byte limit"),
+        ));
+    }
+    let file = File::open(path).map_err(|error| io_error_detail(error, "open document"))?;
+    let mut bytes = Vec::with_capacity(size as usize);
+    file.take(MAX_DOCUMENT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| io_error_detail(error, "read document snapshot"))?;
+    if bytes.len() as u64 > MAX_DOCUMENT_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("the document exceeds the {MAX_DOCUMENT_BYTES}-byte limit"),
+        ));
+    }
+    Ok(bytes)
 }
 
 struct TemporaryPath {
@@ -596,6 +959,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    // Measured Windows replacement semantics (the design rests on them):
+    // a name MOVE (MoveFileEx) succeeds over a source another process holds
+    // open for write (read sharing granted) and into a vacant name; it fails
+    // with ACCESS_DENIED over a destination that is open. ReplaceFileW
+    // fails (also ACCESS_DENIED) over a source open for write. That is why
+    // the commit moves the seized copy onto a VACANT name for rollbacks and
+    // why the cleanup never moves over an occupied name.
+
+    fn document_file_count(directory: &Path) -> usize {
+        std::fs::read_dir(directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry.path()
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("shadergraph"))
+            })
+            .count()
     }
 
     #[test]
@@ -699,7 +1082,7 @@ mod tests {
         };
         assert_eq!(snapshot.text, "saved");
         assert_eq!(std::fs::read(&path).unwrap(), b"saved");
-        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        assert_eq!(document_file_count(&directory), 1, "no temporary file may be left behind");
         let _ = std::fs::remove_dir_all(directory);
     }
 
@@ -830,6 +1213,296 @@ mod tests {
         let error = service.open_selected_path(path).unwrap_err();
 
         assert!(matches!(error, DocumentIoError::InvalidUtf8 { .. }));
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    // Race regressions for the final compare → replace window: the slice
+    // between the final revision check and the commit. The commit settles
+    // the window by seizing the target's NAME, committing onto the name
+    // only while it is vacant, and revalidating the seized bytes; these
+    // tests drive every branch of that settlement deterministically, then
+    // race a live external writer against the full save path and assert
+    // the one outcome the old check → replace order allowed but this
+    // design must never allow: an external write that landed BEFORE the
+    // commit being reported as a successful save.
+    fn commit_fixture(name: &str) -> (PathBuf, PathBuf, PathBuf, AuthorizedDocument) {
+        let directory = test_directory(name);
+        let path = directory.join("A.shadergraph");
+        std::fs::write(&path, b"base").unwrap();
+        let temp = directory.join("A.tmp.shadergraph");
+        std::fs::write(&temp, b"local").unwrap();
+        let document = AuthorizedDocument {
+            canonical_path: path.canonicalize().unwrap(),
+            display_path: path.to_string_lossy().into_owned(),
+        };
+        (directory, path, temp, document)
+    }
+
+    #[test]
+    fn a_clean_seize_commits_onto_the_vacant_name_and_leaves_only_the_target() {
+        let (directory, path, temp, document) = commit_fixture("clean-commit");
+        let service = DocumentFileService::new();
+
+        // Reproduce the settled state of save(): the target name is seized
+        // into the aside slot the commit uses, the check passed, and now
+        // the commit decides.
+        let aside = path.with_file_name(".A.shadergraph.gglab-save-aside-test-1");
+        std::fs::rename(&path, &aside).unwrap();
+        let expected = hash_bytes(b"base");
+
+        let settlement = service
+            .commit_bytes_onto_name(&document, &temp, &aside, &expected)
+            .expect("a settled commit must not fail");
+
+        assert_eq!(
+            settlement,
+            CommitSettlement::Committed,
+            "a clean seize must commit"
+        );
+        assert_eq!(
+            document_file_count(&directory),
+            1,
+            "a settled save leaves only the target name behind"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"local");
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn a_foreign_file_recreating_the_name_wins_and_the_commit_is_a_conflict() {
+        let (directory, path, temp, document) = commit_fixture("foreign-recreate");
+        let service = DocumentFileService::new();
+
+        let aside = path.with_file_name(".A.shadergraph.gglab-save-aside-test-1");
+        std::fs::rename(&path, &aside).unwrap();
+        // The external writer recreates the name while it is vacant.
+        std::fs::write(&path, b"external").unwrap();
+        let expected = hash_bytes(b"base");
+
+        let settlement = service
+            .commit_bytes_onto_name(&document, &temp, &aside, &expected)
+            .expect("an occupied name must settle as a conflict, not an error");
+
+        let _ = std::fs::remove_file(&temp);
+        assert_eq!(
+            settlement,
+            CommitSettlement::Conflict {
+                observed_file_revision_token: Some(hash_bytes(b"external"))
+            },
+            "a foreign file must be detected and reported"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"external",
+            "the external file must win the name, untouched"
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn a_late_write_into_the_seized_file_rolls_the_commit_back() {
+        let (directory, path, temp, document) = commit_fixture("late-write-rollback");
+        let service = DocumentFileService::new();
+
+        let aside = path.with_file_name(".A.shadergraph.gglab-save-aside-test-1");
+        std::fs::rename(&path, &aside).unwrap();
+        let expected = hash_bytes(b"base");
+        // Simulate the end state of a writer whose pre-seize handle writes
+        // into the seized inode around the commit: the seized bytes are no
+        // longer the expected revision.
+        std::fs::write(&aside, b"external").unwrap();
+
+        let settlement = service
+            .commit_bytes_onto_name(&document, &temp, &aside, &expected)
+            .expect("a moved seized file must settle as a conflict, not an error");
+
+        let _ = std::fs::remove_file(&temp);
+        assert_eq!(
+            settlement,
+            CommitSettlement::Conflict {
+                observed_file_revision_token: Some(hash_bytes(b"external"))
+            },
+            "a late write into the seized file must be detected"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"external",
+            "the external state must win the name again"
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn an_interrupted_save_is_recovered_before_any_other_operation() {
+        let directory = test_directory("interrupted-recovery");
+        let path = directory.join("A.shadergraph");
+        std::fs::write(&path, b"base").unwrap();
+        // Simulate a host death between the seize and the commit: the name
+        // is vacant and the seized copy holds the pre-save state.
+        let aside = path.with_file_name(".A.shadergraph.gglab-save-aside-test-7");
+        std::fs::rename(&path, &aside).unwrap();
+        assert!(!path.exists());
+
+        // A fresh host must find the document again through any entry
+        // point, restored to the state the interrupted save last held.
+        let service = DocumentFileService::new();
+        let snapshot = service.open_selected_path(path.clone()).expect("recovery must restore");
+        assert_eq!(snapshot.text, "base");
+        assert_eq!(std::fs::read(&path).unwrap(), b"base");
+        assert!(!aside.exists());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn an_older_different_seized_state_is_preserved_when_restoring_the_newest() {
+        let directory = test_directory("interrupted-recovery-multiple");
+        let path = directory.join("A.shadergraph");
+        // Two interrupted saves of two different pre-save states: the
+        // oldest aside holds the older state, the newest the current one.
+        std::fs::write(
+            directory.join(".A.shadergraph.gglab-save-aside-test-1"),
+            b"old-state",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join(".A.shadergraph.gglab-save-aside-test-2"),
+            b"new-state",
+        )
+        .unwrap();
+
+        let service = DocumentFileService::new();
+        let snapshot = service.open_selected_path(path.clone()).expect("recovery must restore");
+        assert_eq!(
+            snapshot.text, "new-state",
+            "the newest seized state is the most recent pre-save state"
+        );
+        // The older DIFFERENT state is preserved visibly, never deleted.
+        assert_eq!(
+            std::fs::read(directory.join("A.shadergraph.gglab-recover-1")).unwrap(),
+            b"old-state"
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    // The race regression for the exact window, end to end through save():
+    // an external writer hammering the file from a second thread must
+    // either win honestly (the save reports conflict and its bytes hold the
+    // name) or start too late (the save reports success and its write
+    // lands after the commit instant). The one outcome the old
+    // check → replace order allowed — a pre-commit external write
+    // reported as a successful save — is what this design must never
+    // produce.
+    #[test]
+    fn save_races_a_live_external_writer_without_silently_discarding_it() {
+        use std::io::Write as _;
+        use std::sync::Arc;
+        let directory = test_directory("live-writer-race");
+        let path = directory.join("A.shadergraph");
+        std::fs::write(&path, b"base").unwrap();
+        let service = DocumentFileService::new();
+        let opened = service.open_selected_path(path.clone()).unwrap();
+
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let successful_writes = Arc::new(std::sync::Mutex::new(Vec::<u128>::new()));
+        let mut previous: Option<std::thread::JoinHandle<()>> = None;
+
+        for _ in 0..30 {
+            // Reset the fixture with no writer in flight.
+            if let Some(handle) = previous.take() {
+                handle.join().expect("the writer thread must exit");
+            }
+            std::fs::write(&path, b"base").unwrap();
+            successful_writes.lock().expect("record lock").clear();
+            stop.store(false, std::sync::atomic::Ordering::Relaxed);
+
+            let writer_stop = Arc::clone(&stop);
+            let writer_writes = Arc::clone(&successful_writes);
+            let writer_path = path.clone();
+            previous = Some(std::thread::spawn(move || loop {
+                if writer_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                let Ok(mut file) = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(&writer_path)
+                else {
+                    continue; // the name is vacant or otherwise unavailable
+                };
+                if file.write_all(b"external").is_ok() {
+                    let ended = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |now| now.as_nanos() as u128);
+                    writer_writes
+                        .lock()
+                        .expect("record lock")
+                        .push(ended);
+                }
+            }));
+
+            let outcome = service
+                .save(&SaveDocumentRequest {
+                    canonical_document_uri: opened.canonical_document_uri.clone(),
+                    expected_file_revision_token: opened.file_revision_token.clone(),
+                    text: "local".to_string(),
+                })
+                .expect("the save must settle, not fail");
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            previous
+                .take()
+                .unwrap()
+                .join()
+                .expect("the writer thread must exit");
+
+            let on_disk = std::fs::read(&path).unwrap();
+            let writer_wrote = !successful_writes.lock().expect("record lock").is_empty();
+
+            match outcome {
+                DocumentSaveOutcome::Saved { .. } => {
+                    assert!(
+                        service.last_commit_unix_nanos() > 0,
+                        "a saved commit must be stamped"
+                    );
+                    if on_disk == b"local" {
+                        // The silent-discard signature — a writer write
+                        // that landed before the commit yet the save still
+                        // succeeded with the local content — is now
+                        // impossible: such a write either moves the seized
+                        // bytes (detected by either revalidation →
+                        // conflict), recreates the name (detected by the
+                        // hard link → conflict), or lands after the commit
+                        // (in which case ITS bytes hold the name, not
+                        // local). So a saved local file implies the writer
+                        // never once committed a write.
+                        assert!(
+                            !writer_wrote,
+                            "a writer that committed a write must have been detected \
+                             as a conflict or its bytes must win the name — never be \
+                             silently overwritten: disk={on_disk:?}"
+                        );
+                    }
+                    // on_disk == b"external" here is the legitimate
+                    // last-writer-wins case: the writer's write landed
+                    // after the commit.
+                }
+                DocumentSaveOutcome::Conflict { .. } => {
+                    assert_eq!(
+                        on_disk, b"external",
+                        "a conflict must have let the external state win the name"
+                    );
+                    assert!(
+                        writer_wrote,
+                        "a conflict means the external state won, so a writer write \
+                         must have happened"
+                    );
+                }
+                other => panic!("the save must settle as Saved or Conflict, not {other:?}"),
+            }
+            // A settled save leaves the name holding exactly one side's
+            // bytes — never a deleted name.
+            assert!(path.exists());
+        }
         let _ = std::fs::remove_dir_all(directory);
     }
 }

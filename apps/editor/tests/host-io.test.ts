@@ -550,7 +550,10 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         // capabilities through its private registry.
         expect(documentIoRs).toContain("registered_documents");
         expect(documentIoRs).toContain("expected_file_revision_token");
-        expect(documentIoRs).toContain("atomic_replace");
+        // Saves bind the committed bytes onto the target through an atomic
+        // name operation (move/replace of the name), never an in-place data
+        // swap over the open target.
+        expect(documentIoRs).toContain("atomic_move_replace");
         expect(documentIoRs).toContain("Unauthorized");
         expect(workspaceIoRs).toContain("registered_workspaces");
         expect(workspaceIoRs).toContain("is_contained");
