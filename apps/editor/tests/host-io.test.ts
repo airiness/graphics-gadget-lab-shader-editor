@@ -511,7 +511,29 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
 
     it("exposes exactly the bounded Workspace, document, tool, and Preview surface", async () => {
         const libRs = await readFile(resolve(tauriDir, "src/lib.rs"), "utf8");
-        const documentIoRs = await readFile(resolve(tauriDir, "src/document_io.rs"), "utf8");
+        // The document-IO module is split into a shared core plus the two
+        // platform-specific save-settlement submodules; the invariants below
+        // are asserted over the whole module, not just the top file.
+        const [
+            documentIoCore,
+            documentIoSettlementWindows,
+            documentIoSettlementPosix,
+        ] = await Promise.all([
+            readFile(resolve(tauriDir, "src/document_io.rs"), "utf8"),
+            readFile(
+                resolve(tauriDir, "src/document_io/settlement_windows.rs"),
+                "utf8",
+            ),
+            readFile(
+                resolve(tauriDir, "src/document_io/settlement_posix.rs"),
+                "utf8",
+            ),
+        ]);
+        const documentIoRs = [
+            documentIoCore,
+            documentIoSettlementWindows,
+            documentIoSettlementPosix,
+        ].join("\n");
         const workspaceIoRs = await readFile(resolve(tauriDir, "src/workspace_io.rs"), "utf8");
         const mainRs = await readFile(resolve(tauriDir, "src/main.rs"), "utf8");
         // The shell keeps the two official plugins for scoped auxiliary

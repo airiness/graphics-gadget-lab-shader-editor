@@ -15,15 +15,19 @@
 //!
 //! - Windows (the guarded settlement, see
 //!   [`DocumentFileService::settle_guarded_save`]): the save first acquires
-//!   a WRITE-ACCESS handle whose share mask omits FILE_SHARE_WRITE.
-//!   Windows' two-way sharing rules then make writer exclusion OS-enforced
-//!   for the guard's lifetime — no external writer can be present while the
-//!   guard is held, nor appear while it is held — so the save validates the
-//!   expected revision through the guard's own handle and commits the name
-//!   while the exclusion holds. A writer that holds the file settles as a
-//!   conflict without losing its bytes; a writer that arrives after the
-//!   commit is a legitimate last writer. The sharing facts are pinned by a
-//!   contract test in `tests`, not assumed.
+//!   a handle over the target for READ access, with a share mask that omits
+//!   FILE_SHARE_WRITE. The guard requests only READ (not WRITE): the writer
+//!   exclusion comes entirely from the write-unsharing mask, and requesting
+//!   WRITE would add no exclusion while sparsely conflicting an unrelated
+//!   read-only handle that does not share WRITE. Windows' two-way sharing
+//!   rules then make writer exclusion OS-enforced for the guard's lifetime —
+//!   no external writer can be present while the guard is held, nor appear
+//!   while it is held — so the save validates the expected revision through
+//!   the guard's own handle and commits the name while the exclusion holds.
+//!   A writer that holds the file settles as a conflict without losing its
+//!   bytes; a writer that arrives after the commit is a legitimate last
+//!   writer. The sharing facts are pinned by the contract tests in `tests`,
+//!   not assumed.
 //!
 //! - POSIX (the seize settlement, see
 //!   [`DocumentFileService::commit_bytes_onto_name`]): open has no share
@@ -44,6 +48,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+
+mod settlement_posix;
+mod settlement_windows;
 
 const MAX_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -389,56 +396,6 @@ impl DocumentFileService {
             .map(|snapshot| DocumentSaveOutcome::Saved { snapshot })
     }
 
-    /// Commit the durable temporary bytes onto the authorized target.
-    ///
-    /// Windows path (preferred, see [`Self::settle_guarded_save`]): a
-    /// write-ACCESS guard handle gives OS-enforced writer exclusion for the
-    /// whole validate → replace interval — the save cannot race a writer at
-    /// all, which is a strict compare-and-swap.
-    ///
-    /// Non-Windows path (this function): POSIX open has no share modes, so
-    /// exclusion cannot be acquired; the guarantee is built on NAME
-    /// semantics instead, which are hard on both platforms:
-    ///
-    /// 1. seize: atomically rename the target into our private aside slot;
-    /// 2. revalidate: the seized inode can still receive a write through a
-    ///    handle the external writer opened before the seize, so its bytes
-    ///    are re-read and re-hashed — a dirty seize is rolled back onto the
-    ///    vacant name;
-    /// 3. commit: hard-link the temporary bytes onto the name while it is
-    ///    still vacant; a hard link over an occupied name fails — that
-    ///    failure IS the detection of a foreign file;
-    /// 4. revalidate again right before cleanup.
-    ///
-    /// Every interleaving ends as conflict (the external bytes win the
-    /// name), a hard failure of the external writer's open, or a clean
-    /// save. The one residual in THIS design is a writer write that lands
-    /// between the step-4 verification and the cleanup — an interval of a
-    /// few instructions, confined to a writer whose handle predates the
-    /// save. The Windows guard path closes even that interval.
-    #[cfg(not(windows))]
-    fn commit_replacement(
-        &self,
-        document: &AuthorizedDocument,
-        temp_path: &Path,
-        expected: &str,
-    ) -> Result<CommitSettlement, DocumentIoError> {
-        let aside_path = self.save_aside_path(document)?;
-
-        // Seize the target's name. The seized file is the one the last
-        // checks saw: any writer handle into it now points at the same
-        // bytes under this private name.
-        if let Err(_error) = std::fs::rename(&document.canonical_path, &aside_path) {
-            // The file is gone (or otherwise unseizable): the expected
-            // revision can no longer be established under any commit.
-            return Ok(CommitSettlement::Conflict {
-                observed_file_revision_token: None,
-            });
-        }
-
-        self.commit_bytes_onto_name(document, temp_path, &aside_path, expected)
-    }
-
     /// Choose the private aside name for an in-flight save of this document.
     fn save_aside_path(&self, document: &AuthorizedDocument) -> Result<PathBuf, DocumentIoError> {
         let parent = document
@@ -459,284 +416,6 @@ impl DocumentFileService {
             ".{file_name}.gglab-save-aside-{}-{sequence}",
             std::process::id()
         )))
-    }
-
-    /// Windows save settlement with a hard writer-exclusion guard.
-    ///
-    /// The guard is the target itself, opened for WRITE access with a share
-    /// mask that omits FILE_SHARE_WRITE. The sharing rules are two-way and
-    /// OS-enforced (pinned by the contract test in `tests`):
-    /// - acquisition is denied while ANY writable handle exists (their
-    ///   unshared write access refuses the guard's write request);
-    /// - while the guard is held, every later writable open is denied
-    ///   (the guard's unshared write mask refuses their write request).
-    ///
-    /// So for the whole validate → replace interval NO process other than
-    /// us can write the file, and no new writer can appear: the
-    /// check-then-replace window closes completely, and the only external
-    /// outcomes left are "writer present → conflict" (their bytes keep the
-    /// name, untouched) or "writer after release → legitimate last writer".
-    #[cfg(windows)]
-    fn settle_guarded_save(
-        &self,
-        document: &AuthorizedDocument,
-        temp_path: &Path,
-        expected: &str,
-    ) -> Result<CommitSettlement, DocumentIoError> {
-        // 1. Acquire the writer exclusion. A live writer (or a file we
-        //    cannot open at all) owns the outcome: conflict, never commit.
-        let guard = match SaveWriteGuard::try_acquire(&document.canonical_path) {
-            Ok(guard) => guard,
-            Err(error) => {
-                let observed = match error.kind() {
-                    std::io::ErrorKind::NotFound => None,
-                    _ => read_bounded_bytes(&document.canonical_path)
-                        .ok()
-                        .map(|bytes| hash_bytes(&bytes)),
-                };
-                return Ok(CommitSettlement::Conflict {
-                    observed_file_revision_token: observed,
-                });
-            }
-        };
-
-        // 2. Verify the expected revision THROUGH THE GUARD HANDLE: this
-        //    reads the exact inode the save committed to, immune to any
-        //    re-naming of the name, and no writer can modify it now.
-        let bytes =
-            guard
-                .read_all()
-                .map_err(|error| io_error("read guarded document", error))?;
-        if hash_bytes(&bytes) != expected {
-            let observed = hash_bytes(&bytes);
-            return Ok(CommitSettlement::Conflict {
-                observed_file_revision_token: Some(observed),
-            });
-        }
-
-        // 3. Move the guarded inode onto the private aside name (allowed:
-        //    the guard shares DELETE, and the destination is vacant), then
-        //    commit the temporary bytes onto the still-vacant name.
-        let aside_path = self.save_aside_path(document)?;
-        match std::fs::rename(&document.canonical_path, &aside_path) {
-            Err(error) => {
-                // The name is gone or was re-created by a foreign file:
-                // either way the expected revision no longer holds the name.
-                if error.kind() == std::io::ErrorKind::AlreadyExists {
-                    let observed = read_bounded_bytes(&document.canonical_path)
-                        .ok()
-                        .map(|bytes| hash_bytes(&bytes));
-                    // The foreign file owns the name; its bytes are
-                    // reported, and nothing of ours touches them.
-                    return Ok(CommitSettlement::Conflict {
-                        observed_file_revision_token: observed,
-                    });
-                }
-                Err(io_error("seize guarded document", error))
-            }
-            Ok(()) => match std::fs::hard_link(temp_path, &document.canonical_path) {
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    // A foreign file re-created the name in the sliver:
-                    // its bytes stay on disk; the seized copy is named for
-                    // recovery.
-                    let observed = read_bounded_bytes(&document.canonical_path)
-                        .ok()
-                        .map(|b| hash_bytes(&b));
-                    self.preserve_seized_aside(document, &aside_path);
-                    Ok(CommitSettlement::Conflict {
-                        observed_file_revision_token: observed,
-                    })
-                }
-                Err(error) => {
-                    // Give the name back before reporting: the document
-                    // must never end up nameless.
-                    let _ = std::fs::rename(&aside_path, &document.canonical_path);
-                    Err(io_error("commit guarded document save", error))
-                }
-                Ok(()) => {
-                    // The commit instant, taken AT the link.
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |elapsed| elapsed.as_nanos() as u64);
-                    self.last_commit_unix_nanos
-                        .store(now, Ordering::Release);
-                    // Settled: keep only the target name. The guard's
-                    // inode is now the deleted aside; closing it (drop)
-                    // is the release — it can no longer interleave with
-                    // anything because it has no name and no writer.
-                    std::fs::remove_file(temp_path).map_err(|error| {
-                        io_error("remove temporary document name", error)
-                    })?;
-                    std::fs::remove_file(&aside_path).map_err(|error| {
-                        io_error("remove seized document", error)
-                    })?;
-                    Ok(CommitSettlement::Committed)
-                }
-            },
-        }
-    }
-
-    /// Preserve a seized copy whose commit was refused, under a visible
-    /// name the interrupted-save recovery recognizes.
-    #[cfg(windows)]
-    fn preserve_seized_aside(
-        &self,
-        document: &AuthorizedDocument,
-        aside_path: &Path,
-    ) {
-        let file_name = document
-            .canonical_path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("document");
-        let parent = document.canonical_path.parent();
-        if let Some(parent) = parent {
-            let keep = parent.join(format!(
-                "{file_name}.gglab-save-aside-keep-{}",
-                self.next_temp_sequence.fetch_add(1, Ordering::Relaxed)
-            ));
-            let _ = std::fs::rename(aside_path, &keep);
-        }
-    }
-
-    /// Settle a commit whose target name is already seized into `aside_path`.
-    ///
-    /// POSIX settlement and the settlement tests (the guarded Windows
-    /// settlement settles without a prior seize). Hard name facts, plus two
-    /// revalidations against the seized bytes:
-    /// - a hard link onto an OCCUPIED name fails on both platforms — that
-    ///   is the detection of a foreign file that re-created the name;
-    /// - a hard link onto the VACANT name is atomic and succeeds — the
-    ///   commit;
-    /// - the seized inode can still receive a late write through a handle
-    ///   opened before the seize, so its bytes are re-read and re-hashed
-    ///   BOTH before the commit (a dirty seize is rolled back onto a
-    ///   VACANT name — a move the OS always allows) and right before the
-    ///   cleanup (a late write in the sliver between the checks is rolled
-    ///   back onto the committed name).
-    ///
-    /// The only write a writer can still win is one that lands between the
-    /// second verification and the cleanup: strictly narrower than the
-    /// check → replace window this design replaces, and confined to a
-    /// writer whose write handle predates the seize.
-    #[cfg(any(not(windows), test))]
-    fn commit_bytes_onto_name(
-        &self,
-        document: &AuthorizedDocument,
-        temp_path: &Path,
-        aside_path: &Path,
-        expected: &str,
-    ) -> Result<CommitSettlement, DocumentIoError> {
-        // First revalidation, before the commit: a seize that moved (or
-        // cannot be verified) is rolled back so the external state wins.
-        // The rollback must only MOVE — and a move is safe (and allowed
-        // over an open source) only onto a name that no foreign file
-        // occupies, so the name's occupancy is part of the decision:
-        let side = read_bounded_bytes(aside_path);
-        let dirty = match &side {
-            Ok(bytes) => hash_bytes(bytes) != expected,
-            Err(_error) => true, // unreadable ⇒ unverifiable ⇒ external wins
-        };
-        if dirty {
-            let observed = match side {
-                Ok(bytes) => Some(hash_bytes(&bytes)),
-                Err(_error) => None,
-            };
-            let vacant = std::fs::metadata(&document.canonical_path)
-                .err()
-                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound);
-            if vacant {
-                atomic_move_replace_retry(aside_path, &document.canonical_path)?;
-            } else {
-                // A foreign file recreated the name while it was vacant.
-                // It holds the name — possibly the only live handle to its
-                // bytes — so it is never clobbered. The seized copy is
-                // preserved under a visible name (or, if that rename is
-                // refused, left for interrupted-save recovery to name).
-                let file_name = document
-                    .canonical_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("document");
-                let keep = document.canonical_path.parent().map(|parent| {
-                    parent.join(format!(
-                        "{file_name}.gglab-save-aside-keep-{}",
-                        self.next_temp_sequence.fetch_add(1, Ordering::Relaxed)
-                    ))
-                });
-                if let Some(keep) = keep {
-                    let _ = std::fs::rename(aside_path, &keep);
-                }
-                // The conflict must name the state that HOLDS the name (the
-                // one a reload or deliberate overwrite would act on).
-                let name_observed = read_bounded_bytes(&document.canonical_path)
-                    .ok()
-                    .map(|bytes| hash_bytes(&bytes));
-                return Ok(CommitSettlement::Conflict {
-                    observed_file_revision_token: name_observed,
-                });
-            }
-            return Ok(CommitSettlement::Conflict {
-                observed_file_revision_token: observed,
-            });
-        }
-
-        // Commit our bytes onto the name only if it is still vacant.
-        let commit = std::fs::hard_link(temp_path, &document.canonical_path);
-        if let Err(error) = commit {
-            if error.kind() == std::io::ErrorKind::AlreadyExists {
-                // A foreign file recreated the name while it was vacant.
-                // Its bytes stay on disk; report their revision.
-                let observed = read_bounded_bytes(&document.canonical_path)
-                    .ok()
-                    .map(|bytes| hash_bytes(&bytes));
-                return Ok(CommitSettlement::Conflict {
-                    observed_file_revision_token: observed,
-                });
-            }
-            // Some other commit failure: give the name back before
-            // reporting — the document must never end up nameless.
-            let _ = std::fs::rename(aside_path, &document.canonical_path);
-            return Err(io_error("commit document save", error));
-        }
-
-        // The commit instant, taken AT the link: writes into the committed
-        // file are legitimate post-commit writes; the race regressions
-        // order their observations against it.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_nanos() as u64);
-        self.last_commit_unix_nanos
-            .store(now, Ordering::Release);
-
-        // Second revalidation, right before cleanup: a writer whose handle
-        // predates the seize can still land bytes into the seized inode in
-        // the sliver after the first check; catching it rolls the commit
-        // back onto the committed name (the external state wins again).
-        {
-            let side = read_bounded_bytes(aside_path);
-            if let Ok(bytes) = side {
-                if hash_bytes(&bytes) != expected {
-                    atomic_move_replace_retry(aside_path, &document.canonical_path)?;
-                    return Ok(CommitSettlement::Conflict {
-                        observed_file_revision_token: Some(hash_bytes(&bytes)),
-                    });
-                }
-            } else {
-                atomic_move_replace_retry(aside_path, &document.canonical_path)?;
-                return Ok(CommitSettlement::Conflict {
-                    observed_file_revision_token: None,
-                });
-            }
-        }
-
-        // Settled: the committed bytes now live under both the target name
-        // and the temporary name — keep only the target.
-        std::fs::remove_file(temp_path)
-            .map_err(|error| io_error("remove temporary document name", error))?;
-        std::fs::remove_file(aside_path)
-            .map_err(|error| io_error("remove seized document", error))?;
-        Ok(CommitSettlement::Committed)
     }
 
     /// Restore a save whose host died between seizing the target name and
@@ -986,67 +665,6 @@ fn conflict(
     }
 }
 
-/// Move `source` onto `target`, replacing whatever occupies the name.
-///
-/// This is a NAME operation (rename), not a data swap: it must succeed even
-/// while another process holds handles to either file — rollback restores
-/// rely on that, and a data-swap call (such as `ReplaceFileW`) refuses to
-/// run while such handles exist. Used by the POSIX settlement and the
-/// settlement tests; the guarded Windows settlement moves onto vacant names
-/// instead and does not need it in production.
-#[cfg(all(windows, test))]
-fn atomic_move_replace(source: &Path, target: &Path) -> Result<(), DocumentIoError> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
-    };
-
-    let source_wide: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
-    let target_wide: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
-    let ok = unsafe {
-        MoveFileExW(
-            source_wide.as_ptr(),
-            target_wide.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if ok == 0 {
-        return Err(io_error(
-            "restore seized document",
-            std::io::Error::last_os_error(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn atomic_move_replace(source: &Path, target: &Path) -> Result<(), DocumentIoError> {
-    std::fs::rename(source, target)
-        .map_err(|error| io_error("restore seized document", error))
-}
-
-/// Rollback move with a bounded retry.
-///
-/// A rollback onto an OCCUPIED name (the post-commit arms) can still be
-/// refused by the OS when a live writer holds that name open for write —
-/// there is no replacement primitive that moves over an open destination.
-/// Such handles are transient: the writer drops them between cycles — so
-/// retry briefly before escalating to an explicit failure (which leaves both
-/// states on disk; nothing is lost).
-#[cfg(any(not(windows), test))]
-fn atomic_move_replace_retry(source: &Path, target: &Path) -> Result<(), DocumentIoError> {
-    const ATTEMPTS: u32 = 50;
-    let mut last_error = None;
-    for _ in 0..ATTEMPTS {
-        match atomic_move_replace(source, target) {
-            Ok(()) => return Ok(()),
-            Err(error) => last_error = Some(error),
-        }
-        std::thread::sleep(std::time::Duration::from_millis(2));
-    }
-    Err(last_error.expect("at least one attempt ran"))
-}
-
 fn io_error_detail(error: std::io::Error, hint: &str) -> std::io::Error {
     std::io::Error::new(error.kind(), format!("{hint}: {error}"))
 }
@@ -1113,69 +731,6 @@ fn read_bounded_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
         ));
     }
     Ok(bytes)
-}
-
-/// A Windows writer-exclusion guard over an existing file.
-///
-/// Acquire it by opening the file for WRITE access with a share mask that
-/// OMITS FILE_SHARE_WRITE. Windows' two-way, OS-enforced sharing rules then
-/// give both directions of exclusion for the guard's whole lifetime:
-/// - it is REFUSED while any writable handle exists that does not grant
-///   write sharing (their unshared write access blocks the guard's);
-/// - while HELD, it refuses every later writable open (the guard's unshared
-///   write mask blocks theirs).
-///
-/// That pins the contract: a guard can be held and a writer present at the
-/// same time never happens. The save validates the expected revision
-/// through this guard's own read (the exact committed inode, immune to
-/// re-naming) and performs the name commitment while this exclusion holds,
-/// so no external write can interleave between check and replace. Dropping
-/// the guard releases the only write the file saw.
-///
-/// The sharing facts this restates are pinned by the `write_guard_contract`
-/// test; this is not assumed, it is measured.
-#[cfg(windows)]
-struct SaveWriteGuard {
-    file: File,
-}
-
-#[cfg(windows)]
-impl SaveWriteGuard {
-    fn try_acquire(path: &Path) -> std::io::Result<Self> {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::{
-            FILE_SHARE_DELETE, FILE_SHARE_READ,
-        };
-        // Read AND write access (the save reads through the guard), with a
-        // share mask that omits FILE_SHARE_WRITE: the exclusion is created
-        // by the share mask, not by the access mode.
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
-            .open(path)
-            .map(|file| Self { file })
-    }
-
-    /// Read the whole file THROUGH THE GUARD HANDLE: this is the exact
-    /// inode the save validates and commits to, immune to any re-naming of
-    /// the name, and no writer can modify it (that is the point).
-    fn read_all(&self) -> std::io::Result<Vec<u8>> {
-        let mut bytes = Vec::new();
-        self.file
-            .try_clone()
-            .map_err(|error| io_error_detail(error, "read guarded document"))?
-            .take(MAX_DOCUMENT_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|error| io_error_detail(error, "read guarded document"))?;
-        if bytes.len() as u64 > MAX_DOCUMENT_BYTES {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("the document exceeds the {MAX_DOCUMENT_BYTES}-byte limit"),
-            ));
-        }
-        Ok(bytes)
-    }
 }
 
 struct TemporaryPath {
@@ -1319,6 +874,112 @@ mod tests {
             "6: a sharing writer must still block the guard (two-way sharing check)"
         );
         drop(sharing_writer);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // P2 follow-up (review 2): does the guard REQUIRE WRITE desired access,
+    // or is a READ-only guard with the same no-FILE_SHARE_WRITE mask
+    // equivalent? This probe answers it by showing a READ-only guard keeps
+    // the identical writer-exclusion contract, and then pinning the exact
+    // spurious-conflict the WRITE-desiring guard has with an unrelated
+    // restrictive (write-unsharing) reader that the READ-only form avoids.
+    #[cfg(windows)]
+    #[test]
+    fn the_read_only_guard_provides_the_same_writer_exclusion() {
+        use std::os::windows::ffi::OsStrExt;
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_REPLACE_EXISTING};
+        let dir = test_directory("read-only-guard-contract");
+        let doc = dir.join("d.txt");
+        std::fs::write(&doc, b"doc-bytes").unwrap();
+
+        let read_guard = || {
+            // READ access ONLY (no FILE_WRITE); same share mask that
+            // OMITS FILE_SHARE_WRITE — the exclusion under test
+            OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
+                .open(&doc)
+        };
+        let write_guard = || {
+            // the current production shape (READ+WRITE) for contrast
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
+                .open(&doc)
+        };
+
+        // 1. a pre-existing writer must DENY the READ-only guard's acquisition
+        let writer = OpenOptions::new().write(true).open(&doc).unwrap();
+        assert!(
+            read_guard().is_err(),
+            "1: a READ-only guard must be denied while a writer holds the file"
+        );
+        drop(writer);
+        assert!(
+            read_guard().is_ok(),
+            "1b: with no writer, the READ-only guard must acquire"
+        );
+
+        // 2. the held READ-only guard must DENY a later writable open
+        let guard = read_guard().unwrap();
+        assert!(
+            OpenOptions::new().write(true).open(&doc).is_err(),
+            "2: while a READ-only guard is held, a new writer must be refused"
+        );
+        // 2b. readers keep working
+        assert!(
+            OpenOptions::new().read(true).open(&doc).is_ok(),
+            "2b: readers keep working"
+        );
+        // 3. the guard's own inode stays movable onto a vacant name (commit)
+        let aside = dir.join("aside.txt");
+        let s: Vec<u16> = doc.as_os_str().encode_wide().chain(Some(0)).collect();
+        let a: Vec<u16> = aside.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mv = unsafe { MoveFileExW(s.as_ptr(), a.as_ptr(), 0) };
+        assert_eq!(mv, 1, "3: the READ-only guard's file must be movable onto a vacant name");
+        // 3b. ...and movable back (rollback)
+        let mv2 = unsafe { MoveFileExW(a.as_ptr(), s.as_ptr(), MOVEFILE_REPLACE_EXISTING) };
+        assert_eq!(mv2, 1, "3b: the rollback move must work");
+        // 4. a REPLACE over the guard-held destination is refused
+        let s2: Vec<u16> = aside.as_os_str().encode_wide().chain(Some(0)).collect();
+        let r = unsafe { MoveFileExW(s2.as_ptr(), s.as_ptr(), MOVEFILE_REPLACE_EXISTING) };
+        assert_eq!(r, 0, "4: a REPLACE over the guard-held destination must be refused");
+        drop(guard);
+        // 5. the two-way sharing check: even a writer that grants WRITE share
+        //    still blocks the no-FILE_SHARE_WRITE guard — for READ-only too
+        let sharing_writer = OpenOptions::new()
+            .write(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(&doc)
+            .unwrap();
+        assert!(
+            read_guard().is_err(),
+            "5: a sharing writer must still block the READ-only guard (two-way sharing check)"
+        );
+        drop(sharing_writer);
+
+        // 6. the decisive contrast: an unrelated restrictive reader (one that
+        //    shares READ but NOT WRITE) sparsely conflicts the WRITE-desiring
+        //    guard but the READ-only guard coexists with it
+        let restrictive_reader = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
+            .open(&doc)
+            .unwrap();
+        assert!(
+            write_guard().is_err(),
+            "6a: the WRITE-desiring guard is sparsely blocked by a restrictive reader"
+        );
+        assert!(
+            read_guard().is_ok(),
+            "6b: the READ-only guard coexists with the same restrictive reader"
+        );
+        drop(restrictive_reader);
         let _ = std::fs::remove_dir_all(dir);
     }
 
