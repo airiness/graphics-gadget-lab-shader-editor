@@ -554,6 +554,13 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         // name operation (move/replace of the name), never an in-place data
         // swap over the open target.
         expect(documentIoRs).toContain("atomic_move_replace");
+        // The guarded settlement creates the writer exclusion with a share
+        // mask that grants read and delete but omits write sharing — that
+        // omission is what the OS enforces in both directions (pinned by
+        // the guard contract test on the host).
+        expect(documentIoRs).toContain(
+            "share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)",
+        );
         expect(documentIoRs).toContain("Unauthorized");
         expect(workspaceIoRs).toContain("registered_workspaces");
         expect(workspaceIoRs).toContain("is_contained");
