@@ -24,10 +24,13 @@ import type {
 
 /** The DocumentSession the Runtime Preview composes from.
  *
- * The explicit Preview target is authoritative. Before the user has ever
- * chosen one explicitly, the active document is the bootstrap default so a
- * single seeded document previews out of the box; once a target is chosen it
- * is pinned until the next explicit retarget or a target close. */
+ * The explicit Preview target is authoritative at ALL times. The reducer
+ * guarantees the invariant: the first document a Workspace opens IS its
+ * Preview target (seeded at open time, not followed live), a target close
+ * re-seeds the surviving active document, and only "Preview This Graph"
+ * commits a different one. The active-document fallback below is therefore
+ * defensive only — reachable when no document is open — and never a live
+ * re-coupling of the Preview to tab switching. */
 export function resolvePreviewTarget<TDocument extends WorkspaceDocumentHandle>(
     workspace: WorkspaceSession<TDocument>,
 ): TDocument | undefined {
@@ -38,10 +41,9 @@ export function resolvePreviewTarget<TDocument extends WorkspaceDocumentHandle>(
     return workspace.documents.find((candidate) => candidate.sessionId === targetId);
 }
 
-/** Whether an explicit Preview target is present (as opposed to the active
- * document being used only as a bootstrap default). The UI surfaces the
- * explicit target with the ▶ marker; a bootstrap default is not surfaced as
- * a deliberate ownership claim. */
+/** Whether an explicit Preview target is present. With the open/close seed
+ * invariant this is true whenever any document is open; the UI surfaces the
+ * target with the ▶ marker so a user can see WHICH tab the Runtime previews. */
 export function hasExplicitPreviewTarget(
     workspace: WorkspaceSession<WorkspaceDocumentHandle>,
 ): boolean {

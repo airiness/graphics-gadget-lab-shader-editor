@@ -261,6 +261,29 @@ describe("complete document record ownership", () => {
 });
 
 describe("active document and Preview target ownership", () => {
+    it("seeds the Preview target at the FIRST OPEN — an explicit target exists from the start, never a live active-follow", () => {
+        const first = document("session-a", "file:///D:/Shaders/A.shadergraph");
+        const second = document("session-b", "file:///D:/Shaders/B.shadergraph");
+
+        const firstOpen = openWorkspaceDocument(createWorkspaceSession(), first);
+        if (firstOpen.accepted === false) {
+            throw new Error(`fixture first open refused: ${firstOpen.refusal.reason}`);
+        }
+        // The first opened document IS the Preview target — the "bootstrap"
+        // is a one-time ownership decision at open time, not a derivation
+        // from the active tab.
+        expect(firstOpen.workspace.preview.targetDocumentId).toBe(first.sessionId);
+
+        const secondOpen = openWorkspaceDocument(firstOpen.workspace, second);
+        if (secondOpen.accepted === false) {
+            throw new Error(`fixture second open refused: ${secondOpen.refusal.reason}`);
+        }
+        // A later open activates the new tab but must NOT move the target:
+        // active and Preview target are independent axes.
+        expect(secondOpen.workspace.activeDocumentId).toBe(second.sessionId);
+        expect(secondOpen.workspace.preview.targetDocumentId).toBe(first.sessionId);
+    });
+
     it("switching the active document never retargets Preview", () => {
         const first = document("session-a", "file:///D:/Shaders/A.shadergraph");
         const second = document("session-b", "file:///D:/Shaders/B.shadergraph");
@@ -366,7 +389,7 @@ describe("Save As identity and close transitions", () => {
         });
     });
 
-    it("closing the Preview target clears Preview ownership and chooses the adjacent active tab", () => {
+    it("closing the Preview target re-seeds Preview ownership onto the adjacent active tab", () => {
         const first = document("session-a", null);
         const second = document("session-b", null);
         const third = document("session-c", null);
@@ -386,10 +409,12 @@ describe("Save As identity and close transitions", () => {
         expect(result.accepted).toBe(true);
         expect(result.workspace.documents).toEqual([first, third]);
         expect(result.workspace.activeDocumentId).toBe(third.sessionId);
-        expect(result.workspace.preview.targetDocumentId).toBeNull();
+        // The target never becomes a live follow: ownership is re-seeded, as a
+        // one-time close-time decision, onto the surviving active document.
+        expect(result.workspace.preview.targetDocumentId).toBe(third.sessionId);
     });
 
-    it("closing a background Preview target clears only the target and preserves the active tab", () => {
+    it("closing a background Preview target re-seeds the target onto the preserved active tab", () => {
         const first = document("session-a", null);
         const second = document("session-b", null);
         let workspace = opened(first, second);
@@ -404,6 +429,18 @@ describe("Save As identity and close transitions", () => {
         expect(result.accepted).toBe(true);
         expect(result.workspace.documents).toEqual([second]);
         expect(result.workspace.activeDocumentId).toBe(second.sessionId);
+        expect(result.workspace.preview.targetDocumentId).toBe(second.sessionId);
+    });
+
+    it("closing the last document leaves no Preview target (there is nothing to own)", () => {
+        const only = document("session-a", null);
+        const workspace = opened(only);
+        expect(workspace.preview.targetDocumentId).toBe(only.sessionId); // seeded at open
+
+        const result = closeWorkspaceDocument(workspace, only.sessionId);
+        expect(result.accepted).toBe(true);
+        expect(result.workspace.documents).toEqual([]);
+        expect(result.workspace.activeDocumentId).toBeNull();
         expect(result.workspace.preview.targetDocumentId).toBeNull();
     });
 

@@ -16,6 +16,10 @@ export type FakePreviewRuntimeLaunch = Exclude<
 export interface FakePreviewRuntimeSpec {
     readonly launches: readonly FakePreviewRuntimeLaunch[];
     readonly keepLaunchPending?: boolean | undefined;
+    /** When set, `stopAttachedPreview` acknowledges the stop request but
+     *  holds the process's exit settlement open until `releaseStop()` — a
+     *  deterministic "stopping" window for ownership-transition tests. */
+    readonly holdStopUntilRelease?: boolean | undefined;
 }
 
 export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
@@ -27,6 +31,7 @@ export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
         readonly resolve: (result: PreviewRuntimeLaunchResult) => void;
     } | null = null;
     private exits = new Map<number, (exit: PreviewRuntimeExit) => void>();
+    private heldStop: { readonly runtimeId: PreviewRuntimeId; readonly settle: (exit: PreviewRuntimeExit) => void } | null = null;
 
     constructor(private readonly spec: FakePreviewRuntimeSpec) {}
 
@@ -60,6 +65,10 @@ export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
             return { runtimeId, stopRequested: false, alreadySettled: true };
         }
         this.exits.delete(runtimeId.sequence);
+        if (this.spec.holdStopUntilRelease === true) {
+            this.heldStop = { runtimeId, settle };
+            return { runtimeId, stopRequested: true, alreadySettled: false };
+        }
         settle({ runtimeId, kind: "stopped", exitCode: null });
         return { runtimeId, stopRequested: true, alreadySettled: false };
     }
@@ -71,6 +80,18 @@ export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
         }
         this.pendingLaunch = null;
         pending.resolve(pending.result);
+        return true;
+    }
+
+    /** Release a stop held by `holdStopUntilRelease`: the process "exits"
+     *  now, settling the `exited` promise of that exact Runtime. */
+    releaseStop(): boolean {
+        const held = this.heldStop;
+        if (held === null) {
+            return false;
+        }
+        this.heldStop = null;
+        held.settle({ runtimeId: held.runtimeId, kind: "stopped", exitCode: null });
         return true;
     }
 

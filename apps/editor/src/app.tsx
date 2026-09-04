@@ -519,7 +519,18 @@ export function App() {
      * a document that no longer exists. */
     async function closeOneTab(documentSessionId: DocumentSessionId): Promise<void> {
         if (workspace.preview.targetDocumentId === documentSessionId) {
-            await stopPreviewRuntimeIfAttached();
+            try {
+                // Strict teardown: the Runtime must have fully exited before the
+                // close transition. If it cannot be torn down, abort the close
+                // — otherwise a still-running Runtime would out-point the target.
+                await stopPreviewRuntimeIfAttached();
+            } catch (error) {
+                setOperationNotes((previous) => [
+                    ...previous,
+                    `Cannot close this tab yet: the attached Preview Runtime teardown failed (${error instanceof Error ? error.message : String(error)}). Stop the Preview first, then close.`,
+                ]);
+                return;
+            }
         }
         setWorkspace((current) => {
             const closed = closeWorkspaceDocument(current, documentSessionId);
@@ -548,7 +559,19 @@ export function App() {
     const onPreviewThisGraph = async (): Promise<void> => {
         const target = session;
         const name = tabNameFor(target);
-        await stopPreviewRuntimeIfAttached();
+        try {
+            // Strict teardown first: the attached Runtime (bound to a prior
+            // target) must be fully EXITED before retarget commits. If the
+            // host could not tear it down, abort the transition — a prior
+            // Runtime must never still be up while the target moves.
+            await stopPreviewRuntimeIfAttached();
+        } catch (error) {
+            setOperationNotes((previous) => [
+                ...previous,
+                `Cannot retarget the Preview yet: the attached Runtime teardown failed (${error instanceof Error ? error.message : String(error)}). Try "Stop Preview" first.`,
+            ]);
+            return;
+        }
         if (descriptor !== null) {
             updateDocumentSession(target.sessionId, (previous) => ({
                 ...previous,
@@ -580,12 +603,23 @@ export function App() {
         setExplorerError(null);
         setExplorerStatus(null);
         try {
-            // A root switch supersedes any in-flight discovery: cancel it so
-            // its stale settlement is dropped (the guard also enforces this).
-            await onStopDiscovery();
             const root = await channel.chooseWorkspaceRoot();
             if (root === null) {
                 return; // user cancelled the directory dialog
+            }
+            // The new root supersedes any in-flight discovery. Invalidate the
+            // binding FIRST, so a late settlement from the OLD root is dropped
+            // by the still-current guard even if it settles before the cancel
+            // is acknowledged; then cancel it best-effort.
+            const superseded = discoveryRef.current;
+            discoveryRef.current = null;
+            if (superseded !== null) {
+                try {
+                    await channel.cancelWorkspaceDiscovery(superseded.discoveryId);
+                } catch {
+                    // Best-effort: the settlement guard already drops the
+                    // result, so a failed cancel never leaks stale entries.
+                }
             }
             setWorkspace((current) => setWorkspaceRoot(current, root));
             setExplorerEntries(null);
@@ -1631,15 +1665,18 @@ export function App() {
     });
 
     /** Tear down the attached Preview Runtime (if one is live) and await its
-     * settlement. This is the ownership transition that must complete BEFORE a
-     * retarget commit or a Preview-target close — the old Runtime belongs to a
-     * prior target/candidate and must not out-point the document it previewed.
-     * A no-op when no flow exists or the Runtime already settled. */
+     * FULL exit settlement. This is the ownership transition that must complete
+     * BEFORE a retarget commit or a Preview-target close — a mere "stop
+     * requested" outcome is not enough: the old Runtime belongs to a prior
+     * target/candidate and must be verifiably gone before the next ownership
+     * begins. A no-op when no flow exists or the Runtime already settled.
+     * Rejects if the host could not tear the Runtime down, so the caller
+     * refuses the transition instead of splitting ownership. */
     const stopPreviewRuntimeIfAttached = async (): Promise<void> => {
         if (preview.flow === null) {
             return;
         }
-        await preview.stopPreview();
+        await preview.stopPreviewAndWait();
     };
 
     // The flow object is stable while handshake facts change inside it. Read

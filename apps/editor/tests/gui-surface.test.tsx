@@ -2343,8 +2343,16 @@ describe("primary sidebar (activity bar + workspace explorer)", () => {
         expect(app).toMatch(/watching\.discoveryId === settlement\.discoveryId/);
         expect(app).toMatch(/watching\.uri === expectedUri/);
         expect(app).toMatch(/settlementUri === expectedUri/);
-        // Choosing a new root supersedes (cancels) the in-flight discovery.
-        expect(app).toMatch(/onChooseWorkspaceRoot[\s\S]*?await onStopDiscovery\(\)/);
+    });
+
+    it("invalidates the old discovery binding BEFORE cancelling it when the root is switched", () => {
+        const app = read("../src/app.tsx");
+        // Root chosen → the old binding dies immediately (a late settlement is
+        // dropped by the guard) → only THEN is the cancel requested.
+        expect(app).toMatch(
+            /onChooseWorkspaceRoot[\s\S]*?const superseded = discoveryRef\.current;[\s\S]*?discoveryRef\.current = null;/,
+        );
+        expect(app).toMatch(/cancelWorkspaceDiscovery\(superseded\.discoveryId\)/);
     });
 
     it("opens a discovered entry as a co-existing tab via the host exact snapshot (or activates the existing tab) — never an arbitrary path", () => {
@@ -2402,6 +2410,41 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         expect(coordinator).toMatch(/export function resolvePreviewTarget/);
         expect(coordinator).toMatch(/export function hasExplicitPreviewTarget/);
         expect(coordinator).toMatch(/workspace\.preview\.targetDocumentId \?\? workspace\.activeDocumentId/);
+    });
+
+    it("the ownership transition is a strict teardown: the Runtime must have EXITED before the target moves", () => {
+        const app = read("../src/app.tsx");
+        expect(app).toMatch(/await preview\.stopPreviewAndWait\(\)/);
+        // Retarget and target-close both gate the commit on the teardown succeeding.
+        expect(app).toMatch(/onPreviewThisGraph[\s\S]*?stopPreviewRuntimeIfAttached\(\)[\s\S]*?commitWorkspacePreviewTarget/);
+        expect(app).toMatch(/closeOneTab[\s\S]*?stopPreviewRuntimeIfAttached\(\)[\s\S]*?closeWorkspaceDocument/);
+    });
+
+    it("the flow waits for the exit settlement of the exact Runtime before the teardown counts complete", () => {
+        const flow = read("../src/preview-build-flow.ts");
+        expect(flow).toMatch(/async stopAttachedPreviewAndWait\(\)/);
+        // The exit handle is captured BEFORE the stop request (the exit
+        // handler may clear the field while the request is in flight).
+        expect(flow).toMatch(
+            /const settlement = this\.runtimeExitSettlement;[\s\S]*?if \(state\.kind === "running"\) \{\s*await this\.stopAttachedPreview\(\);[\s\S]*?return await settlement\.exited;/,
+        );
+        // A launch during "stopping" queues behind the old exit, never
+        // "already-running" (no stranded Preview).
+        expect(flow).toMatch(
+            /kind === "stopping"[\s\S]*?return settlement\.exited\.then\(\(\) => this\.launchAttachedPreview\(\)\);/,
+        );
+        // The Runtime's exit settlement is retained while it is current.
+        expect(flow).toMatch(/this\.runtimeExitSettlement = \{ runtimeId: result\.runtimeId, exited: result\.exited \}/);
+    });
+
+    it("a Workspace seeds its Preview target at the first open and re-seeds it on a target close (never a live follow)", () => {
+        const ws = read("../src/workspace-session.ts");
+        expect(ws).toMatch(
+            /workspace\.preview\.targetDocumentId === null\s*\? \{ targetDocumentId: document\.sessionId \}/,
+        );
+        expect(ws).toMatch(
+            /workspace\.preview\.targetDocumentId === documentSessionId\s*\? \(documents\.length > 0 \? activeDocumentId : null\)/,
+        );
     });
 });
 

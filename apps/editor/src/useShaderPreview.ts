@@ -54,6 +54,11 @@ export interface ShaderPreviewSurface {
     readonly buildPreview: () => Promise<void>;
     readonly launchPreview: () => Promise<void>;
     readonly stopPreview: () => Promise<void>;
+    /** Strict teardown: resolves only once the attached Runtime has actually
+     * exited (stop requested AND its exit settlement settled). Retargeting
+     * the Preview target or closing it must go through this, never through
+     * `stopPreview` alone. */
+    readonly stopPreviewAndWait: () => Promise<void>;
     readonly notes: readonly { readonly level: "ok" | "info" | "refusal"; readonly text: string }[];
 }
 
@@ -218,6 +223,18 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
         bump((value) => value + 1);
     }, [flow, note]);
 
+    // No try/catch here on purpose: an ownership transition (retarget /
+    // close the target) needs to KNOW when the teardown did not complete,
+    // so the caller refuses the commit instead of splitting ownership.
+    const stopPreviewAndWait = useCallback(async (): Promise<void> => {
+        const current = flowRef.current;
+        if (current === null) {
+            return;
+        }
+        await current.stopAttachedPreviewAndWait();
+        bump((value) => value + 1);
+    }, [bump]);
+
     const runtimeKind = flow?.runtimeState.kind ?? "idle";
     useEffect(() => {
         if (flow === null || runtimeKind !== "running") {
@@ -261,6 +278,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
         buildPreview,
         launchPreview,
         stopPreview,
+        stopPreviewAndWait,
         notes,
     };
 }

@@ -232,8 +232,9 @@ function runtimes(
         { kind: "launched" },
     ],
     keepLaunchPending = false,
+    holdStopUntilRelease = false,
 ): FakePreviewRuntimeBoundary {
-    return new FakePreviewRuntimeBoundary({ launches, keepLaunchPending });
+    return new FakePreviewRuntimeBoundary({ launches, keepLaunchPending, holdStopUntilRelease });
 }
 
 async function prove(flow: PreviewBuildFlow, input = composition()): Promise<void> {
@@ -713,6 +714,78 @@ describe("Attached Preview Runtime lifecycle", () => {
             runtimeIdentity: launched.runtimeIdentity,
             exit: { runtimeId: launched.runtimeId, kind: "stopped", exitCode: null },
         });
+    });
+
+    it("ownership transitions complete only when the Runtime has exited, and the next launch attaches after that exit", async () => {
+        const runtime = runtimes(
+            [
+                { kind: "launched", runtimeIdentity: "runtime-old" },
+                { kind: "launched", runtimeIdentity: "runtime-new" },
+            ],
+            false,
+            true, // stop request acknowledged; the process stays "stopping" until released
+        );
+        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), runtime);
+        await publish(flow);
+
+        const old = await flow.launchAttachedPreview();
+        if (old.launched === false) {
+            throw new Error("test Preview Runtime must launch for the prior target");
+        }
+
+        // A stop is requested, but the old process has NOT actually exited yet.
+        const stop = flow.stopAttachedPreview();
+        expect(flow.runtimeState).toMatchObject({ kind: "stopping", runtimeId: old.runtimeId });
+
+        // While the old Runtime is still up, a launch for the next target must
+        // QUEUE (waiting for the old exit) — never be refused as
+        // "already-running" and strand the Preview with no Runtime.
+        const next = flow.launchAttachedPreview();
+
+        // And the ownership transition (stop-and-wait) is NOT complete yet.
+        const teardown = flow.stopAttachedPreviewAndWait();
+        let teardownSettled = false;
+        void teardown.then(() => {
+            teardownSettled = true;
+        });
+        expect(teardownSettled).toBe(false);
+
+        // The old process exits now — and only THEN does everything finish.
+        // (The queued launch for the next target may start immediately once
+        // the old Runtime is gone, so the "exited" state is superseded by the
+        // new ownership rather than observed as a resting state.)
+        expect(runtime.releaseStop()).toBe(true);
+        await expect(stop).resolves.toMatchObject({ stopRequested: true, alreadySettled: false });
+        await expect(teardown).resolves.toEqual({
+            runtimeId: old.runtimeId,
+            kind: "stopped",
+            exitCode: null,
+        });
+        expect(teardownSettled).toBe(true);
+
+        const nextResult = await next;
+        expect(nextResult).toMatchObject({
+            launched: true,
+            runtimeId: { sequence: 2 },
+            runtimeIdentity: "runtime-new",
+        });
+        expect(runtime.launchCalls).toBe(2);
+        if (nextResult.launched) {
+            // The next Runtime's own teardown obeys the same wait-and rule.
+            const finalTeardown = flow.stopAttachedPreviewAndWait();
+            expect(runtime.releaseStop()).toBe(true);
+            expect(await finalTeardown).toMatchObject({ runtimeId: { sequence: 2 } });
+        }
+        expect(flow.runtimeState).toMatchObject({ kind: "exited" });
+    });
+
+    it("treats a stop-and-wait as complete when no attached Runtime is up", async () => {
+        const runtime = runtimes();
+        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), runtime);
+        await publish(flow);
+        await expect(flow.stopAttachedPreviewAndWait()).resolves.toBeNull();
+        expect(flow.runtimeState).toEqual({ kind: "idle" });
+        expect(runtime.launchCalls).toBe(0);
     });
 
     it("routes launch-time candidate invalidation to the ordinary tool owner", async () => {

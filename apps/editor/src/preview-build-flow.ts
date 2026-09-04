@@ -311,6 +311,15 @@ export class PreviewBuildFlow {
     private runtimeStateValue: AttachedPreviewRuntimeState = { kind: "idle" };
     private runtimeLaunchLane: Promise<AttachedPreviewLaunch> | null = null;
     private runtimeCandidateValue: ToolCandidate | null = null;
+    /** The exit settlement of the current (or last launched) attached
+     *  Runtime. Awaiting exactly this promise is the proof that a specific
+     *  Runtime process has actually left; the stop request's outcome is not.
+     *  Held until that Runtime settles, so a retarget or close can wait for
+     *  the old ownership to be completely gone before the next one begins. */
+    private runtimeExitSettlement: {
+        readonly runtimeId: PreviewRuntimeId;
+        readonly exited: Promise<PreviewRuntimeExit>;
+    } | null = null;
 
     constructor(
         private readonly boundary: HostToolBoundary,
@@ -815,12 +824,29 @@ export class PreviewBuildFlow {
         if (this.runtimeLaunchLane !== null) {
             return this.runtimeLaunchLane;
         }
-        if (this.runtimeStateValue.kind === "running" || this.runtimeStateValue.kind === "stopping") {
+        if (this.runtimeStateValue.kind === "running") {
             return Promise.resolve({
                 launched: false,
                 reason: "already-running",
                 runtimeId: this.runtimeStateValue.runtimeId,
             });
+        }
+        if (this.runtimeStateValue.kind === "stopping") {
+            // The old Runtime is still tearing down. Do NOT refuse as
+            // "already-running": that would strand the Preview with no
+            // Runtime once the old one exits (nothing would relaunch it).
+            // Wait for the old process's exit settlement, then launch the
+            // next one — sequential ownership, one attached Runtime at a time.
+            const settlement = this.runtimeExitSettlement;
+            if (settlement === null) {
+                // Defensive: no exit settlement means exit cannot be proven.
+                return Promise.resolve({
+                    launched: false,
+                    reason: "already-running",
+                    runtimeId: this.runtimeStateValue.runtimeId,
+                });
+            }
+            return settlement.exited.then(() => this.launchAttachedPreview());
         }
         const candidate = this.currentDeploymentCandidate();
         const published = candidate === null ? undefined : [...lineForDeployment(this.sessionState.line, candidate).attempts]
@@ -852,6 +878,7 @@ export class PreviewBuildFlow {
             );
         } catch (error) {
             this.runtimeCandidateValue = null;
+            this.runtimeExitSettlement = null;
             this.runtimeStateValue = { kind: "idle" };
             throw error;
         }
@@ -860,6 +887,7 @@ export class PreviewBuildFlow {
                 this.toolPort.candidateInvalidated(result);
             }
             this.runtimeCandidateValue = null;
+            this.runtimeExitSettlement = null;
             this.runtimeStateValue = { kind: "launch-refused", result };
             return { launched: false, reason: "host-refused", result };
         }
@@ -868,6 +896,7 @@ export class PreviewBuildFlow {
             runtimeId: result.runtimeId,
             runtimeIdentity: result.runtimeIdentity,
         };
+        this.runtimeExitSettlement = { runtimeId: result.runtimeId, exited: result.exited };
         void result.exited.then((exit) => {
             const state = this.runtimeStateValue;
             if (
@@ -875,6 +904,7 @@ export class PreviewBuildFlow {
                 state.runtimeId.sequence === exit.runtimeId.sequence
             ) {
                 this.runtimeCandidateValue = null;
+                this.runtimeExitSettlement = null;
                 this.runtimeStateValue = {
                     kind: "exited",
                     runtimeIdentity: state.runtimeIdentity,
@@ -890,6 +920,11 @@ export class PreviewBuildFlow {
         };
     }
 
+    /** Request the stop of the attached Runtime. The returned outcome proves
+     *  only that the host ACCEPTED the request (or the Runtime had already
+     *  settled) — NOT that the process has exited. Ownership transitions
+     *  (retarget, closing the Preview target) must instead use
+     *  `stopAttachedPreviewAndWait`, which also awaits the exit settlement. */
     async stopAttachedPreview(): Promise<PreviewRuntimeStopOutcome | null> {
         const state = this.runtimeStateValue;
         if (state.kind !== "running" && state.kind !== "stopping") {
@@ -913,5 +948,46 @@ export class PreviewBuildFlow {
             }
             throw error;
         }
+    }
+
+    /**
+     * The strict teardown used by ownership transitions (retarget, closing
+     * the Preview target). Unlike `stopAttachedPreview`, this resolves ONLY
+     * after the old Runtime has verifiably LEFT:
+     *
+     *   1. a launch in flight settles first (single-flight lane), so state
+     *      reflects the Runtime that actually exists;
+     *   2. the stop is requested (if the Runtime is still running and no
+     *      stop is already in progress);
+     *   3. the exit settlement of THAT exact RuntimeId is awaited;
+     *   4. only the returned exit facts (or `null` when no attached Runtime
+     *      needed tearing down) may be followed by a retarget commit or a
+     *      next Runtime launch.
+     *
+     * A failure of the stop request rejects — the transition is NOT
+     * complete, and the caller must not commit the new target/close against
+     * a Runtime that is still up.
+     */
+    async stopAttachedPreviewAndWait(): Promise<PreviewRuntimeExit | null> {
+        if (this.runtimeLaunchLane !== null) {
+            await this.runtimeLaunchLane;
+        }
+        const state = this.runtimeStateValue;
+        if (state.kind !== "running" && state.kind !== "stopping") {
+            return null;
+        }
+        // Capture THIS Runtime's exit settlement BEFORE requesting the stop:
+        // the process may settle — and its exit handler may already have
+        // cleared the field — while the stop request is being delivered. The
+        // awaited handle must be the promise of this exact Runtime, held as a
+        // local, not a field that can be cleared under us.
+        const settlement = this.runtimeExitSettlement;
+        if (settlement === null) {
+            return null;
+        }
+        if (state.kind === "running") {
+            await this.stopAttachedPreview();
+        }
+        return await settlement.exited;
     }
 }

@@ -72,15 +72,16 @@ function twoOpen(): { workspace: WorkspaceSession<DocumentSession>; a: DocumentS
 }
 
 describe("resolvePreviewTarget — the Runtime composes from the explicit target", () => {
-    it("before an explicit target is chosen, the active document is the bootstrap default", () => {
-        const { workspace, b } = twoOpen();
-        // B was opened last → active is B, and no explicit target exists yet.
+    it("the first opened document is the Preview target from the start (explicit from the first OPEN, never a live active-follow)", () => {
+        const { workspace, a, b } = twoOpen();
+        // The fixture opens A first, then B: B is the active tab, but an
+        // EXPLICIT Preview target already exists — it was seeded at the first
+        // open (a one-time ownership decision), not derived from the active
+        // tab. A later open / activation never moves it.
         expect(workspace.activeDocumentId).toBe(b.sessionId);
-        expect(hasExplicitPreviewTarget(workspace)).toBe(false);
+        expect(hasExplicitPreviewTarget(workspace)).toBe(true);
         const resolved = resolvePreviewTarget(workspace);
-        // No explicit target ⇒ resolves to the active document (bootstrap),
-        // so the working document previews out of the box.
-        expect(resolved?.sessionId).toBe(b.sessionId);
+        expect(resolved?.sessionId).toBe(a.sessionId);
     });
 
     it("an explicit target is pinned even when the active tab differs", () => {
@@ -111,17 +112,20 @@ describe("resolvePreviewTarget — the Runtime composes from the explicit target
         expect(resolvePreviewTarget(w2)?.sessionId).toBe(b.sessionId);
     });
 
-    it("closing a tab that is the target clears it (resolution falls back); closing a non-target keeps it", () => {
-        const { workspace, a } = twoOpen();
-        // Target A, close A → target cleared; resolution falls back to active.
+    it("closing a tab that is the target RE-SEEDS it onto the surviving active (no live fallback); closing a non-target keeps it", () => {
+        const { workspace, a, b } = twoOpen();
+        // Target A, close A → ownership re-seeds, as a one-time close-time
+        // decision, onto the surviving active document (B). It is still an
+        // explicit target — never a live re-coupling to whatever tab is open.
         const tA = commitWorkspacePreviewTarget(workspace, a.sessionId);
         expect(tA.accepted).toBe(true);
         const wA = tA.accepted ? tA.workspace : workspace;
         const cA = closeWorkspaceDocument(wA, a.sessionId);
         expect(cA.accepted).toBe(true);
         const afterCloseA = cA.accepted ? cA.workspace : wA;
-        expect(hasExplicitPreviewTarget(afterCloseA)).toBe(false);
-        expect(resolvePreviewTarget(afterCloseA)?.sessionId).toBe(afterCloseA.activeDocumentId);
+        expect(hasExplicitPreviewTarget(afterCloseA)).toBe(true);
+        expect(afterCloseA.preview.targetDocumentId).toBe(b.sessionId);
+        expect(resolvePreviewTarget(afterCloseA)?.sessionId).toBe(b.sessionId);
 
         // Fresh: target B, close A (non-target) → target stays B.
         const { workspace: ws2, a: a2, b: b2 } = twoOpen();
