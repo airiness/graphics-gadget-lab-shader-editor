@@ -23,6 +23,14 @@ the normative home for the shader editor's architecture.
   product path. Cross-project Preview architecture and final qualification
   authority remain in the GGLab docs repository.
 
+- `GGLab_Shader_Graph_Preview_Ownership_Coordination.md` — Preview ownership
+  architecture decision and Slice 1 implementation plan: the four ownership
+  authorities (WorkspaceSession, build flow, `AttachedPreviewRuntimeManager`,
+  `PreviewCoordinator`), the Runtime state machine with `exit-unproven` as a
+  first-class state, the stable `TerminationProof` tri-value contract, the
+  coordinator-owned retarget/close transitions, and the Slice 2 host-native
+  `terminateAndJoin` boundary.
+
 This document originated in the GGLab docs repository and was transferred
 into this repository when the shader editor began owning its own
 documentation.
