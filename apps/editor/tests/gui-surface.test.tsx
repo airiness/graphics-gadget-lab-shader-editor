@@ -2327,12 +2327,24 @@ describe("primary sidebar (activity bar + workspace explorer)", () => {
         expect(app).toMatch(/gglab-activitybar-btn[\s\S]*?setSidebarPanel\("nodes"\)/);
     });
 
-    it("wires the Explorer to the HOST channel: choose root → store it → bounded discovery, cancel with Stop", () => {
+    it("wires the Explorer to the HOST channel: choose root → store it → bounded, CANCELLABLE discovery", () => {
         const app = read("../src/app.tsx");
         expect(app).toMatch(/channel\.chooseWorkspaceRoot\(\)/);
         expect(app).toMatch(/setWorkspaceRoot\(current, root\)/);
-        expect(app).toMatch(/channel\.discoverWorkspace\(root\.canonicalWorkspaceUri\)/);
+        expect(app).toMatch(/channel\.discoverWorkspace\(expectedUri\)/);
         expect(app).toMatch(/channel\.cancelWorkspaceDiscovery\(id\)/);
+    });
+
+    it("binds a discovery settlement to (canonicalWorkspaceUri, discoveryId) and drops a superseded one", () => {
+        const app = read("../src/app.tsx");
+        // The UI's watched discovery is bound to BOTH its id and the root it ran against.
+        expect(app).toMatch(/discoveryRef\.current = \{ uri: expectedUri, discoveryId: attempt\.discoveryId \}/);
+        // A settlement applies ONLY if it is still the current one (same id + root).
+        expect(app).toMatch(/watching\.discoveryId === settlement\.discoveryId/);
+        expect(app).toMatch(/watching\.uri === expectedUri/);
+        expect(app).toMatch(/settlementUri === expectedUri/);
+        // Choosing a new root supersedes (cancels) the in-flight discovery.
+        expect(app).toMatch(/onChooseWorkspaceRoot[\s\S]*?await onStopDiscovery\(\)/);
     });
 
     it("opens a discovered entry as a co-existing tab via the host exact snapshot (or activates the existing tab) — never an arbitrary path", () => {
@@ -2351,5 +2363,73 @@ describe("primary sidebar (activity bar + workspace explorer)", () => {
         expect(app).toContain("gglab-explorer-status");
         expect(app).toContain("gglab-explorer-error");
         expect(app).toMatch(/gglab-explorer-list[\s\S]*?entry\.relativePath/);
+    });
+});
+
+describe("preview target ownership (PreviewCoordinator)", () => {
+    it("the Runtime Preview composes from the resolved EXPLICIT target, not the active document", () => {
+        const app = read("../src/app.tsx");
+        expect(app).toMatch(/import \{[\s\S]*?resolvePreviewTarget[\s\S]*?\} from "\.\.\/src\/preview-coordinator\.js"|import \{[\s\S]*?resolvePreviewTarget[\s\S]*?\} from "\.\/preview-coordinator\.js"/);
+        // The composition source is the resolved target's document + emission.
+        expect(app).toMatch(/resolvePreviewTarget\(workspace\)/);
+        expect(app).toMatch(/const previewDocument = previewTargetSession\.history\.present/);
+        expect(app).toMatch(/const previewEmission = previewTargetSession\.presentation\.emission/);
+        expect(app).toMatch(/useShaderPreview\(\{[\s\S]*?document: previewDocument,[\s\S]*?emission: previewEmission/);
+    });
+
+    it("retarget tears down the attached Runtime BEFORE committing the new target", () => {
+        const app = read("../src/app.tsx");
+        const onPreview = app.match(/const onPreviewThisGraph[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
+        expect(onPreview).toContain("await stopPreviewRuntimeIfAttached()");
+        expect(onPreview).toContain("commitWorkspacePreviewTarget(current, target.sessionId)");
+        // Teardown order: stopPreviewRuntimeIfAttached precedes the commit.
+        const stopAt = onPreview.indexOf("await stopPreviewRuntimeIfAttached()");
+        const commitAt = onPreview.indexOf("commitWorkspacePreviewTarget");
+        expect(stopAt).toBeGreaterThanOrEqual(0);
+        expect(commitAt).toBeGreaterThan(stopAt);
+    });
+
+    it("closing a tab that is the Preview target completes the Runtime transition before the close", () => {
+        const app = read("../src/app.tsx");
+        const closeFn = app.match(/async function closeOneTab[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
+        expect(closeFn).toContain("workspace.preview.targetDocumentId === documentSessionId");
+        expect(closeFn).toContain("await stopPreviewRuntimeIfAttached()");
+        expect(closeFn).toContain("closeWorkspaceDocument(current, documentSessionId)");
+    });
+
+    it("the target-resolution rule is a pure, isolated module (not inlined in the render)", () => {
+        const coordinator = read("../src/preview-coordinator.ts");
+        expect(coordinator).toMatch(/export function resolvePreviewTarget/);
+        expect(coordinator).toMatch(/export function hasExplicitPreviewTarget/);
+        expect(coordinator).toMatch(/workspace\.preview\.targetDocumentId \?\? workspace\.activeDocumentId/);
+    });
+});
+
+describe("per-document canvas viewport (pan/zoom never shared)", () => {
+    it("owns a per-document viewport in the presentation, carried across an edit but reset on a content replacement", () => {
+        const ds = read("../src/document-session.ts");
+        expect(ds).toMatch(/export interface CanvasViewport/);
+        expect(ds).toMatch(/readonly viewport: CanvasViewport \| null/);
+        // An edit carries it (emptyPresentation keeps the second argument).
+        expect(ds).toMatch(/emptyPresentation\(session\.presentation\.savedText, session\.presentation\.viewport\)/);
+    });
+
+    it("the app binds the active document's viewport to the canvas and persists user pan/zoom", () => {
+        const app = read("../src/app.tsx");
+        expect(app).toMatch(/onUserPanZoom=\{setViewport\}/);
+        expect(app).toMatch(/requestedViewport=\{viewport\}/);
+        expect(app).toMatch(/requestedViewportToken=\{session\.sessionId\}/);
+        // The setter writes to the ACTIVE document's own presentation.
+        expect(app).toMatch(/const setViewport = \(value: CanvasViewport\): void => patchPresentation\(\{ viewport: value \}\)/);
+    });
+
+    it("the canvas reports only user pan/zoom and restores the token's own view (no restore↔persist loop)", () => {
+        const viewport = read("../../../packages/editor-ui/src/flow/flow-viewport.tsx");
+        expect(viewport).toMatch(/onMoveEnd=\{\(_event, viewport\) => \{/);
+        expect(viewport).toMatch(/props\.onUserPanZoom\?\.\(\{ x: viewport\.x, y: viewport\.y, zoom: viewport\.zoom \}\)/);
+        // Restore keyed on the document-identity token, reading the view from a ref.
+        expect(viewport).toMatch(/\}, \[props\.requestedViewportToken\]\)/);
+        expect(viewport).toMatch(/instance\.viewport|requestedViewportRef\.current/);
+        expect(viewport).toMatch(/instance\.setViewport\(\{ x: requested\.x, y: requested\.y, zoom: requested\.zoom \}, \{ duration: 140 \}\)/);
     });
 });

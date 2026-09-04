@@ -75,6 +75,7 @@ import {
 } from "./host-io.js";
 import { useNativeBuild } from "./useNativeBuild.js";
 import { useShaderPreview } from "./useShaderPreview.js";
+import { resolvePreviewTarget } from "./preview-coordinator.js";
 import type { NativeBuildReadiness } from "./native-build-readiness.js";
 import {
     basenameOf,
@@ -90,6 +91,7 @@ import {
     sessionSaved,
     sessionTitle,
     undoDocumentChange,
+    type CanvasViewport,
     type CloseChoice,
     type DocumentProvenance,
     type DocumentSession,
@@ -248,7 +250,25 @@ export function App() {
     const [explorerBusy, setExplorerBusy] = useState(false);
     const [explorerError, setExplorerError] = useState<string | null>(null);
     const [explorerStatus, setExplorerStatus] = useState<string | null>(null);
-    const discoveryRef = useRef<WorkspaceDiscoveryId | null>(null);
+    // The discovery the UI is CURRENTLY watching, bound to BOTH the canonical
+    // workspace root it was launched against and its host-issued discovery id.
+    // A settlement is only applied if it still matches this binding — a
+    // superseded discovery (the root was switched) is dropped, so its stale
+    // entries can never overwrite the new root's Explorer.
+    const discoveryRef = useRef<{ readonly uri: string; readonly discoveryId: WorkspaceDiscoveryId } | null>(null);
+    // Best-effort: cancel any in-flight workspace discovery on unmount so it
+    // does not outlive the app and settle against a dead channel.
+    useEffect(() => {
+        return () => {
+            const channel = fileChannelRef.current;
+            const id = discoveryRef.current?.discoveryId ?? null;
+            if (channel !== null && id !== null) {
+                void channel.cancelWorkspaceDiscovery(id).catch(() => {
+                    /* unmount teardown — the host is going away anyway */
+                });
+            }
+        };
+    }, []);
 
     // ---- Per-document presentation (owned by the active DocumentSession).
     // Selection, the diagnostic focus, the emission snapshot, the .shadergraph
@@ -267,6 +287,7 @@ export function App() {
     const emission = presentation.emission;
     const operationNotes = presentation.notes;
     const savedText = presentation.savedText;
+    const viewport = presentation.viewport;
     /** One patch to this document's presentation (one intent = one patch). */
     function patchPresentation(patch: Partial<DocumentSessionPresentation>): void {
         updateDocumentSession(session.sessionId, (prev) => ({
@@ -284,6 +305,10 @@ export function App() {
     const setFocus = (value: CanvasFocus | null): void => patchPresentation({ focus: value });
     const setEmission = (value: HlslEmission | null): void => patchPresentation({ emission: value });
     const setSavedText = (text: string): void => patchPresentation({ savedText: text });
+    /** Persist the active document's own canvas view (pan/zoom). The viewport
+     * is a per-document presentation fact: it goes to the ACTIVE document's
+     * presentation and is restored when that document becomes active again. */
+    const setViewport = (value: CanvasViewport): void => patchPresentation({ viewport: value });
     const setOperationNotes = (
         update: ((previous: readonly string[]) => readonly string[]) | readonly string[],
     ): void => {
@@ -297,6 +322,13 @@ export function App() {
     // Desktop native document I/O channel (absent in the browser
     // — the web build keeps the text save/load surface only).
     const [fileChannel, setFileChannel] = useState<FileChannel | null>(null);
+    // A stable reference to the current channel for async cleanups (e.g.
+    // cancelling an in-flight workspace discovery on unmount) that must not
+    // capture a stale channel closure.
+    const fileChannelRef = useRef<FileChannel | null>(null);
+    useEffect(() => {
+        fileChannelRef.current = fileChannel;
+    }, [fileChannel]);
     // A CAS failure retains the exact local bytes and originating session
     // until the user makes an explicit decision. The ref closes the small
     // gap before React commits state, so a repeated shortcut cannot replace
@@ -462,7 +494,7 @@ export function App() {
      * cannot be closed: the Workspace keeps at least one open document
      * (the application requires a live active document). The empty-Workspace
      * presentation is a deliberate, separate shell concern. */
-    const onCloseTab = (documentSessionId: DocumentSessionId): void => {
+    const onCloseTab = async (documentSessionId: DocumentSessionId): Promise<void> => {
         const doc = workspace.documents.find((candidate) => candidate.sessionId === documentSessionId);
         if (doc === undefined) {
             return;
@@ -478,11 +510,17 @@ export function App() {
             setDirtyClose(documentSessionId);
             return;
         }
-        closeOneTab(documentSessionId);
+        await closeOneTab(documentSessionId);
     };
 
-    /** Apply one accepted tab close through the Workspace reducer. */
-    function closeOneTab(documentSessionId: DocumentSessionId): void {
+    /** Apply one accepted tab close through the Workspace reducer. If the
+     * tab being closed is the attached Runtime's Preview target, complete the
+     * Runtime teardown FIRST (ownership order) so the Runtime never out-points
+     * a document that no longer exists. */
+    async function closeOneTab(documentSessionId: DocumentSessionId): Promise<void> {
+        if (workspace.preview.targetDocumentId === documentSessionId) {
+            await stopPreviewRuntimeIfAttached();
+        }
         setWorkspace((current) => {
             const closed = closeWorkspaceDocument(current, documentSessionId);
             return closed.accepted ? closed.workspace : current;
@@ -490,23 +528,38 @@ export function App() {
     }
 
     /** The user confirmed discarding one dirty tab's unsaved changes. */
-    const confirmDirtyClose = (): void => {
+    const confirmDirtyClose = async (): Promise<void> => {
         const target = dirtyClose;
-        if (target !== null) {
-            closeOneTab(target);
-        }
         setDirtyClose(null);
+        if (target !== null) {
+            await closeOneTab(target);
+        }
     };
 
     /** Explicit user intent: make the active document the attached Runtime's
      * Preview target. This is the only path that moves the Preview-target
      * axis (guidance §12.1) — switching tabs or editing never re-targets the
-     * Runtime implicitly; only this deliberate action does. */
-    const onPreviewThisGraph = (): void => {
-        const target = session.sessionId;
-        const name = tabNameFor(session);
+     * Runtime implicitly; only this deliberate action does.
+     *
+     * The order is ownership-first: (1) tear down the Runtime that belongs to
+     * a prior target, (2) refresh the NEW target's own emission (it is
+     * f(document, descriptor), stored in ITS presentation, never borrowed
+     * from the active document), (3) commit the Workspace target transition. */
+    const onPreviewThisGraph = async (): Promise<void> => {
+        const target = session;
+        const name = tabNameFor(target);
+        await stopPreviewRuntimeIfAttached();
+        if (descriptor !== null) {
+            updateDocumentSession(target.sessionId, (previous) => ({
+                ...previous,
+                presentation: {
+                    ...previous.presentation,
+                    emission: emitHlsl(previous.history.present, descriptor),
+                },
+            }));
+        }
         setWorkspace((current) => {
-            const transition = commitWorkspacePreviewTarget(current, target);
+            const transition = commitWorkspacePreviewTarget(current, target.sessionId);
             return transition.accepted ? transition.workspace : current;
         });
         setOperationNotes((previous) => [
@@ -527,6 +580,9 @@ export function App() {
         setExplorerError(null);
         setExplorerStatus(null);
         try {
+            // A root switch supersedes any in-flight discovery: cancel it so
+            // its stale settlement is dropped (the guard also enforces this).
+            await onStopDiscovery();
             const root = await channel.chooseWorkspaceRoot();
             if (root === null) {
                 return; // user cancelled the directory dialog
@@ -549,39 +605,73 @@ export function App() {
             setExplorerStatus("Choose a workspace root first (desktop host only).");
             return;
         }
+        const expectedUri = root.canonicalWorkspaceUri;
         setExplorerBusy(true);
         setExplorerError(null);
         setExplorerStatus("Discovering workspace documents…");
         try {
-            const attempt = await channel.discoverWorkspace(root.canonicalWorkspaceUri);
-            discoveryRef.current = attempt.discoveryId;
+            const attempt = await channel.discoverWorkspace(expectedUri);
+            // Bind the discovery the UI now watches to BOTH its id and the
+            // canonical root it ran against. A later root switch supersedes it.
+            discoveryRef.current = { uri: expectedUri, discoveryId: attempt.discoveryId };
             const settlement = await attempt.result;
-            discoveryRef.current = null;
-            if (settlement.kind === "changed") {
-                setExplorerEntries(settlement.snapshot.documents);
-                setExplorerStatus(
-                    settlement.snapshot.documents.length === 0
-                        ? "No .shadergraph documents found in this workspace."
-                        : `Found ${settlement.snapshot.documents.length} document${settlement.snapshot.documents.length === 1 ? "" : "s"}.`,
-                );
-            } else if (settlement.kind === "unchanged") {
-                setExplorerStatus("Workspace unchanged since the last discovery.");
-            } else if (settlement.kind === "cancelled") {
-                setExplorerStatus("Discovery was cancelled.");
-            } else {
-                setExplorerError("Workspace discovery failed on the host.");
+            // A settlement is only ADDED if it is still the current one: same
+            // discoveryId the UI is watching AND the same canonical root. A
+            // superseded discovery (root switched) is dropped — its stale
+            // entries must not overwrite the new root's Explorer.
+            const watching = discoveryRef.current;
+            const stillCurrent =
+                watching !== null &&
+                watching.discoveryId === settlement.discoveryId &&
+                watching.uri === expectedUri;
+            const settlementUri =
+                settlement.kind === "changed"
+                    ? settlement.snapshot.root.canonicalWorkspaceUri
+                    : settlement.kind === "unchanged"
+                      ? settlement.canonicalWorkspaceUri
+                      : expectedUri;
+            if (stillCurrent && settlementUri === expectedUri) {
+                if (settlement.kind === "changed") {
+                    setExplorerEntries(settlement.snapshot.documents);
+                    setExplorerStatus(
+                        settlement.snapshot.documents.length === 0
+                            ? "No .shadergraph documents found in this workspace."
+                            : `Found ${settlement.snapshot.documents.length} document${settlement.snapshot.documents.length === 1 ? "" : "s"}.`,
+                    );
+                } else if (settlement.kind === "unchanged") {
+                    setExplorerStatus("Workspace unchanged since the last discovery.");
+                } else if (settlement.kind === "cancelled") {
+                    setExplorerStatus("Discovery was cancelled.");
+                } else {
+                    setExplorerError("Workspace discovery failed on the host.");
+                }
+            }
+            // Clear the binding only if it still points at THIS discovery — a
+            // newer discovery may already own it.
+            if (discoveryRef.current !== null && discoveryRef.current.discoveryId === settlement.discoveryId) {
+                discoveryRef.current = null;
             }
         } catch (error) {
-            discoveryRef.current = null;
+            const watchingId = discoveryRef.current?.discoveryId;
+            if (watchingId !== undefined) {
+                // Best-effort: do not clobber a newer discovery's binding.
+                if (discoveryRef.current !== null && discoveryRef.current.uri === expectedUri) {
+                    discoveryRef.current = null;
+                }
+            }
             setExplorerError(error instanceof Error ? error.message : "Workspace discovery failed.");
         } finally {
-            setExplorerBusy(false);
+            // Only claim the idle flag if this discovery is still the one the
+            // UI watches (a newer discovery owns the busy flag otherwise).
+            if (discoveryRef.current === null || discoveryRef.current.uri === expectedUri) {
+                setExplorerBusy(false);
+            }
         }
     };
 
     const onStopDiscovery = async (): Promise<void> => {
         const channel = fileChannel;
-        const id = discoveryRef.current;
+        const id = discoveryRef.current?.discoveryId ?? null;
         if (channel === null || id === null) {
             return;
         }
@@ -590,7 +680,7 @@ export function App() {
             setExplorerStatus("Cancellation requested — the host will settle it.");
         } catch {
             // The host's cancel is best-effort; the settlement promise will
-            // still resolve and drive the final state.
+            // still resolve and (if superseded) be dropped by the guard above.
         }
     };
 
@@ -1522,14 +1612,35 @@ export function App() {
         descriptorDetail,
         emission,
     });
+    // PreviewCoordinator ownership (guidance §12.1): the Runtime Preview
+    // composes from the EXPLICIT Preview target — a distinct Workspace axis —
+    // not the active (editing) document. Switching the active tab therefore
+    // cannot silently retarget the Runtime; only an explicit "Preview this
+    // graph" moves the target. Before the user has ever chosen a target, the
+    // active (single seeded) document is the bootstrap default.
+    const previewTargetSession = resolvePreviewTarget(workspace) ?? session;
+    const previewDocument = previewTargetSession.history.present;
+    const previewEmission = previewTargetSession.presentation.emission;
     const preview = useShaderPreview({
-        document,
+        document: previewDocument,
         descriptor,
         descriptorCompatible: profileCompatibility !== null && profileCompatibility.verdict.ok,
-        emission,
+        emission: previewEmission,
         configuredTarget: native.target.target,
         nativeFlow: native.flow,
     });
+
+    /** Tear down the attached Preview Runtime (if one is live) and await its
+     * settlement. This is the ownership transition that must complete BEFORE a
+     * retarget commit or a Preview-target close — the old Runtime belongs to a
+     * prior target/candidate and must not out-point the document it previewed.
+     * A no-op when no flow exists or the Runtime already settled. */
+    const stopPreviewRuntimeIfAttached = async (): Promise<void> => {
+        if (preview.flow === null) {
+            return;
+        }
+        await preview.stopPreview();
+    };
 
     // The flow object is stable while handshake facts change inside it. Read
     // supportedTargets on every render so a completed handshake immediately
@@ -1640,7 +1751,7 @@ export function App() {
                                     className="gglab-tab-close"
                                     onClick={(event) => {
                                         event.stopPropagation();
-                                        onCloseTab(doc.sessionId);
+                                        void onCloseTab(doc.sessionId);
                                     }}
                                     disabled={onlyTab}
                                     title={
@@ -1659,7 +1770,7 @@ export function App() {
                 <div className="gglab-tabs-actions">
                     <Button
                         variant="toolbar"
-                        onClick={onPreviewThisGraph}
+                        onClick={() => void onPreviewThisGraph()}
                         title="Attach the active document to the Runtime Preview. Explicit intent: switching tabs keeps the target."
                     >
                         ▶ Preview this graph
@@ -1809,6 +1920,9 @@ export function App() {
                         onPortActivate={onPortActivate}
                         onNodeSelect={onNodeSelect}
                         onNodeMenu={onNodeMenu}
+                        onUserPanZoom={setViewport}
+                        requestedViewport={viewport}
+                        requestedViewportToken={session.sessionId}
                         onFlowReady={(fitView) => {
                             fitRef.current = fitView;
                         }}
@@ -2352,7 +2466,7 @@ export function App() {
                             This tab has unsaved changes; closing it discards them. Keep them by saving first (Save / Save As), or close to discard.
                         </p>
                         <ButtonGroup className="flex justify-end">
-                            <Button variant="destructive" onClick={confirmDirtyClose}>
+                            <Button variant="destructive" onClick={() => void confirmDirtyClose()}>
                                 Close anyway
                             </Button>
                             <Button variant="ghost" onClick={() => setDirtyClose(null)}>

@@ -237,3 +237,65 @@ describe("switching tabs never re-targets the explicit Preview target", () => {
         expect(final.preview.targetDocumentId).toBe(b.sessionId);
     });
 });
+
+describe("the canvas viewport is a per-document fact (pan/zoom never shared)", () => {
+    const VP_A = { x: 111, y: 222, zoom: 1.6 };
+    const VP_B = { x: 9, y: 8, zoom: 0.9 };
+    function withViewport(session: DocumentSession, viewport: { x: number; y: number; zoom: number } | null): DocumentSession {
+        return { ...session, presentation: { ...session.presentation, viewport } };
+    }
+
+    it("a document change / undo / redo carries the viewport (an edit does not move the view)", () => {
+        const session = withViewport(fileSession("s-a", A_URI, A_REV, "C:\\gglab\\A.shadergraph"), VP_A);
+        const changed = recordDocumentChange(session, CHANGED, "change");
+        expect(changed.presentation.viewport).toStrictEqual(VP_A);
+        const undone = undoDocumentChange(changed);
+        expect(undone.presentation.viewport).toStrictEqual(VP_A);
+        const redone = redoDocumentChange(undone);
+        expect(redone.presentation.viewport).toStrictEqual(VP_A);
+    });
+
+    it("saving carries the viewport (a save does not change the view)", () => {
+        const session = withViewport(fileSession("s-a", A_URI, A_REV, "C:\\gglab\\A.shadergraph"), VP_A);
+        const snap: DocumentSnapshot = {
+            canonicalDocumentUri: A_URI,
+            displayPath: "C:\\gglab\\A.shadergraph",
+            text: serializeShaderGraphDocument(DOC),
+            fileRevisionToken: A_REV,
+        };
+        const saved = sessionSaved(session, session.sessionId, snap);
+        expect(saved.presentation.viewport).toStrictEqual(VP_A);
+    });
+
+    it("a content replacement (reload) resets the viewport so the canvas re-fits the new content", () => {
+        const session = withViewport(fileSession("s-a", A_URI, A_REV, "C:\\gglab\\A.shadergraph"), VP_A);
+        const snap: DocumentSnapshot = {
+            canonicalDocumentUri: A_URI,
+            displayPath: "C:\\gglab\\A.shadergraph",
+            text: serializeShaderGraphDocument(CHANGED),
+            fileRevisionToken: A_REV,
+        };
+        const reloaded = sessionReloaded(session, session.sessionId, snap, CHANGED);
+        expect(reloaded.presentation.viewport).toBeNull();
+    });
+
+    it("two open documents keep INDEPENDENT viewports (no shared pan/zoom)", () => {
+        let workspace = createWorkspaceSession<DocumentSession>();
+        const a = withViewport(fileSession("doc-a", A_URI, A_REV, "C:\\gglab\\A.shadergraph"), VP_A);
+        const b = withViewport(fileSession("doc-b", B_URI, B_REV, "C:\\gglab\\B.shadergraph"), VP_B);
+        const oa = openWorkspaceDocument(workspace, a);
+        expect(oa.accepted).toBe(true);
+        workspace = oa.workspace;
+        const ob = openWorkspaceDocument(workspace, b);
+        expect(ob.accepted).toBe(true);
+        workspace = ob.workspace;
+
+        const aFromWorkspace = workspace.documents.find((d) => d.sessionId === a.sessionId);
+        const bFromWorkspace = workspace.documents.find((d) => d.sessionId === b.sessionId);
+        expect(aFromWorkspace?.presentation.viewport).toStrictEqual(VP_A);
+        expect(bFromWorkspace?.presentation.viewport).toStrictEqual(VP_B);
+        // B is active (opened last) with its own view; A's view is intact and distinct.
+        expect(activeWorkspaceDocument(workspace)?.sessionId).toBe(b.sessionId);
+        expect(activeWorkspaceDocument(workspace)?.presentation.viewport).toStrictEqual(VP_B);
+    });
+});

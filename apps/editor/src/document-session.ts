@@ -65,6 +65,15 @@ export function provenanceFromImport(): DocumentProvenance {
  * semantics: nothing here mutates the document, and clearing it (a
  * document change) never touches history.
  */
+/** The canvas view state (pan/zoom) for one document. It is a per-document
+ * presentation fact: switching tabs must restore each document's own view and
+ * two documents must never share pan/zoom. */
+export interface CanvasViewport {
+    readonly x: number;
+    readonly y: number;
+    readonly zoom: number;
+}
+
 export interface DocumentSessionPresentation {
     /** The selected node id (session-local single-selection target). */
     readonly selectedNodeId: string | null;
@@ -85,12 +94,22 @@ export interface DocumentSessionPresentation {
     /** This document's .shadergraph text pane. Stable across authoring
      * (an edit does not rewrite it); reset on reload and set on save/open. */
     readonly savedText: string;
+    /** This document's canvas view state (pan/zoom), or `null` until one is
+     * captured (then the canvas fits to content). Carried across a document
+     * change (an edit does not move the view); reset when the content is
+     * replaced (reload) or a fresh document is created. */
+    readonly viewport: CanvasViewport | null;
 }
 
 /** A fresh presentation: the volatile selection/focus/emission/notes are
- * empty, but the per-document text pane is carried (a document change must
- * not wipe that document's text pane). */
-export function emptyPresentation(savedText: string): DocumentSessionPresentation {
+ * empty, but the carried per-document facts (the text pane and the canvas
+ * viewport) are preserved. A document change must not wipe that document's
+ * text pane or move its pan/zoom; a content replacement passes `null` for the
+ * viewport so the canvas re-fits the new content. */
+export function emptyPresentation(
+    savedText: string,
+    viewport: CanvasViewport | null = null,
+): DocumentSessionPresentation {
     return {
         selectedNodeId: null,
         selectedConnectionId: null,
@@ -101,6 +120,7 @@ export function emptyPresentation(savedText: string): DocumentSessionPresentatio
         emission: null,
         notes: [],
         savedText,
+        viewport,
     };
 }
 
@@ -158,20 +178,20 @@ export function recordDocumentChange(
     label: string,
 ): DocumentSession {
     const history = recordHistory(session.history, document, label);
-    return history === session.history ? session : { ...session, history, presentation: emptyPresentation(session.presentation.savedText) };
+    return history === session.history ? session : { ...session, history, presentation: emptyPresentation(session.presentation.savedText, session.presentation.viewport) };
 }
 
 /** Move this document one history step back. The restored document's
  * session-local presentation is stale for the new revision — reset it. */
 export function undoDocumentChange(session: DocumentSession): DocumentSession {
     const history = undoHistory(session.history);
-    return history === session.history ? session : { ...session, history, presentation: emptyPresentation(session.presentation.savedText) };
+    return history === session.history ? session : { ...session, history, presentation: emptyPresentation(session.presentation.savedText, session.presentation.viewport) };
 }
 
 /** Move this document one history step forward (same reset rule). */
 export function redoDocumentChange(session: DocumentSession): DocumentSession {
     const history = redoHistory(session.history);
-    return history === session.history ? session : { ...session, history, presentation: emptyPresentation(session.presentation.savedText) };
+    return history === session.history ? session : { ...session, history, presentation: emptyPresentation(session.presentation.savedText, session.presentation.viewport) };
 }
 
 /**
