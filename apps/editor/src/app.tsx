@@ -1665,13 +1665,15 @@ export function App() {
     });
 
     /** Tear down the attached Preview Runtime (if one is live) and await its
-     * FULL exit settlement. This is the ownership transition that must complete
-     * BEFORE a retarget commit or a Preview-target close — a mere "stop
-     * requested" outcome is not enough: the old Runtime belongs to a prior
+     * PROVEN exit. This is the ownership transition that must complete BEFORE
+     * a retarget commit or a Preview-target close — a mere "stop requested"
+     * outcome is not enough: the old Runtime belongs to a prior
      * target/candidate and must be verifiably gone before the next ownership
      * begins. A no-op when no flow exists or the Runtime already settled.
-     * Rejects if the host could not tear the Runtime down, so the caller
-     * refuses the transition instead of splitting ownership. */
+     * Rejects when the stop request fails OR the exit settles as
+     * `wait-failed` (the host could not prove the process left) — the caller
+     * then refuses the transition and keeps the prior ownership instead of
+     * splitting it. */
     const stopPreviewRuntimeIfAttached = async (): Promise<void> => {
         if (preview.flow === null) {
             return;

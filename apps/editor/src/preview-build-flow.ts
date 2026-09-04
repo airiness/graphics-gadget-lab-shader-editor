@@ -959,14 +959,23 @@ export class PreviewBuildFlow {
      *      reflects the Runtime that actually exists;
      *   2. the stop is requested (if the Runtime is still running and no
      *      stop is already in progress);
-     *   3. the exit settlement of THAT exact RuntimeId is awaited;
-     *   4. only the returned exit facts (or `null` when no attached Runtime
-     *      needed tearing down) may be followed by a retarget commit or a
-     *      next Runtime launch.
+     *   3. the exit settlement of THAT exact RuntimeId is awaited.
      *
-     * A failure of the stop request rejects — the transition is NOT
-     * complete, and the caller must not commit the new target/close against
-     * a Runtime that is still up.
+     * Exit-fact judgment: `stopped` / `exited` are the only facts that prove
+     * the process is gone; `wait-failed` means the host could only
+     * best-effort kill/wait and CANNOT prove the Runtime exited — that
+     * REJECTS, and the caller must keep the prior ownership (no retarget
+     * commit, no target-tab close).
+     *
+     * Failing loudly is part of the contract:
+     *   - an attached Runtime (running/stopping) with NO exit settlement is
+     *     a flow invariant violation (the settlement is set at launch and
+     *     cleared at exit) — it throws, never a silent "nothing to do";
+     *   - a failure of the stop request, or a `wait-failed` exit, rejects —
+     *     the transition is NOT complete and must not be followed by a
+     *     retarget commit or a target close.
+     *
+     * Resolves `null` only when no attached Runtime needs tearing down.
      */
     async stopAttachedPreviewAndWait(): Promise<PreviewRuntimeExit | null> {
         if (this.runtimeLaunchLane !== null) {
@@ -983,11 +992,26 @@ export class PreviewBuildFlow {
         // local, not a field that can be cleared under us.
         const settlement = this.runtimeExitSettlement;
         if (settlement === null) {
-            return null;
+            // A running/stopping Runtime ALWAYS has an exit settlement;
+            // reaching this point means the flow's ownership bookkeeping is
+            // broken. Failing loudly is strictly safer than pretending the
+            // teardown is a no-op.
+            throw new Error(
+                `Preview flow invariant: attached Runtime #${state.runtimeId.sequence} is ${state.kind} but has no exit settlement; the teardown cannot be proven complete.`,
+            );
         }
         if (state.kind === "running") {
             await this.stopAttachedPreview();
         }
-        return await settlement.exited;
+        const result = await settlement.exited;
+        if (result.kind === "wait-failed") {
+            // The host could not prove the process left. Teardown success
+            // requires proof; reject so the caller refuses to retarget or
+            // close against a Runtime that may still be alive.
+            throw new Error(
+                `Attached Preview Runtime #${result.runtimeId.sequence} could not be proven exited (host wait-failed); the ownership transition was not committed.`,
+            );
+        }
+        return result;
     }
 }

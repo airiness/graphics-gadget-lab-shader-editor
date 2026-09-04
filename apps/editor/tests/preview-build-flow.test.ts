@@ -233,8 +233,9 @@ function runtimes(
     ],
     keepLaunchPending = false,
     holdStopUntilRelease = false,
+    stopReleaseKind: "stopped" | "wait-failed" = "stopped",
 ): FakePreviewRuntimeBoundary {
-    return new FakePreviewRuntimeBoundary({ launches, keepLaunchPending, holdStopUntilRelease });
+    return new FakePreviewRuntimeBoundary({ launches, keepLaunchPending, holdStopUntilRelease, stopReleaseKind });
 }
 
 async function prove(flow: PreviewBuildFlow, input = composition()): Promise<void> {
@@ -786,6 +787,52 @@ describe("Attached Preview Runtime lifecycle", () => {
         await expect(flow.stopAttachedPreviewAndWait()).resolves.toBeNull();
         expect(flow.runtimeState).toEqual({ kind: "idle" });
         expect(runtime.launchCalls).toBe(0);
+    });
+
+    it("a host wait-failed exit REJECTS the strict teardown — the ownership transition must not commit", async () => {
+        const runtime = runtimes(
+            [{ kind: "launched", runtimeIdentity: "runtime-a" }],
+            false,
+            true,
+            "wait-failed",
+        );
+        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), runtime);
+        await publish(flow);
+        const launched = await flow.launchAttachedPreview();
+        if (launched.launched === false) {
+            throw new Error("test Preview Runtime must launch");
+        }
+
+        const teardown = flow.stopAttachedPreviewAndWait();
+        // The host releases the stop but could only best-effort kill/wait:
+        // it CANNOT prove the process exited.
+        expect(runtime.releaseStop()).toBe(true);
+
+        // The strict contract must treat that as a FAILED teardown (reject),
+        // never as proven — so the caller keeps the prior ownership.
+        await expect(teardown).rejects.toThrow(/wait-failed/);
+
+        // The flow still records the host's own fact (its state machine
+        // settles on the host event), including the non-proof kind.
+        expect(flow.runtimeState).toMatchObject({
+            kind: "exited",
+            exit: { runtimeId: launched.runtimeId, kind: "wait-failed", exitCode: null },
+        });
+    });
+
+    it("an attached Runtime without its exit settlement is an invariant violation, never a no-op", async () => {
+        const runtime = runtimes();
+        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), runtime);
+        await publish(flow);
+        const launched = await flow.launchAttachedPreview();
+        if (launched.launched === false) {
+            throw new Error("test Preview Runtime must launch");
+        }
+        // Force the bookkeeping state the flow itself can never produce
+        // (running, but the exit settlement missing) to pin the defensive
+        // path: it must fail loudly, never report a proven teardown.
+        (flow as unknown as { runtimeExitSettlement: unknown }).runtimeExitSettlement = null;
+        await expect(flow.stopAttachedPreviewAndWait()).rejects.toThrow(/no exit settlement/);
     });
 
     it("routes launch-time candidate invalidation to the ordinary tool owner", async () => {

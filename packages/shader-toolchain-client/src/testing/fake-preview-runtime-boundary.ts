@@ -20,6 +20,10 @@ export interface FakePreviewRuntimeSpec {
      *  holds the process's exit settlement open until `releaseStop()` — a
      *  deterministic "stopping" window for ownership-transition tests. */
     readonly holdStopUntilRelease?: boolean | undefined;
+    /** The exit kind `releaseStop()` settles with. `"wait-failed"` models a
+     *  host that could only best-effort kill/wait (cannot prove exit).
+     *  Defaults to `"stopped"`. */
+    readonly stopReleaseKind?: "stopped" | "wait-failed";
 }
 
 export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
@@ -91,7 +95,11 @@ export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
             return false;
         }
         this.heldStop = null;
-        held.settle({ runtimeId: held.runtimeId, kind: "stopped", exitCode: null });
+        held.settle({
+            runtimeId: held.runtimeId,
+            kind: this.spec.stopReleaseKind ?? "stopped",
+            exitCode: null,
+        });
         return true;
     }
 

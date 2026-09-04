@@ -54,10 +54,12 @@ export interface ShaderPreviewSurface {
     readonly buildPreview: () => Promise<void>;
     readonly launchPreview: () => Promise<void>;
     readonly stopPreview: () => Promise<void>;
-    /** Strict teardown: resolves only once the attached Runtime has actually
-     * exited (stop requested AND its exit settlement settled). Retargeting
-     * the Preview target or closing it must go through this, never through
-     * `stopPreview` alone. */
+    /** Strict teardown: resolves only when the attached Runtime's exit is
+     * PROVEN (`stopped`/`exited`). Rejects if the stop request fails or the
+     * exit settles as `wait-failed` (the host could only best-effort
+     * kill/wait and cannot prove exit) — a caller must NOT retarget or
+     * close the target after such a failure. `stopPreview` alone is for the
+     * plain user "Stop" button, never for an ownership transition. */
     readonly stopPreviewAndWait: () => Promise<void>;
     readonly notes: readonly { readonly level: "ok" | "info" | "refusal"; readonly text: string }[];
 }

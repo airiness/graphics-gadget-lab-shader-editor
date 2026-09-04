@@ -2412,12 +2412,16 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         expect(coordinator).toMatch(/workspace\.preview\.targetDocumentId \?\? workspace\.activeDocumentId/);
     });
 
-    it("the ownership transition is a strict teardown: the Runtime must have EXITED before the target moves", () => {
+    it("the ownership transition is a strict teardown: the Runtime must have EXITED before the target moves, and a failed teardown ABORTS the commit", () => {
         const app = read("../src/app.tsx");
         expect(app).toMatch(/await preview\.stopPreviewAndWait\(\)/);
-        // Retarget and target-close both gate the commit on the teardown succeeding.
-        expect(app).toMatch(/onPreviewThisGraph[\s\S]*?stopPreviewRuntimeIfAttached\(\)[\s\S]*?commitWorkspacePreviewTarget/);
-        expect(app).toMatch(/closeOneTab[\s\S]*?stopPreviewRuntimeIfAttached\(\)[\s\S]*?closeWorkspaceDocument/);
+        // Retarget and target-close both gate the commit on the teardown
+        // SUCCEEDING; on failure they note the problem and abort (target
+        // unchanged / tab still open), before the commit/close can run.
+        expect(app).toMatch(/onPreviewThisGraph[\s\S]*?stopPreviewRuntimeIfAttached\(\);\s*\} catch \(error\)[\s\S]*?return;[\s\S]*?commitWorkspacePreviewTarget/);
+        expect(app).toMatch(/closeOneTab[\s\S]*?stopPreviewRuntimeIfAttached\(\);\s*\} catch \(error\)[\s\S]*?return;[\s\S]*?closeWorkspaceDocument/);
+        expect(app).toMatch(/Cannot retarget the Preview yet/);
+        expect(app).toMatch(/Cannot close this tab yet/);
     });
 
     it("the flow waits for the exit settlement of the exact Runtime before the teardown counts complete", () => {
@@ -2426,8 +2430,14 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         // The exit handle is captured BEFORE the stop request (the exit
         // handler may clear the field while the request is in flight).
         expect(flow).toMatch(
-            /const settlement = this\.runtimeExitSettlement;[\s\S]*?if \(state\.kind === "running"\) \{\s*await this\.stopAttachedPreview\(\);[\s\S]*?return await settlement\.exited;/,
+            /const settlement = this\.runtimeExitSettlement;[\s\S]*?if \(state\.kind === "running"\) \{\s*await this\.stopAttachedPreview\(\);/,
         );
+        // `wait-failed` is NOT a proven teardown: it rejects so the caller
+        // keeps the prior ownership.
+        expect(flow).toMatch(/if \(result\.kind === "wait-failed"\) \{[\s\S]*?throw new Error\([\s\S]*?wait-failed/);
+        // An attached Runtime missing its settlement is an invariant
+        // violation (throws) — never a proven "nothing to do".
+        expect(flow).toMatch(/no exit settlement[\s\S]*?teardown cannot be proven complete/);
         // A launch during "stopping" queues behind the old exit, never
         // "already-running" (no stranded Preview).
         expect(flow).toMatch(
