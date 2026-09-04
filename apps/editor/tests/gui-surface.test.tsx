@@ -955,7 +955,12 @@ describe("typed port presentation (core types → data categories)", () => {
             const derived = app.match(/function invalidateRevisionDerivedState\(\): void \{[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
             expect(derived).toContain("setFocus(null)"); // a stale highlight is never shown
             expect(derived).toContain("setEmission(null)"); // HLSL stays bound to its revision
-            for (const caller of ["replaceDocumentSession", "onUndo", "onRedo"]) {
+            // A document REVISION change (undo / redo) must clear the canvas
+            // interaction state AND invalidate the revision-derived state. A
+            // NEW document (open/import) instead starts with an EMPTY
+            // presentation — each DocumentSession owns its own presentation,
+            // so opening never has to clear the prior document's.
+            for (const caller of ["onUndo", "onRedo"]) {
                 const block = app.match(new RegExp(`(?:const|function) ${caller}([\\s\\S]*?\\n\\s{4}\\})`))?.[0] ?? "";
                 expect(block).toContain("clearCanvasInteractionState()");
                 expect(block).toContain("invalidateRevisionDerivedState()");
@@ -1011,11 +1016,17 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(applied).toContain("recordDocumentChange(previous, result.document, label)");
             expect(applied).toContain("invalidateRevisionDerivedState()");
             // Provenance transitions (open / import) establish a distinct
-            // editing context with a fresh identity and history line. A
-            // native Open also binds the host-issued URI and revision token.
+            // editing context with a fresh identity and history line, and
+            // open CO-EXISTING — never discarding the active tab. A native
+            // Open also binds the host-issued URI and revision token.
             expect(app).toMatch(
-                /const replaceDocumentSession[\s\S]*?const replacement = createSession\([\s\S]*?canonicalUri,[\s\S]*?fileRevisionToken,[\s\S]*?closeWorkspaceDocument[\s\S]*?openWorkspaceDocument/,
+                /const openDocumentSession[\s\S]*?const replacement = createSession\([\s\S]*?canonicalUri,[\s\S]*?fileRevisionToken,[\s\S]*?openWorkspaceDocument\(/,
             );
+            // Re-opening an already-open host file activates its existing tab
+            // (dedupe by the host canonical URI) instead of opening a twin.
+            expect(app).toContain("activateWorkspaceDocument(current, existing.sessionId)");
+            // Closing a tab is a separate, guarded path through the reducer.
+            expect(app).toMatch(/closeWorkspaceDocument\(current, documentSessionId\)/);
             // An async save completion is identity-bound and cannot steal
             // the path/baseline of a replacement document.
             expect(app).toContain("const savedSessionId = session.sessionId");
@@ -2305,5 +2316,40 @@ describe("descriptor panel: host file-open injection (desktop)", () => {
             expect((states[0] as { diagnosticMessage: string }).diagnosticMessage).toContain("denied");
         }
         unmount();
+    });
+});
+
+describe("primary sidebar (activity bar + workspace explorer)", () => {
+    it("is a panel switch (Explorer | Nodes), with Nodes as the default so the library UX is preserved", () => {
+        const app = read("../src/app.tsx");
+        expect(app).toMatch(/useState<"explorer" \| "nodes">\("nodes"\)/);
+        expect(app).toMatch(/gglab-activitybar-btn[\s\S]*?setSidebarPanel\("explorer"\)/);
+        expect(app).toMatch(/gglab-activitybar-btn[\s\S]*?setSidebarPanel\("nodes"\)/);
+    });
+
+    it("wires the Explorer to the HOST channel: choose root → store it → bounded discovery, cancel with Stop", () => {
+        const app = read("../src/app.tsx");
+        expect(app).toMatch(/channel\.chooseWorkspaceRoot\(\)/);
+        expect(app).toMatch(/setWorkspaceRoot\(current, root\)/);
+        expect(app).toMatch(/channel\.discoverWorkspace\(root\.canonicalWorkspaceUri\)/);
+        expect(app).toMatch(/channel\.cancelWorkspaceDiscovery\(id\)/);
+    });
+
+    it("opens a discovered entry as a co-existing tab via the host exact snapshot (or activates the existing tab) — never an arbitrary path", () => {
+        const app = read("../src/app.tsx");
+        // Already-open detection is by the host canonical URI.
+        expect(app).toMatch(/c\.canonicalUri === entry\.canonicalDocumentUri/);
+        expect(app).toMatch(/channel\.readDocumentSnapshot\(entry\.canonicalDocumentUri\)/);
+        // The open binds the host-issued URI and revision token, co-existing.
+        expect(app).toMatch(
+            /openDocumentSession\(\s*parsed\.value,\s*provenanceFromFile\(snapshot\.displayPath\),\s*snapshot\.canonicalDocumentUri,\s*snapshot\.fileRevisionToken/,
+        );
+    });
+
+    it("renders discovery status, error, and the entry list (a volatile host observation, not a graph authority)", () => {
+        const app = read("../src/app.tsx");
+        expect(app).toContain("gglab-explorer-status");
+        expect(app).toContain("gglab-explorer-error");
+        expect(app).toMatch(/gglab-explorer-list[\s\S]*?entry\.relativePath/);
     });
 });

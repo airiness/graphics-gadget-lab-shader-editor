@@ -70,6 +70,8 @@ import {
     type DocumentSnapshot,
     type DocumentSaveOutcome,
     type FileChannel,
+    type WorkspaceDocumentEntry,
+    type WorkspaceDiscoveryId,
 } from "./host-io.js";
 import { useNativeBuild } from "./useNativeBuild.js";
 import { useShaderPreview } from "./useShaderPreview.js";
@@ -91,6 +93,7 @@ import {
     type CloseChoice,
     type DocumentProvenance,
     type DocumentSession,
+    type DocumentSessionPresentation,
 } from "./document-session.js";
 import {
     documentSaveConflictActions,
@@ -100,11 +103,16 @@ import {
 } from "./document-save-conflict.js";
 import {
     activeWorkspaceDocument,
+    activateWorkspaceDocument,
     closeWorkspaceDocument,
+    commitWorkspacePreviewTarget,
     createDocumentSessionId,
     createWorkspaceSession,
     openWorkspaceDocument,
+    setWorkspaceRoot,
     updateWorkspaceDocument,
+    type DocumentSessionId,
+    type WorkspaceRootHandle,
     type WorkspaceSession,
 } from "./workspace-session.js";
 import { saveShortcutOf } from "./shortcuts.js";
@@ -212,13 +220,10 @@ export function App() {
             throw new Error(`DocumentSession update was refused: ${result.refusal.reason}.`);
         });
     }
-    const [operationNotes, setOperationNotes] = useState<readonly string[]>([]);
+    // Application-level (shared) UI state — owned by the shell, not by any
+    // one open document:
     const [descriptorState, setDescriptorState] = useState<DescriptorPanelState>({ kind: "empty" });
-    const [savedText, setSavedText] = useState(() => SEED_DOCUMENT_TEXT);
     const [loadResult, setLoadResult] = useState<DiagnosticSet | null>(null);
-    const [emission, setEmission] = useState<HlslEmission | null>(null);
-    // Which diagnostic's target the canvas is highlighting (null = none).
-    const [focus, setFocus] = useState<CanvasFocus | null>(null);
     // Library search — a presentation filter over display names (no semantics).
     const [libraryQuery, setLibraryQuery] = useState("");
     // Whole-library collapse — UI session state (layout), never document data.
@@ -230,26 +235,63 @@ export function App() {
      *  the zoned-out zones keep their state on their TAB (a projection of
      *  existing facts; the switch itself owns no state). */
     const [inspectorZone, setInspectorZone] = useState<InspectorZone>("contract");
-    // Connection selection — SESSION state (canvas interaction), never
-    // document data: selecting or deselecting an edge must not dirty the
-    // document. The projection (documentToFlow) receives it and renders
-    // emphasis only; the core stays untouched by a selection.
-    const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
-    // The edge context menu position (cursor point), null = closed.
-    const [edgeMenu, setEdgeMenu] = useState<{ x: number; y: number } | null>(null);
-    // The advanced "reconnect" armed state: Ctrl+click on a connection
-    // selects it AND starts the pending end-point move. Nothing is
-    // mutated until a port click confirms — Esc / blank click cancels and
-    // the original connection is provably untouched (revert by
-    // construction, not by a compensating operation).
-    const [reconnectArmed, setReconnectArmed] = useState<string | null>(null);
-    // Single-node selection — SESSION state, the counterpart of the edge
-    // selection, exclusive with it (one selection fact at a time). It is
-    // the TARGET of the Delete key's node removal and the menu opens with
-    // that node selected. Emphasis only; the core is never touched.
-    const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-    // The node action menu (target node + anchor point), null = closed.
-    const [nodeMenu, setNodeMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
+    // The tab the user asked to close while it is dirty (a confirm guard).
+    // `null` = no pending close. Closing discards only if the user
+    // explicitly confirms; otherwise the document stays open.
+    const [dirtyClose, setDirtyClose] = useState<DocumentSessionId | null>(null);
+    // ---- Primary sidebar (activity bar). The active panel is app-level
+    // UI state; "nodes" is the default so the existing library UX is
+    // unchanged, and "explorer" is the Workspace file browser.
+    const [sidebarPanel, setSidebarPanel] = useState<"explorer" | "nodes">("nodes");
+    // Workspace Explorer (volatile host observation, not a graph authority).
+    const [explorerEntries, setExplorerEntries] = useState<readonly WorkspaceDocumentEntry[] | null>(null);
+    const [explorerBusy, setExplorerBusy] = useState(false);
+    const [explorerError, setExplorerError] = useState<string | null>(null);
+    const [explorerStatus, setExplorerStatus] = useState<string | null>(null);
+    const discoveryRef = useRef<WorkspaceDiscoveryId | null>(null);
+
+    // ---- Per-document presentation (owned by the active DocumentSession).
+    // Selection, the diagnostic focus, the emission snapshot, the .shadergraph
+    // text pane, and the authoring notes all belong to the OPEN DOCUMENT, not
+    // to the app (guidance §4.4). A tab switch swaps between these per-session
+    // records; it must never leave one document's selection, focus, emission,
+    // or notes presented as another document's. The session below is the active
+    // document, so these are literally that document's fields. */
+    const presentation = session.presentation;
+    const selectedNodeId = presentation.selectedNodeId;
+    const selectedConnectionId = presentation.selectedConnectionId;
+    const reconnectArmed = presentation.reconnectArmed;
+    const edgeMenu = presentation.edgeMenu;
+    const nodeMenu = presentation.nodeMenu;
+    const focus = presentation.focus;
+    const emission = presentation.emission;
+    const operationNotes = presentation.notes;
+    const savedText = presentation.savedText;
+    /** One patch to this document's presentation (one intent = one patch). */
+    function patchPresentation(patch: Partial<DocumentSessionPresentation>): void {
+        updateDocumentSession(session.sessionId, (prev) => ({
+            ...prev,
+            presentation: { ...prev.presentation, ...patch },
+        }));
+    }
+    const setSelectedNodeId = (nodeId: string | null): void =>
+        patchPresentation({ selectedNodeId: nodeId, selectedConnectionId: null, edgeMenu: null, nodeMenu: null, reconnectArmed: null });
+    const setSelectedConnectionId = (connectionId: string | null): void =>
+        patchPresentation({ selectedConnectionId: connectionId, selectedNodeId: null, edgeMenu: null, nodeMenu: null, reconnectArmed: null });
+    const setEdgeMenu = (menu: { x: number; y: number } | null): void => patchPresentation({ edgeMenu: menu });
+    const setNodeMenu = (menu: { nodeId: string; x: number; y: number } | null): void => patchPresentation({ nodeMenu: menu });
+    const setReconnectArmed = (id: string | null): void => patchPresentation({ reconnectArmed: id });
+    const setFocus = (value: CanvasFocus | null): void => patchPresentation({ focus: value });
+    const setEmission = (value: HlslEmission | null): void => patchPresentation({ emission: value });
+    const setSavedText = (text: string): void => patchPresentation({ savedText: text });
+    const setOperationNotes = (
+        update: ((previous: readonly string[]) => readonly string[]) | readonly string[],
+    ): void => {
+        updateDocumentSession(session.sessionId, (prev) => {
+            const next = typeof update === "function" ? update(prev.presentation.notes) : update;
+            return { ...prev, presentation: { ...prev.presentation, notes: next } };
+        });
+    };
     // Viewport fit trigger (registered by the flow adapter via onInit).
     const fitRef = useRef<(() => void) | null>(null);
     // Desktop native document I/O channel (absent in the browser
@@ -360,19 +402,23 @@ export function App() {
         setEmission(null);
     }
 
-    const replaceDocumentSession = (
+    /** Open a document as a CO-EXISTING editing context (tab).
+     *
+     * This never discards the currently active document: it adds a new
+     * DocumentSession (a fresh identity and a fresh history line) and
+     * activates it, leaving the previously open document(s) in place with
+     * their own history, baseline, and presentation (guidance #4, #5). The
+     * open-document session's presentation is fresh (empty) by construction,
+     * so this clears nothing on the prior document. The reducer itself
+     * dedupes by the host canonical URI (it activates the same session and
+     * refuses a second session for the same URI), and the caller activates
+     * an already-open file's existing tab instead of opening it again. */
+    const openDocumentSession = (
         next: ShaderGraphDocument,
         source: DocumentProvenance,
         canonicalUri: DocumentSession["canonicalUri"] = null,
         fileRevisionToken: DocumentSession["fileRevisionToken"] = null,
     ): void => {
-        // A new document is a NEW history line, not an undoable step —
-        // and every canvas state bound to the old document is stale.
-        clearCanvasInteractionState();
-        invalidateRevisionDerivedState();
-        // A new document becomes the new baseline — the session is not
-        // dirty merely because its text was imported or a file was
-        // opened.
         const replacement = createSession(
             allocateDocumentSessionId(),
             source,
@@ -382,21 +428,208 @@ export function App() {
         );
         currentDocumentSessionId.current = replacement.sessionId;
         setWorkspace((current) => {
-            if (current.activeDocumentId === null) {
-                return current;
-            }
-            const closed = closeWorkspaceDocument(current, current.activeDocumentId);
-            if (closed.accepted === false) {
-                throw new Error(`Active DocumentSession close was refused: ${closed.refusal.reason}.`);
-            }
-            const opened = openWorkspaceDocument(closed.workspace, replacement);
-            if (opened.accepted === false) {
-                throw new Error(`Replacement DocumentSession open was refused: ${opened.refusal.reason}.`);
-            }
-            return opened.workspace;
+            // Open co-existing: never close the active document. The reducer
+            // activates the new tab (or the same one) and keeps the rest.
+            const opened = openWorkspaceDocument(current, replacement);
+            return opened.accepted ? opened.workspace : current;
         });
-        setOperationNotes([]);
-        setSavedText(serializeShaderGraphDocument(next));
+        setInspectorOpen(true);
+        setInspectorZone("contract");
+    };
+
+    /** Display label for one open document's tab (presentation only; the
+     * host path is provenance, not a WebView filesystem authority). */
+    const tabNameFor = (documentSession: DocumentSession): string =>
+        documentSession.provenance.kind === "file" ? basenameOf(documentSession.provenance.path) : "Untitled";
+
+    /** Switch the active editing tab. This changes ONLY the active
+     * document; it never re-targets the Runtime Preview — the Preview target
+     * is a separate explicit axis, owned by the Workspace (guidance §12.1),
+     * so `commitWorkspacePreviewTarget` is the only path that moves it. The
+     * switched-away tab keeps its own history, baseline, and presentation
+     * (selection/focus/emission/notes) in its DocumentSession record. */
+    const onActivateTab = (documentSessionId: DocumentSessionId): void => {
+        currentDocumentSessionId.current = documentSessionId;
+        setWorkspace((current) => {
+            const activated = activateWorkspaceDocument(current, documentSessionId);
+            return activated.accepted ? activated.workspace : current;
+        });
+        requestAnimationFrame(() => fitRef.current?.());
+    };
+
+    /** Close one tab. A dirty tab requires explicit confirmation (never a
+     * silent discard); a clean tab closes directly. The last remaining tab
+     * cannot be closed: the Workspace keeps at least one open document
+     * (the application requires a live active document). The empty-Workspace
+     * presentation is a deliberate, separate shell concern. */
+    const onCloseTab = (documentSessionId: DocumentSessionId): void => {
+        const doc = workspace.documents.find((candidate) => candidate.sessionId === documentSessionId);
+        if (doc === undefined) {
+            return;
+        }
+        if (workspace.documents.length === 1) {
+            setOperationNotes((previous) => [
+                ...previous,
+                "Cannot close the last open tab — at least one document must stay open.",
+            ]);
+            return;
+        }
+        if (isDirty(doc)) {
+            setDirtyClose(documentSessionId);
+            return;
+        }
+        closeOneTab(documentSessionId);
+    };
+
+    /** Apply one accepted tab close through the Workspace reducer. */
+    function closeOneTab(documentSessionId: DocumentSessionId): void {
+        setWorkspace((current) => {
+            const closed = closeWorkspaceDocument(current, documentSessionId);
+            return closed.accepted ? closed.workspace : current;
+        });
+    }
+
+    /** The user confirmed discarding one dirty tab's unsaved changes. */
+    const confirmDirtyClose = (): void => {
+        const target = dirtyClose;
+        if (target !== null) {
+            closeOneTab(target);
+        }
+        setDirtyClose(null);
+    };
+
+    /** Explicit user intent: make the active document the attached Runtime's
+     * Preview target. This is the only path that moves the Preview-target
+     * axis (guidance §12.1) — switching tabs or editing never re-targets the
+     * Runtime implicitly; only this deliberate action does. */
+    const onPreviewThisGraph = (): void => {
+        const target = session.sessionId;
+        const name = tabNameFor(session);
+        setWorkspace((current) => {
+            const transition = commitWorkspacePreviewTarget(current, target);
+            return transition.accepted ? transition.workspace : current;
+        });
+        setOperationNotes((previous) => [
+            ...previous,
+            `Preview target set to "${name}" — switching tabs keeps it until you choose another.`,
+        ]);
+    };
+
+    // ---- Workspace Explorer. The host owns the root dialog, discovery,
+    // and the exact snapshot read; the WebView only observes host-issued
+    // canonical URIs (never an arbitrary path) and opens them as co-existing
+    // tabs. Discovery is bounded/cancellable.
+    const onChooseWorkspaceRoot = async (): Promise<void> => {
+        const channel = fileChannel;
+        if (channel === null) {
+            return;
+        }
+        setExplorerError(null);
+        setExplorerStatus(null);
+        try {
+            const root = await channel.chooseWorkspaceRoot();
+            if (root === null) {
+                return; // user cancelled the directory dialog
+            }
+            setWorkspace((current) => setWorkspaceRoot(current, root));
+            setExplorerEntries(null);
+            setSidebarPanel("explorer");
+            // Discover with the just-chosen root (the state read is still the
+            // pre-update closure, so pass the authority explicitly).
+            await onDiscoverWorkspace(root);
+        } catch (error) {
+            setExplorerError(error instanceof Error ? error.message : "Choosing the workspace root failed.");
+        }
+    };
+
+    const onDiscoverWorkspace = async (rootOverride: WorkspaceRootHandle | null = null): Promise<void> => {
+        const channel = fileChannel;
+        const root = rootOverride !== null ? rootOverride : workspace.workspaceRoot;
+        if (channel === null || root === null) {
+            setExplorerStatus("Choose a workspace root first (desktop host only).");
+            return;
+        }
+        setExplorerBusy(true);
+        setExplorerError(null);
+        setExplorerStatus("Discovering workspace documents…");
+        try {
+            const attempt = await channel.discoverWorkspace(root.canonicalWorkspaceUri);
+            discoveryRef.current = attempt.discoveryId;
+            const settlement = await attempt.result;
+            discoveryRef.current = null;
+            if (settlement.kind === "changed") {
+                setExplorerEntries(settlement.snapshot.documents);
+                setExplorerStatus(
+                    settlement.snapshot.documents.length === 0
+                        ? "No .shadergraph documents found in this workspace."
+                        : `Found ${settlement.snapshot.documents.length} document${settlement.snapshot.documents.length === 1 ? "" : "s"}.`,
+                );
+            } else if (settlement.kind === "unchanged") {
+                setExplorerStatus("Workspace unchanged since the last discovery.");
+            } else if (settlement.kind === "cancelled") {
+                setExplorerStatus("Discovery was cancelled.");
+            } else {
+                setExplorerError("Workspace discovery failed on the host.");
+            }
+        } catch (error) {
+            discoveryRef.current = null;
+            setExplorerError(error instanceof Error ? error.message : "Workspace discovery failed.");
+        } finally {
+            setExplorerBusy(false);
+        }
+    };
+
+    const onStopDiscovery = async (): Promise<void> => {
+        const channel = fileChannel;
+        const id = discoveryRef.current;
+        if (channel === null || id === null) {
+            return;
+        }
+        try {
+            await channel.cancelWorkspaceDiscovery(id);
+            setExplorerStatus("Cancellation requested — the host will settle it.");
+        } catch {
+            // The host's cancel is best-effort; the settlement promise will
+            // still resolve and drive the final state.
+        }
+    };
+
+    /** Open one discovered Workspace document as a co-existing tab (or
+     * activate its existing tab if it is already open). */
+    const onOpenEntry = async (entry: WorkspaceDocumentEntry): Promise<void> => {
+        const channel = fileChannel;
+        if (channel === null) {
+            return;
+        }
+        const existing = workspace.documents.find((c) => c.canonicalUri === entry.canonicalDocumentUri);
+        if (existing !== undefined) {
+            onActivateTab(existing.sessionId);
+            return;
+        }
+        setExplorerStatus(`Opening ${entry.relativePath}…`);
+        try {
+            const snapshot = await channel.readDocumentSnapshot(entry.canonicalDocumentUri);
+            const parsed = parseShaderGraphDocument(snapshot.text);
+            if (parsed.ok && parsed.value !== null) {
+                openDocumentSession(
+                    parsed.value,
+                    provenanceFromFile(snapshot.displayPath),
+                    snapshot.canonicalDocumentUri,
+                    snapshot.fileRevisionToken,
+                );
+                setExplorerStatus(null);
+                requestAnimationFrame(() => fitRef.current?.());
+                return;
+            }
+            setLoadResult({ title: "Workspace open", ok: false, diagnostics: parsed.diagnostics, passedText: `Could not open ${entry.relativePath} through the core reader.` });
+            setExplorerStatus(null);
+        } catch (error) {
+            setOperationNotes((previous) => [
+                ...previous,
+                `Workspace open failed (${error instanceof Error ? error.message : String(error)}).`,
+            ]);
+            setExplorerStatus(null);
+        }
     };
 
     /** Open a host-owned exact `.shadergraph` snapshot through the core reader. */
@@ -412,13 +645,32 @@ export function App() {
             }
             const parsed = parseShaderGraphDocument(snapshot.text);
             if (parsed.ok && parsed.value !== null) {
-                replaceDocumentSession(
-                    parsed.value,
-                    provenanceFromFile(snapshot.displayPath),
-                    snapshot.canonicalDocumentUri,
-                    snapshot.fileRevisionToken,
-                );
-                setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: `Opened ${snapshot.displayPath}; the session state was restored.` });
+                const value = parsed.value;
+                // If this exact host file is already an open tab, switch to
+                // it (dedupe by the host canonical URI) instead of opening a
+                // second tab. Otherwise open a co-existing new tab.
+                setWorkspace((current) => {
+                    const existing = current.documents.find(
+                        (candidate) => candidate.canonicalUri === snapshot.canonicalDocumentUri,
+                    );
+                    if (existing !== undefined) {
+                        const activated = activateWorkspaceDocument(current, existing.sessionId);
+                        return activated.accepted ? activated.workspace : current;
+                    }
+                    const replacement = createSession(
+                        allocateDocumentSessionId(),
+                        provenanceFromFile(snapshot.displayPath),
+                        value,
+                        snapshot.canonicalDocumentUri,
+                        snapshot.fileRevisionToken,
+                    );
+                    currentDocumentSessionId.current = replacement.sessionId;
+                    const opened = openWorkspaceDocument(current, replacement);
+                    return opened.accepted ? opened.workspace : current;
+                });
+                setInspectorOpen(true);
+                setInspectorZone("contract");
+                setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: `Opened ${snapshot.displayPath}; the tab is now active.` });
                 requestAnimationFrame(() => fitRef.current?.());
                 return;
             }
@@ -1222,9 +1474,10 @@ export function App() {
         if (parsed.ok && parsed.value !== null) {
             // An imported (text) document owns NO file path — a later
             // Save must ask for a destination instead of touching a file
-            // path left over from any earlier document.
-            replaceDocumentSession(parsed.value, provenanceFromImport());
-            setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: "The saved document loaded; the session state was restored." });
+            // path left over from any earlier document. It opens a fresh
+            // co-existing tab, leaving the active document in place.
+            openDocumentSession(parsed.value, provenanceFromImport());
+            setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: "The saved document opened in a new tab." });
             requestAnimationFrame(() => fitRef.current?.());
             return;
         }
@@ -1360,9 +1613,131 @@ export function App() {
                     </Badge>
                 </div>
             </header>
+            <div className="gglab-tabs" role="tablist" aria-label="Open documents">
+                <div className="gglab-tabs-list">
+                    {workspace.documents.map((doc) => {
+                        const isActive = doc.sessionId === workspace.activeDocumentId;
+                        const isPreviewTarget = doc.sessionId === workspace.preview.targetDocumentId;
+                        const onlyTab = workspace.documents.length === 1;
+                        return (
+                            <div key={doc.sessionId} className={`gglab-tab${isActive ? " gglab-tab-active" : ""}`} role="tab" aria-selected={isActive}>
+                                <button
+                                    type="button"
+                                    className="gglab-tab-label"
+                                    onClick={() => onActivateTab(doc.sessionId)}
+                                    title={doc.provenance.kind === "file" ? doc.provenance.path : "Untitled document"}
+                                >
+                                    {isPreviewTarget && (
+                                        <span className="gglab-tab-preview" title="Attached Runtime Preview target" aria-label="Preview target">
+                                            ▶
+                                        </span>
+                                    )}
+                                    {isDirty(doc) && <span className="gglab-tab-modified" title="Unsaved changes" aria-label="Unsaved changes">●</span>}
+                                    {tabNameFor(doc)}
+                                </button>
+                                <button
+                                    type="button"
+                                    className="gglab-tab-close"
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        onCloseTab(doc.sessionId);
+                                    }}
+                                    disabled={onlyTab}
+                                    title={
+                                        onlyTab
+                                            ? "The only open tab — at least one document must stay open"
+                                            : `Close ${tabNameFor(doc)}`
+                                    }
+                                    aria-label={`Close ${tabNameFor(doc)}`}
+                                >
+                                    ×
+                                </button>
+                            </div>
+                        );
+                    })}
+                </div>
+                <div className="gglab-tabs-actions">
+                    <Button
+                        variant="toolbar"
+                        onClick={onPreviewThisGraph}
+                        title="Attach the active document to the Runtime Preview. Explicit intent: switching tabs keeps the target."
+                    >
+                        ▶ Preview this graph
+                    </Button>
+                </div>
+            </div>
             <div className={`gglab-body${libraryOpen ? "" : " gglab-body-library-collapsed"}${inspectorOpen ? "" : " gglab-body-inspector-collapsed"}`}>
-                <aside className="gglab-side gglab-side-left">
-                    {libraryOpen ? (
+                <aside className="gglab-side gglab-side-left gglab-primary-sidebar">
+                    {/* Activity bar — switches the primary sidebar panel.
+                        "Nodes" is the default (the existing library), and
+                        "Explorer" is the Workspace file browser. */}
+                    <div className="gglab-activitybar" role="tablist" aria-label="Workspace panels">
+                        <button
+                            type="button"
+                            role="tab"
+                            aria-selected={sidebarPanel === "explorer"}
+                            className={`gglab-activitybar-btn${sidebarPanel === "explorer" ? " gglab-activitybar-active" : ""}`}
+                            onClick={() => setSidebarPanel("explorer")}
+                        >
+                            Explorer
+                        </button>
+                        <button
+                            type="button"
+                            role="tab"
+                            aria-selected={sidebarPanel === "nodes"}
+                            className={`gglab-activitybar-btn${sidebarPanel === "nodes" ? " gglab-activitybar-active" : ""}`}
+                            onClick={() => setSidebarPanel("nodes")}
+                        >
+                            Nodes
+                        </button>
+                    </div>
+                    {sidebarPanel === "explorer" ? (
+                        <section className="gglab-explorer">
+                            <div
+                                className="gglab-explorer-root"
+                                title={workspace.workspaceRoot !== null ? workspace.workspaceRoot.displayPath : undefined}
+                            >
+                                {workspace.workspaceRoot !== null ? workspace.workspaceRoot.displayPath : "No workspace"}
+                            </div>
+                            <div className="gglab-explorer-actions">
+                                {fileChannel !== null && (
+                                    <Button variant="secondary" onClick={() => void onChooseWorkspaceRoot()}>
+                                        Choose…
+                                    </Button>
+                                )}
+                                <Button variant="primary" onClick={() => void onDiscoverWorkspace()} disabled={explorerBusy}>
+                                    {explorerBusy ? "Discovering…" : "Discover"}
+                                </Button>
+                                {explorerBusy && (
+                                    <Button variant="ghost" onClick={() => void onStopDiscovery()}>
+                                        Stop
+                                    </Button>
+                                )}
+                            </div>
+                            {explorerStatus !== null && <p className="gglab-explorer-status">{explorerStatus}</p>}
+                            {explorerError !== null && <p className="gglab-explorer-error">{explorerError}</p>}
+                            {explorerEntries !== null && explorerEntries.length > 0 && (
+                                <ul className="gglab-explorer-list">
+                                    {explorerEntries.map((entry) => {
+                                        const alreadyOpen = workspace.documents.some((c) => c.canonicalUri === entry.canonicalDocumentUri);
+                                        return (
+                                            <li key={entry.canonicalDocumentUri} className="gglab-explorer-entry">
+                                                <button
+                                                    type="button"
+                                                    className="gglab-explorer-entry-btn"
+                                                    onClick={() => void onOpenEntry(entry)}
+                                                    title={entry.relativePath}
+                                                >
+                                                    {entry.relativePath}
+                                                    {alreadyOpen && <span className="gglab-explorer-open" title="Already open in a tab"> ·</span>}
+                                                </button>
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                            )}
+                        </section>
+                    ) : libraryOpen ? (
                         <>
                             <div className="gglab-library-search">
                                 <Input
@@ -1963,6 +2338,24 @@ export function App() {
                                 Don't Save
                             </Button>
                             <Button variant="ghost" onClick={() => chooseCloseChoice("cancel")}>
+                                Cancel
+                            </Button>
+                        </ButtonGroup>
+                    </div>
+                </div>
+            )}
+            {dirtyClose !== null && (
+                <div className="gglab-close-prompt" role="alertdialog" aria-modal="true" aria-label="Close document">
+                    <div className="gglab-close-prompt-card">
+                        <h2 className="gglab-close-prompt-title">Close without saving?</h2>
+                        <p className="gglab-close-prompt-text">
+                            This tab has unsaved changes; closing it discards them. Keep them by saving first (Save / Save As), or close to discard.
+                        </p>
+                        <ButtonGroup className="flex justify-end">
+                            <Button variant="destructive" onClick={confirmDirtyClose}>
+                                Close anyway
+                            </Button>
+                            <Button variant="ghost" onClick={() => setDirtyClose(null)}>
                                 Cancel
                             </Button>
                         </ButtonGroup>

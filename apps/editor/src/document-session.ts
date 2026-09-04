@@ -27,9 +27,10 @@ import {
     recordHistory,
     redoHistory,
     undoHistory,
+    type CanvasFocus,
     type DocumentHistory,
 } from "@gglab/editor-ui";
-import { serializeShaderGraphDocument, type ShaderGraphDocument } from "@gglab/shader-graph-core";
+import { serializeShaderGraphDocument, type HlslEmission, type ShaderGraphDocument } from "@gglab/shader-graph-core";
 import type {
     CanonicalDocumentUri,
     DocumentSessionId,
@@ -53,6 +54,57 @@ export function provenanceFromImport(): DocumentProvenance {
 }
 
 /**
+ * One open document's session-LOCAL presentation and evidence anchors.
+ *
+ * These are per-DocumentSession by the ownership model (guidance §4.4):
+ * selection, the diagnostic focus, the active emission snapshot, and the
+ * authoring notes belong to the document that produced them. A tab switch
+ * must move between these records — it must never leave one document's
+ * selection pointing at another document's nodes, or present one document's
+ * emission as another document's. They are presentation, never graph
+ * semantics: nothing here mutates the document, and clearing it (a
+ * document change) never touches history.
+ */
+export interface DocumentSessionPresentation {
+    /** The selected node id (session-local single-selection target). */
+    readonly selectedNodeId: string | null;
+    /** The selected connection id (exclusive with selectedNodeId). */
+    readonly selectedConnectionId: string | null;
+    /** The armed reconnection connection id (a pending gesture). */
+    readonly reconnectArmed: string | null;
+    /** The edge context-menu anchor (null = closed). */
+    readonly edgeMenu: { readonly x: number; readonly y: number } | null;
+    /** The node action-menu target + anchor (null = closed). */
+    readonly nodeMenu: { readonly nodeId: string; readonly x: number; readonly y: number } | null;
+    /** The diagnostic navigation focus the canvas highlights. */
+    readonly focus: CanvasFocus | null;
+    /** This document's emission snapshot (or `null` while none stands). */
+    readonly emission: HlslEmission | null;
+    /** This document's authoring notes (a chronological, replaceable list). */
+    readonly notes: readonly string[];
+    /** This document's .shadergraph text pane. Stable across authoring
+     * (an edit does not rewrite it); reset on reload and set on save/open. */
+    readonly savedText: string;
+}
+
+/** A fresh presentation: the volatile selection/focus/emission/notes are
+ * empty, but the per-document text pane is carried (a document change must
+ * not wipe that document's text pane). */
+export function emptyPresentation(savedText: string): DocumentSessionPresentation {
+    return {
+        selectedNodeId: null,
+        selectedConnectionId: null,
+        reconnectArmed: null,
+        edgeMenu: null,
+        nodeMenu: null,
+        focus: null,
+        emission: null,
+        notes: [],
+        savedText,
+    };
+}
+
+/**
  * The full editing context for one document. The current graph lives only in
  * `history.present`; keeping history and the persistence baseline in this
  * aggregate prevents active-document switching from pairing one document's
@@ -69,6 +121,8 @@ export interface DocumentSession extends WorkspaceDocumentHandle {
     /** Canonical serialization of the document in its last saved /
      * last established state. */
     readonly savedBaseline: string;
+    /** This document's session-local presentation and evidence anchors. */
+    readonly presentation: DocumentSessionPresentation;
 }
 
 export function createSession(
@@ -88,29 +142,36 @@ export function createSession(
         history: createHistory(document),
         provenance,
         savedBaseline: serializeShaderGraphDocument(document),
+        presentation: emptyPresentation(serializeShaderGraphDocument(document)),
     };
 }
 
-/** Record one accepted authoring intent in this document's own history. */
+/** Record one accepted authoring intent in this document's own history.
+ *
+ * A genuine document move makes this document's selection, focus, and
+ * emission stale (a selection on a node that may no longer exist, or an
+ * emission of the prior revision): they are reset with it. A no-op (the
+ * same document instance) changes nothing and returns the same aggregate. */
 export function recordDocumentChange(
     session: DocumentSession,
     document: ShaderGraphDocument,
     label: string,
 ): DocumentSession {
     const history = recordHistory(session.history, document, label);
-    return history === session.history ? session : { ...session, history };
+    return history === session.history ? session : { ...session, history, presentation: emptyPresentation(session.presentation.savedText) };
 }
 
-/** Move this document one history step back. */
+/** Move this document one history step back. The restored document's
+ * session-local presentation is stale for the new revision — reset it. */
 export function undoDocumentChange(session: DocumentSession): DocumentSession {
     const history = undoHistory(session.history);
-    return history === session.history ? session : { ...session, history };
+    return history === session.history ? session : { ...session, history, presentation: emptyPresentation(session.presentation.savedText) };
 }
 
-/** Move this document one history step forward. */
+/** Move this document one history step forward (same reset rule). */
 export function redoDocumentChange(session: DocumentSession): DocumentSession {
     const history = redoHistory(session.history);
-    return history === session.history ? session : { ...session, history };
+    return history === session.history ? session : { ...session, history, presentation: emptyPresentation(session.presentation.savedText) };
 }
 
 /**
@@ -134,6 +195,9 @@ export function sessionSaved(
         fileRevisionToken: snapshot.fileRevisionToken,
         provenance: provenanceFromFile(snapshot.displayPath),
         savedBaseline: snapshot.text,
+        // A save does not retarget selection; it does refresh this
+        // document's text pane to the exact bytes that landed on disk.
+        presentation: { ...session.presentation, savedText: snapshot.text },
     };
 }
 
@@ -167,7 +231,27 @@ export function sessionReloaded(
         // comparison of canonical document states, so a successful reload is
         // clean even when the external writer used another JSON layout.
         savedBaseline: serializeShaderGraphDocument(document),
+        // A new snapshot makes the prior revision's selection/focus/emission
+        // stale for this document — reset the session-local presentation,
+        // but the text pane now shows the reloaded document.
+        presentation: emptyPresentation(serializeShaderGraphDocument(document)),
     };
+}
+
+/** Append one authoring note to THIS document's own note list (a refused
+ * operation, a save event, or an explicit failure are recorded against the
+ * session that saw them — never against whatever is active later). */
+export function appendSessionNote(session: DocumentSession, note: string): DocumentSession {
+    return { ...session, presentation: { ...session.presentation, notes: [...session.presentation.notes, note] } };
+}
+
+/** Clear this document's authoring notes. A genuine document change already
+ * does this (see `recordDocumentChange`); an explicit dismissal calls it. */
+export function clearSessionNotes(session: DocumentSession): DocumentSession {
+    if (session.presentation.notes.length === 0) {
+        return session;
+    }
+    return { ...session, presentation: { ...session.presentation, notes: [] } };
 }
 
 /** Dirty: the current document's canonical bytes differ from the

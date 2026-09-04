@@ -189,7 +189,11 @@ body {
 
 .gglab-app {
     display: grid;
-    grid-template-rows: 46px minmax(0, 1fr) 30px;
+    /* header / document tab strip / body / status strip — one row each, in
+       DOM order. The row list MUST stay in sync with the in-flow children:
+       a missing row silently pushes the body into the 30px status row and
+       gives the tab strip the flex space. */
+    grid-template-rows: 46px auto minmax(0, 1fr) 30px;
     height: 100%;
 }
 
@@ -242,6 +246,199 @@ body {
 
 .gglab-body-library-collapsed.gglab-body-inspector-collapsed {
     grid-template-columns: 48px minmax(0, 1fr) 48px;
+}
+
+/* Document tab strip — the open editing contexts (guidance #4/#5). Each tab
+   is a distinct DocumentSession (its own history / baseline / presentation):
+   switching changes the ACTIVE document only. ▶ marks the explicit Preview
+   target, ● marks unsaved changes, × closes (dirty tabs need confirmation). */
+.gglab-tabs {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 12px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border-soft);
+}
+
+.gglab-tabs-list {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    overflow-x: auto;
+}
+
+.gglab-tab {
+    display: inline-flex;
+    align-items: center;
+    max-width: 220px;
+    background: transparent;
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-2);
+    color: var(--muted);
+}
+
+.gglab-tab-active {
+    background: var(--panel-2);
+    border-color: var(--border-hi);
+    color: var(--text);
+}
+
+.gglab-tab-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    font-size: var(--type-meta);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+}
+
+.gglab-tab-close {
+    padding: 5px 8px;
+    background: none;
+    border: none;
+    border-left: 1px solid var(--border-soft);
+    color: var(--muted);
+    font-size: var(--type-meta);
+    cursor: pointer;
+}
+
+.gglab-tab-close:hover:not(:disabled) {
+    color: var(--text);
+}
+
+.gglab-tab-close:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.gglab-tab-preview {
+    color: var(--ok);
+    font-size: var(--type-meta);
+}
+
+.gglab-tab-modified {
+    color: var(--warn);
+    font-size: var(--type-meta);
+}
+
+.gglab-tabs-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* ---- Primary sidebar (activity bar). Switches between the Explorer
+   (Workspace file browser) and the Nodes library. The host owns the root
+   dialog, discovery, and snapshot reads; the WebView observes only
+   host-issued canonical URIs. */
+.gglab-activitybar {
+    display: flex;
+    flex-direction: row;
+    gap: 4px;
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid var(--border-soft);
+}
+
+.gglab-activitybar-btn {
+    flex: 1;
+    padding: 6px 8px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--r-2);
+    color: var(--muted);
+    font-size: var(--type-meta);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.gglab-activitybar-btn:hover {
+    color: var(--text);
+    background: var(--panel-2);
+}
+
+.gglab-activitybar-active {
+    color: var(--text);
+    border-color: var(--border-hi);
+    background: var(--panel-2);
+}
+
+.gglab-explorer {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.gglab-explorer-root {
+    font-size: var(--type-meta);
+    color: var(--text);
+    font-weight: var(--weight-strong);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gglab-explorer-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.gglab-explorer-status {
+    font-size: var(--type-meta);
+    color: var(--muted);
+    margin: 0;
+}
+
+.gglab-explorer-error {
+    font-size: var(--type-meta);
+    color: var(--error);
+    margin: 0;
+}
+
+.gglab-explorer-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.gglab-explorer-entry {
+    min-width: 0;
+}
+
+.gglab-explorer-entry-btn {
+    width: 100%;
+    text-align: left;
+    padding: 5px 8px;
+    background: transparent;
+    border: none;
+    border-radius: var(--r-1);
+    color: var(--text);
+    font-size: var(--type-meta);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+
+.gglab-explorer-entry-btn:hover {
+    background: var(--panel-2);
+}
+
+.gglab-explorer-open {
+    color: var(--ok);
 }
 
 .gglab-side {
