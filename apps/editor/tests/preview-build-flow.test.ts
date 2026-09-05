@@ -681,6 +681,39 @@ describe("Attached Preview Runtime authority - composition facts read by the flo
         expect(manager.ownedRuntime).toBeNull();
     });
 
+    it("keeps enforcing attached-runtime-deployment-mismatch even from a sticky unproven exit", async () => {
+        const runtime = runtimes([{ kind: "launched", runtimeIdentity: "runtime-a" }], false, true, "wait-failed");
+        const manager = new AttachedPreviewRuntimeManager(runtime, SESSION_ID);
+        const port = new TestToolPort();
+        const flow = new PreviewBuildFlow(fake(), port, SESSION_ID, observations(), manager);
+        const input = composition();
+
+        await publish(flow);
+        const launched = await manager.launch(CANDIDATE_A);
+        if (!launched.launched) {
+            throw new Error("test Preview Runtime must launch");
+        }
+        // Sticky unproven teardown on deployment A
+        const teardown = manager.terminateAndJoin();
+        expect(runtime.releaseStop()).toBe(true);
+        await expect(teardown).resolves.toMatchObject({ outcome: "exit-unproven" });
+        expect(manager.state).toMatchObject({ kind: "exit-unproven" });
+
+        // The current tool has since moved to a DIFFERENT deployment (C):
+        // the build gate still refuses against the owned deployment A.
+        port.state = compatible(CANDIDATE_C);
+        expect(flow.buildGate(input)).toMatchObject({
+            admitted: false,
+            reasons: [{ reason: "attached-runtime-deployment-mismatch" }],
+        });
+        // And a launch on the new deployment is structurally refused.
+        await expect(manager.launch(CANDIDATE_C)).resolves.toMatchObject({
+            launched: false,
+            reason: "exit-unproven",
+        });
+        expect(runtime.launchCalls).toBe(1);
+    });
+
     it("routes a launch candidate-invalidated host fact to the ordinary tool owner", async () => {
         const runtime = runtimes([
             {

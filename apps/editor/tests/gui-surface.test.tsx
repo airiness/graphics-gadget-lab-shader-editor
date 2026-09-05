@@ -2443,9 +2443,15 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         // a stop after an unproven exit re-reports without a host call.
         expect(managerSource).toMatch(/outcome: "join-in-progress"/);
         expect(managerSource).toMatch(/outcome: "unproven-rejoin"/);
-        // The ownership binding projects the exact deployment toolPath and
-        // is retained until the exit is proven.
-        expect(managerSource).toMatch(/deploymentToolPath: this\.ownedCandidateValue\.toolPath/);
+        // The ownership binding projects the exact deployment toolPath of
+        // the owned candidate and is retained until the exit is proven.
+        expect(managerSource).toMatch(/deploymentToolPath: candidate\.toolPath/);
+        // The single stop-request lane is shared by stop() and
+        // terminateAndJoin(); a failed request rolls the state back to
+        // `running` (ownership retained) and rejects the teardown.
+        expect(managerSource).toMatch(/private stopLane/);
+        expect(managerSource).toMatch(/this\.stateValue = \{ kind: "running", runtimeId, runtimeIdentity \}/);
+        expect(managerSource).toMatch(/could not be stopped/);
     });
 
     it("a Workspace seeds its Preview target at the first open and re-seeds it on a target close (never a live follow)", () => {

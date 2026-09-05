@@ -141,10 +141,17 @@ type TerminationProof =
 
 Rules:
 
-- `already-exited` is produced only when the manager is already `idle`; it is
-  never inferred from the host's `alreadySettled` registry answer.
-- `terminating` plus another termination request joins the same Runtime exit
-  settlement; it does not issue a second stop request.
+- `already-exited` is produced only from states where the manager has
+  PROVEN there is no owned Runtime (`idle` / `launch-refused`); it is never
+  inferred from the host's `alreadySettled` registry answer or a registry
+  miss.
+- One host stop request per RuntimeId: `stop()` and `terminateAndJoin()`
+  join the same in-flight request; a failed stop request REJECTS the
+  teardown and rolls state back to `running` (ownership retained) — it must
+  never hang on a stale settlement and never is a proven teardown.
+- Unmount / cleanup must call the strict teardown (fire-and-forget), not a
+  plain `stop()`: a plain stop is a no-op while `launching` and would orphan
+  a Runtime whose launch settles after unmount.
 - `wait-failed` enters `exit-unproven` and retains ownership.
 - In Slice 1, `exit-unproven` is sticky. Repeated Stop calls re-report the
   stored unproven fact and make no host call.

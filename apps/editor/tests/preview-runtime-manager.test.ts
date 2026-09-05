@@ -111,6 +111,66 @@ describe("attached Preview Runtime lifetime authority — termination proof", ()
         expect(manager.state).toEqual({ kind: "idle" });
         expect(manager.ownedRuntime).toBeNull();
     });
+
+    it("a failed stop request rejects BOTH a concurrent stop and the strict teardown, with no hang", async () => {
+        const boundary = runtime({
+            launches: [{ kind: "launched", runtimeIdentity: "runtime-a" }],
+            holdStopUntilRelease: true,
+            stopReleaseKind: "stopped",
+            stopRequestFailure: true,
+        });
+        const manager = managerFor(boundary);
+        const launched = await manager.launch(CANDIDATE_A);
+        if (launched.launched !== true) {
+            throw new Error("test launch must attach");
+        }
+
+        // Stop request pending and then REJECTED; a strict teardown
+        // started concurrently must join that SAME request and reject too —
+        // never hang on the stale exit settlement.
+        const plain = manager.stop();
+        const strict = manager.terminateAndJoin();
+        await expect(plain).rejects.toThrow(/stop request/i);
+        await expect(strict).rejects.toThrow(/stop request failed|could not be stopped/i);
+
+        // State rolled back to `running`; ownership (and the settlement)
+        // retained; a retry stop now settles and completes the teardown.
+        expect(manager.state).toMatchObject({ kind: "running", runtimeId: { sequence: 1 } });
+        expect(manager.ownedRuntime).toMatchObject({ deploymentToolPath: CANDIDATE_A.toolPath });
+
+        await expect(manager.stop()).resolves.toMatchObject({ outcome: "stop-requested" });
+        expect(boundary.releaseStop()).toBe(true);
+        await expect(manager.terminateAndJoin()).resolves.toEqual({ outcome: "terminated" });
+        expect(manager.state).toEqual({ kind: "idle" });
+    });
+
+    it("terminates a launch that settles AFTER an unmount-style strict teardown was started", async () => {
+        const boundary = runtime(
+            {
+                launches: [{ kind: "launched", runtimeIdentity: "runtime-a" }],
+                keepLaunchPending: true,
+                holdStopUntilRelease: true,
+                stopReleaseKind: "stopped",
+            },
+        );
+        const manager = managerFor(boundary);
+        const pendingLaunch = manager.launch(CANDIDATE_A);
+
+        // unmount cleanup: strict teardown fired while the launch is still
+        // in flight (a plain stop would be a no-op and orphan the Runtime)
+        const teardown = manager.terminateAndJoin();
+        expect(boundary.releaseLaunch()).toBe(true);
+        const launched = await pendingLaunch;
+        expect(launched.launched).toBe(true);
+
+        // the SAME pending teardown then requests the stop for the
+        // just-settled Runtime and completes when the exit is proven
+        expect(boundary.releaseStop()).toBe(true);
+        await expect(teardown).resolves.toEqual({ outcome: "terminated" });
+        expect(boundary.resolvedExits).toBe(1);
+        expect(manager.state).toEqual({ kind: "idle" });
+        expect(manager.ownedRuntime).toBeNull();
+    });
 });
 
 describe("attached Preview Runtime lifetime authority — the unproven exit", () => {
@@ -164,6 +224,33 @@ describe("attached Preview Runtime lifetime authority — the unproven exit", ()
         });
         expect(manager.state).toMatchObject({ kind: "exit-unproven" });
         expect(manager.ownedRuntime).not.toBeNull();
+    });
+
+    it("a NATURAL wait-failed exit (no stop request) is also unproven and retains the binding", async () => {
+        const boundary = runtime({ launches: [{ kind: "launched", runtimeIdentity: "runtime-a" }] });
+        const manager = managerFor(boundary);
+        const launched = await manager.launch(CANDIDATE_A);
+        if (launched.launched !== true) {
+            throw new Error("test launch must attach");
+        }
+        expect(manager.ownedRuntime).toMatchObject({ runtimeId: { sequence: 1 } });
+
+        // The host "exited" but could not prove it (natural wait-failed).
+        expect(boundary.exit({ sequence: 1 }, 0, "wait-failed")).toBe(true);
+        await launched.exited;
+        expect(manager.state).toMatchObject({ kind: "exit-unproven", runtimeId: { sequence: 1 } });
+        // Ownership + deployment binding RETAINED — the process may still exist.
+        expect(manager.ownedRuntime).toEqual({
+            runtimeId: { sequence: 1 },
+            runtimeIdentity: "runtime-a",
+            deploymentToolPath: CANDIDATE_A.toolPath,
+        });
+        // And the launch lane is structurally closed:
+        await expect(manager.launch(CANDIDATE_A)).resolves.toMatchObject({
+            launched: false,
+            reason: "exit-unproven",
+        });
+        expect(boundary.launchCalls).toBe(1);
     });
 
     it("refuses a launch while terminating; the next launch attaches only after the PROVEN exit", async () => {
@@ -220,6 +307,9 @@ describe("attached Preview Runtime lifetime authority — launch refusal", () =>
         expect(manager.state).toMatchObject({ kind: "launch-refused" });
         expect(manager.ownedRuntime).toBeNull();
         expect(manager.launchInFlight).toBe(false);
+        // `already-exited` is also valid from `launch-refused` (the manager
+        // has PROVEN no owned Runtime) — never from a host registry miss.
+        await expect(manager.terminateAndJoin()).resolves.toEqual({ outcome: "already-exited" });
 
         const second = await manager.launch(CANDIDATE_A);
         expect(second.launched).toBe(true);

@@ -128,9 +128,13 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             flowRef.current = null;
             setFlow(null);
             if (currentManager !== null) {
-                // Best-effort stop request at unmount; the join must never
-                // block teardown, and an unproven outcome never rejects it.
-                void currentManager.stop().catch(() => undefined);
+                // Strict teardown, fire-and-forget. A plain `stop()` is a
+                // NO-OP while `launching` (nothing attached yet) and would
+                // orphan a Runtime whose launch settles after unmount;
+                // `terminateAndJoin()` first joins the pending launch lane
+                // and then completes the teardown. It must never block the
+                // unmount.
+                void currentManager.terminateAndJoin().catch(() => undefined);
             }
             void currentFlow;
         };

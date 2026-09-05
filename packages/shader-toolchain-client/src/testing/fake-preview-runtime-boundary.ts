@@ -24,6 +24,10 @@ export interface FakePreviewRuntimeSpec {
      *  host that could only best-effort kill/wait (cannot prove exit).
      *  Defaults to `"stopped"`. */
     readonly stopReleaseKind?: "stopped" | "wait-failed";
+    /** When set, the NEXT `stopAttachedPreview` call REJECTS (the host could
+     *  not even process the request; the process may still exist).
+     *  One-shot: a later call behaves normally. */
+    readonly stopRequestFailure?: boolean | undefined;
 }
 
 export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
@@ -36,8 +40,18 @@ export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
     } | null = null;
     private exits = new Map<number, (exit: PreviewRuntimeExit) => void>();
     private heldStop: { readonly runtimeId: PreviewRuntimeId; readonly settle: (exit: PreviewRuntimeExit) => void } | null = null;
+    private settledExitCount = 0;
+    private stopRequestFailureArmed = false;
 
-    constructor(private readonly spec: FakePreviewRuntimeSpec) {}
+    constructor(private readonly spec: FakePreviewRuntimeSpec) {
+        this.stopRequestFailureArmed = this.spec.stopRequestFailure === true;
+    }
+
+    /** Number of exit settlements actually delivered (natural exit or a
+     *  released stop) — a probe that the teardown was PROVEN complete. */
+    get resolvedExits(): number {
+        return this.settledExitCount;
+    }
 
     get launchCalls(): number {
         return this.launchCount;
@@ -64,6 +78,12 @@ export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
     }
 
     async stopAttachedPreview(runtimeId: PreviewRuntimeId): Promise<PreviewRuntimeStopOutcome> {
+        // A rejected request is armed BEFORE anything settles: the host
+        // could not process the request, so the process may still exist.
+        if (this.stopRequestFailureArmed) {
+            this.stopRequestFailureArmed = false;
+            return Promise.reject(new Error("the host could not process the stop request"));
+        }
         const settle = this.exits.get(runtimeId.sequence);
         if (settle === undefined) {
             return { runtimeId, stopRequested: false, alreadySettled: true };
@@ -73,6 +93,7 @@ export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
             this.heldStop = { runtimeId, settle };
             return { runtimeId, stopRequested: true, alreadySettled: false };
         }
+        this.settledExitCount += 1;
         settle({ runtimeId, kind: "stopped", exitCode: null });
         return { runtimeId, stopRequested: true, alreadySettled: false };
     }
@@ -95,6 +116,7 @@ export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
             return false;
         }
         this.heldStop = null;
+        this.settledExitCount += 1;
         held.settle({
             runtimeId: held.runtimeId,
             kind: this.spec.stopReleaseKind ?? "stopped",
@@ -103,13 +125,14 @@ export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
         return true;
     }
 
-    exit(runtimeId: PreviewRuntimeId, exitCode = 0): boolean {
+    exit(runtimeId: PreviewRuntimeId, exitCode = 0, kind: "exited" | "wait-failed" = "exited"): boolean {
         const settle = this.exits.get(runtimeId.sequence);
         if (settle === undefined) {
             return false;
         }
         this.exits.delete(runtimeId.sequence);
-        settle({ runtimeId, kind: "exited", exitCode });
+        this.settledExitCount += 1;
+        settle({ runtimeId, kind, exitCode });
         return true;
     }
 

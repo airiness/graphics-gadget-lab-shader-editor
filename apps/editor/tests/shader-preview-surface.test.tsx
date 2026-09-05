@@ -21,6 +21,7 @@ const previewWorld = vi.hoisted(() => ({
     tool: null as unknown,
     observation: null as unknown,
     runtime: null as unknown,
+    runtimeSpec: null as unknown,
 }));
 
 vi.mock("../src/toolchain-host.js", async () => {
@@ -115,9 +116,10 @@ vi.mock("../src/toolchain-host.js", async () => {
             return boundary;
         },
         createTauriPreviewRuntimeBoundary: async () => {
-            const boundary = new RuntimeBoundary({
+            const spec = (previewWorld.runtimeSpec as ConstructorParameters<typeof RuntimeBoundary>[0] | undefined) ?? {
                 launches: [{ kind: "launched", runtimeIdentity: "runtime-a" }],
-            });
+            };
+            const boundary = new RuntimeBoundary(spec);
             previewWorld.runtime = boundary;
             return boundary;
         },
@@ -183,6 +185,7 @@ beforeEach(() => {
     previewWorld.tool = null;
     previewWorld.observation = null;
     previewWorld.runtime = null;
+    previewWorld.runtimeSpec = null;
     vi.mocked(nativeFlow.candidateInvalidated).mockReset();
 });
 
@@ -230,5 +233,49 @@ describe("attached Shader Preview React surface", () => {
         // (no `exited` state; `exit-unproven` exists only for wait-failed).
         await waitFor(() => expect(hook.result.current.runtime.kind).toBe("idle"));
         hook.unmount();
+    });
+
+    it("unmounts cleanly while a launch is pending and still stops the Runtime that launches after unmount", async () => {
+        previewWorld.runtimeSpec = {
+            launches: [{ kind: "launched", runtimeIdentity: "runtime-a" }],
+            keepLaunchPending: true,
+            holdStopUntilRelease: true,
+            stopReleaseKind: "stopped",
+        };
+        const hook = renderHook(() =>
+            useShaderPreview({
+                document,
+                descriptor,
+                descriptorCompatible: true,
+                emission,
+                configuredTarget: "gglab-dx12",
+                nativeFlow,
+            }),
+        );
+        await waitFor(() => expect(hook.result.current.flow).not.toBeNull());
+        await act(async () => hook.result.current.previewHandshake());
+
+        // Kick off the build; its success auto-launches; the launch
+        // STAYS PENDING on purpose.
+        act(() => {
+            void hook.result.current.buildPreview();
+        });
+        const runtime = previewWorld.runtime as FakePreviewRuntimeBoundary;
+        await waitFor(() => expect(runtime.launchCalls).toBe(1));
+
+        // UNMOUNT while the launch is still pending. The unmount cleanup
+        // must NOT be a plain stop() (a no-op during launching — it would
+        // orphan the Runtime); it joins the pending launch and then
+        // completes the teardown.
+        await act(async () => {
+            hook.unmount();
+        });
+
+        // Let the launch settle, then wait for the (pending) unmount teardown
+        // to issue the stop request for the exact just-launched Runtime and
+        // release that held settlement.
+        expect(runtime.releaseLaunch()).toBe(true);
+        await waitFor(() => expect(runtime.releaseStop()).toBe(true));
+        expect(runtime.resolvedExits).toBe(1);
     });
 });
