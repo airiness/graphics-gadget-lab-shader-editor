@@ -147,6 +147,7 @@ export type PreviewBuildGateReason =
     | PreviewCompositionRefusal
     | { readonly reason: "ordinary-tool-not-compatible"; readonly toolStatus: ToolCompatibilityState["status"] }
     | { readonly reason: "attached-runtime-launching" }
+    | { readonly reason: "attached-runtime-ownership-conflict" }
     | { readonly reason: "attached-runtime-deployment-mismatch" }
     | { readonly reason: "preview-proof-missing" }
     | { readonly reason: "preview-ineligible"; readonly eligibility: PreviewEligibility }
@@ -465,6 +466,18 @@ export class PreviewBuildFlow {
             return {
                 admitted: false,
                 reasons: [{ reason: "ordinary-tool-not-compatible", toolStatus: tool.status }],
+                request: null,
+                eligibility: null,
+            };
+        }
+        if (this.manager.state.kind === "runtime-ownership-conflict") {
+            // The host KNOWS a Runtime exists for this session and the
+            // manager owns no lease for it: a build is a structured refusal,
+            // never a deployment-mismatch (there is no owned binding
+            // to compare) and never admission.
+            return {
+                admitted: false,
+                reasons: [{ reason: "attached-runtime-ownership-conflict" }],
                 request: null,
                 eligibility: null,
             };

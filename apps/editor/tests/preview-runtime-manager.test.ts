@@ -360,6 +360,38 @@ describe("attached Preview Runtime lifetime authority — launch refusal", () =>
         }
     });
 
+    it("threads a host session-already-running fact through an ownership-conflict state end-to-end", async () => {
+        const boundary = runtime({ launches: [{ kind: "session-already-running", runtimeId: { sequence: 42 } }] });
+        const manager = managerFor(boundary);
+
+        const first = await manager.launch(CANDIDATE_A);
+        expect(first).toEqual({
+            launched: false,
+            reason: "runtime-ownership-conflict",
+            runtimeId: { sequence: 42 },
+        });
+        expect(manager.state).toEqual({ kind: "runtime-ownership-conflict", runtimeId: { sequence: 42 } });
+        // `ownedRuntime === null` here must NEVER be read as "no Runtime":
+        expect(manager.ownedRuntime).toBeNull();
+
+        // No second Runtime launch — and no host call.
+        const callsBefore = boundary.launchCalls;
+        await expect(manager.launch(CANDIDATE_A)).resolves.toEqual({
+            launched: false,
+            reason: "runtime-ownership-conflict",
+            runtimeId: { sequence: 42 },
+        });
+        expect(boundary.launchCalls).toBe(callsBefore);
+
+        // Strict teardown may NOT return `already-exited` (that would
+        // invert the host's ownership fact) — and the ownership transition
+        // therefore cannot commit.
+        await expect(manager.terminateAndJoin()).rejects.toThrow(/already running for this session/i);
+
+        // A plain stop has no lease to act on (no host call either).
+        await expect(manager.stop()).resolves.toEqual({ outcome: "not-attached" });
+    });
+
     it("throws on an attached Runtime missing its exit settlement (invariant, never a no-op)", async () => {
         const boundary = runtime({ launches: [{ kind: "launched", runtimeIdentity: "runtime-a" }] });
         const manager = managerFor(boundary);

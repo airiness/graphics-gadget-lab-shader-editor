@@ -1671,9 +1671,10 @@ export function App() {
      * target/candidate and must be verifiably gone before the next ownership
      * begins. A no-op when no flow exists or the Runtime already settled.
      * Rejects when the stop request fails OR the exit settles as
-     * `wait-failed` (the host could not prove the process left) — the caller
-     * then refuses the transition and keeps the prior ownership instead of
-     * splitting it. */
+     * `wait-failed` (the host could not prove the process left) OR the
+     * manager is in `runtime-ownership-conflict` (the host KNOWS a Runtime
+     * exists and the editor owns no lease for it) — the caller then refuses
+     * the transition and keeps the prior ownership instead of splitting it. */
     const stopPreviewRuntimeIfAttached = async (): Promise<void> => {
         if (preview.flow === null) {
             return;
@@ -2322,7 +2323,9 @@ export function App() {
                                         ? ` · #${preview.runtime.runtimeId.sequence}` +
                                           (preview.runtime.kind === "exit-unproven"
                                               ? ` · ${preview.runtime.exit.kind}`
-                                              : "")
+                                              : preview.runtime.kind === "runtime-ownership-conflict"
+                                                ? " · ownership-conflict"
+                                                : "")
                                         : preview.runtime.kind === "launch-refused"
                                           ? ` · ${preview.runtime.result.kind}`
                                           : ""}
@@ -2398,7 +2401,8 @@ export function App() {
                                 disabled={
                                     preview.runtime.kind !== "running" &&
                                     preview.runtime.kind !== "terminating" &&
-                                    preview.runtime.kind !== "exit-unproven"
+                                    preview.runtime.kind !== "exit-unproven" &&
+                                    preview.runtime.kind !== "runtime-ownership-conflict"
                                 }
                             >
                                 Stop attached Lab

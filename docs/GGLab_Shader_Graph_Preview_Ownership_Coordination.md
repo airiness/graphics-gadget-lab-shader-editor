@@ -163,6 +163,17 @@ Rules:
 - The exact exit settlement for a RuntimeId is captured before the stop
   request and the async exit handler may migrate state only for the matching
   RuntimeId.
+- `runtime-ownership-conflict { runtimeId }`: the host EXPLICITLY reported a
+  live Runtime for this session (`session-already-running`) while the manager
+  owns no lease / launch identity / exit settlement for it. While in this
+  state a second Runtime launch is forbidden (no host call is made), the
+  build gate must refuse `attached-runtime-ownership-conflict` (never a
+  deployment-mismatch — there is no owned binding to compare), a strict
+  teardown must REJECT instead of resolving (`already-exited` would invert
+  the host's ownership fact) so the ownership transition cannot commit, and
+  `ownedRuntime === null` must never be read as "no Runtime exists".
+  Attaching to (recovering) an already-running host Runtime is out of
+  Slice 1 scope; it is a host-contract decision.
 
 The current host removes its registry entry after the settlement thread ends;
 that registry miss is not termination evidence and therefore cannot release

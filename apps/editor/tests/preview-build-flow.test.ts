@@ -714,6 +714,24 @@ describe("Attached Preview Runtime authority - composition facts read by the flo
         expect(runtime.launchCalls).toBe(1);
     });
 
+    it("refuses Preview builds with attached-runtime-ownership-conflict (never a deployment mismatch)", async () => {
+        const runtime = runtimes([{ kind: "session-already-running", runtimeId: { sequence: 42 } }]);
+        const manager = new AttachedPreviewRuntimeManager(runtime, SESSION_ID);
+        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), manager);
+        const input = composition();
+
+        await publish(flow);
+        await manager.launch(CANDIDATE_A);
+        expect(manager.state).toMatchObject({ kind: "runtime-ownership-conflict" });
+
+        // A single, exact structured refusal — not deployment-mismatch
+        // (there is no owned binding to compare against).
+        expect(flow.buildGate(input)).toMatchObject({
+            admitted: false,
+            reasons: [{ reason: "attached-runtime-ownership-conflict" }],
+        });
+    });
+
     it("routes a launch candidate-invalidated host fact to the ordinary tool owner", async () => {
         const runtime = runtimes([
             {

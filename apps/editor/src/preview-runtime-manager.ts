@@ -40,7 +40,14 @@ export type AttachedRuntimeState =
     | {
           readonly kind: "launch-refused";
           readonly result: Exclude<PreviewRuntimeLaunchResult, { readonly kind: "launched" }>;
-      };
+      }
+    /** The host EXPLICITLY reported a live Runtime for this session, but
+     *  this manager has no lease / launch identity / exit settlement for
+     *  it, so it cannot prove or manage that Runtime's lifetime. A second
+     *  Runtime launch is forbidden, an ownership transition CANNOT commit,
+     *  and the absence of an owned binding here is NOT evidence that no
+     *  Runtime exists. */
+    | { readonly kind: "runtime-ownership-conflict"; readonly runtimeId: PreviewRuntimeId };
 
 /** The owned Runtime + the deployment toolPath it was launched from
  *  (exact `ToolCandidate.toolPath`; never a Program Descriptor identity).
@@ -60,7 +67,7 @@ export type AttachedRuntimeLaunch =
       }
     | {
           readonly launched: false;
-          readonly reason: "launch-in-flight" | "runtime-attached" | "exit-unproven";
+          readonly reason: "launch-in-flight" | "runtime-attached" | "exit-unproven" | "runtime-ownership-conflict";
           readonly runtimeId: PreviewRuntimeId;
       }
     | { readonly launched: false; readonly reason: "host-refused"; readonly result: Exclude<PreviewRuntimeLaunchResult, { readonly kind: "launched" }> };
@@ -120,7 +127,9 @@ export class AttachedPreviewRuntimeManager {
     }
 
     /** The owned Runtime binding: non-null while `running`, `terminating`, or
-     *  `exit-unproven`; null for `idle` / `launching` / `launch-refused`. */
+     *  `exit-unproven`; null for `idle` / `launching` / `launch-refused`.
+     *  NOTE: null under `runtime-ownership-conflict` does NOT mean "no
+     *  Runtime" — the host knows one exists; callers must read `state`. */
     get ownedRuntime(): OwnedRuntimeBinding | null {
         const state = this.stateValue;
         if (state.kind !== "running" && state.kind !== "terminating" && state.kind !== "exit-unproven") {
@@ -144,6 +153,9 @@ export class AttachedPreviewRuntimeManager {
             return existing;
         }
         const state = this.stateValue;
+        if (state.kind === "runtime-ownership-conflict") {
+            return Promise.resolve({ launched: false, reason: "runtime-ownership-conflict", runtimeId: state.runtimeId });
+        }
         if (state.kind === "running" || state.kind === "terminating") {
             return Promise.resolve({ launched: false, reason: "runtime-attached", runtimeId: state.runtimeId });
         }
@@ -187,6 +199,15 @@ export class AttachedPreviewRuntimeManager {
             }
         }
         const state = this.stateValue;
+        if (state.kind === "runtime-ownership-conflict") {
+            // The host reported a live Runtime for this session and this
+            // manager owns NO lease for it: `already-exited` would invert
+            // an ownership fact. A strict teardown is PROHIBITED, not
+            // vacuous — the ownership transition cannot commit.
+            throw new Error(
+                `attached Preview Runtime #${state.runtimeId.sequence} was reported by the host as already running for this session, but this manager owns no lease for it; the ownership transition cannot commit.`,
+            );
+        }
         if (state.kind === "idle" || state.kind === "launch-refused" || state.kind === "launching") {
             return { outcome: "already-exited" };
         }
@@ -264,6 +285,14 @@ export class AttachedPreviewRuntimeManager {
         const attempt = this.boundary.launchAttachedPreview(candidate, this.sessionId);
         const lane: Promise<AttachedRuntimeLaunch> = attempt.then(
             (result) => {
+                if (result.kind === "session-already-running") {
+                    // The host EXPLICITLY knows a live Runtime for this
+                    // session; this manager has no lease / identity /
+                    // settlement for it. This is an OWNERSHIP fact, not a
+                    // plain refusal (the host is not declining).
+                    this.stateValue = { kind: "runtime-ownership-conflict", runtimeId: result.runtimeId };
+                    return { launched: false as const, reason: "runtime-ownership-conflict" as const, runtimeId: result.runtimeId };
+                }
                 if (result.kind !== "launched") {
                     this.stateValue = { kind: "launch-refused", result };
                     return { launched: false as const, reason: "host-refused" as const, result };
@@ -313,6 +342,12 @@ export class AttachedPreviewRuntimeManager {
             return existing;
         }
         const state = this.stateValue;
+        if (state.kind === "runtime-ownership-conflict") {
+            // No lease to act on: a host request for a Runtime we never
+            // observed is out of contract. (Strict callers use
+            // `terminateAndJoin()`, which PROHIBITS this situation.)
+            return Promise.resolve({ outcome: "not-attached" });
+        }
         if (state.kind === "exit-unproven") {
             return Promise.resolve({ outcome: "unproven-rejoin", runtimeId: state.runtimeId });
         }
@@ -360,6 +395,10 @@ export class AttachedPreviewRuntimeManager {
     private onExit(exit: PreviewRuntimeExit): void {
         const state = this.stateValue;
         const settlement = this.exitSettlement;
+        // Only a settlement we own may migrate state; in particular a
+        // stale exit event can never clobber `runtime-ownership-conflict`
+        // (the host knows a Runtime exists for this session) or
+        // `exit-unproven`.
         const matches =
             (state.kind === "running" || state.kind === "terminating") &&
             settlement !== null &&
