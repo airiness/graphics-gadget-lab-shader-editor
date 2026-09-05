@@ -226,7 +226,9 @@ describe("attached Shader Preview React surface", () => {
         });
 
         expect(runtime.exit({ sequence: 1 }, 0)).toBe(true);
-        await waitFor(() => expect(hook.result.current.runtime.kind).toBe("exited"));
+        // A PROVEN natural exit releases ownership: the state is `idle`
+        // (no `exited` state; `exit-unproven` exists only for wait-failed).
+        await waitFor(() => expect(hook.result.current.runtime.kind).toBe("idle"));
         hook.unmount();
     });
 });

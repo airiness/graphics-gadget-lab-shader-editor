@@ -2424,27 +2424,28 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         expect(app).toMatch(/Cannot close this tab yet/);
     });
 
-    it("the flow waits for the exit settlement of the exact Runtime before the teardown counts complete", () => {
-        const flow = read("../src/preview-build-flow.ts");
-        expect(flow).toMatch(/async stopAttachedPreviewAndWait\(\)/);
-        // The exit handle is captured BEFORE the stop request (the exit
-        // handler may clear the field while the request is in flight).
-        expect(flow).toMatch(
-            /const settlement = this\.runtimeExitSettlement;[\s\S]*?if \(state\.kind === "running"\) \{\s*await this\.stopAttachedPreview\(\);/,
-        );
-        // `wait-failed` is NOT a proven teardown: it rejects so the caller
-        // keeps the prior ownership.
-        expect(flow).toMatch(/if \(result\.kind === "wait-failed"\) \{[\s\S]*?throw new Error\([\s\S]*?wait-failed/);
+    it("the Runtime manager owns the strict teardown: proven exit, sticky unproven, no second host request", () => {
+        const managerSource = read("../src/preview-runtime-manager.ts");
+        expect(managerSource).toMatch(/async terminateAndJoin\(\)/);
+        // `wait-failed` is NOT a proven teardown: ownership is retained as
+        // unproven (state `exit-unproven`; the binding is retained).
+        expect(managerSource).toMatch(/exit\.kind === "wait-failed"/);
+        expect(managerSource).toMatch(/kind: "exit-unproven"/);
         // An attached Runtime missing its settlement is an invariant
         // violation (throws) — never a proven "nothing to do".
-        expect(flow).toMatch(/no exit settlement[\s\S]*?teardown cannot be proven complete/);
-        // A launch during "stopping" queues behind the old exit, never
-        // "already-running" (no stranded Preview).
-        expect(flow).toMatch(
-            /kind === "stopping"[\s\S]*?return settlement\.exited\.then\(\(\) => this\.launchAttachedPreview\(\)\);/,
-        );
-        // The Runtime's exit settlement is retained while it is current.
-        expect(flow).toMatch(/this\.runtimeExitSettlement = \{ runtimeId: result\.runtimeId, exited: result\.exited \}/);
+        expect(managerSource).toMatch(/no exit settlement[\s\S]*?teardown cannot be proven complete/);
+        // Launch admission is ONLY from `idle` / `launch-refused`: an
+        // attached or unproven state is a structured refusal, never a
+        // queued relaunch (no second Runtime after an unproven exit).
+        expect(managerSource).toMatch(/reason: "runtime-attached"/);
+        expect(managerSource).toMatch(/reason: "exit-unproven"/);
+        // A repeated stop JOINS the same teardown (no second host request);
+        // a stop after an unproven exit re-reports without a host call.
+        expect(managerSource).toMatch(/outcome: "join-in-progress"/);
+        expect(managerSource).toMatch(/outcome: "unproven-rejoin"/);
+        // The ownership binding projects the exact deployment toolPath and
+        // is retained until the exit is proven.
+        expect(managerSource).toMatch(/deploymentToolPath: this\.ownedCandidateValue\.toolPath/);
     });
 
     it("a Workspace seeds its Preview target at the first open and re-seeds it on a target close (never a live follow)", () => {

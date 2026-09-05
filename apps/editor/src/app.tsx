@@ -2319,12 +2319,13 @@ export function App() {
                                 <dd className="mono">
                                     {preview.runtime.kind}
                                     {"runtimeId" in preview.runtime
-                                        ? ` · #${preview.runtime.runtimeId.sequence}`
-                                        : preview.runtime.kind === "exited"
-                                          ? ` · ${preview.runtime.exit.kind}`
-                                          : preview.runtime.kind === "launch-refused"
-                                            ? ` · ${preview.runtime.result.kind}`
-                                            : ""}
+                                        ? ` · #${preview.runtime.runtimeId.sequence}` +
+                                          (preview.runtime.kind === "exit-unproven"
+                                              ? ` · ${preview.runtime.exit.kind}`
+                                              : "")
+                                        : preview.runtime.kind === "launch-refused"
+                                          ? ` · ${preview.runtime.result.kind}`
+                                          : ""}
                                 </dd>
                             </div>
                             <div className="gglab-fact">
@@ -2386,8 +2387,7 @@ export function App() {
                                     preview.flow === null ||
                                     preview.launchInFlight ||
                                     !preview.initialPublicationAvailable ||
-                                    preview.runtime.kind === "running" ||
-                                    preview.runtime.kind === "stopping"
+                                    (preview.runtime.kind !== "idle" && preview.runtime.kind !== "launch-refused")
                                 }
                             >
                                 {preview.launchInFlight ? "Launching…" : "Launch attached Lab"}
@@ -2395,7 +2395,11 @@ export function App() {
                             <Button
                                 variant="ghost"
                                 onClick={() => void preview.stopPreview()}
-                                disabled={preview.runtime.kind !== "running" && preview.runtime.kind !== "stopping"}
+                                disabled={
+                                    preview.runtime.kind !== "running" &&
+                                    preview.runtime.kind !== "terminating" &&
+                                    preview.runtime.kind !== "exit-unproven"
+                                }
                             >
                                 Stop attached Lab
                             </Button>

@@ -19,7 +19,12 @@ import {
 } from "@gglab/shader-graph-core";
 import { canonicalV1Fixture } from "../../../packages/shader-graph-core/tests/fixtures/descriptor-v1.js";
 import { PreviewBuildFlow, type PreviewCompositionInput, type PreviewToolStatePort } from "../src/preview-build-flow.js";
+import { AttachedPreviewRuntimeManager } from "../src/preview-runtime-manager.js";
 import { previewSessionReport } from "../src/preview-build-session.js";
+
+function manager(boundary: FakePreviewRuntimeBoundary): AttachedPreviewRuntimeManager {
+    return new AttachedPreviewRuntimeManager(boundary, SESSION_ID);
+}
 
 const DESCRIPTOR_IDENTITY = "a7".repeat(32);
 const SESSION_ID = "12".repeat(16);
@@ -255,7 +260,7 @@ async function publish(flow: PreviewBuildFlow, input = composition()): Promise<v
 describe("Preview handshake orchestration", () => {
     it("joins one candidate + requirement lane and closes it on settlement", async () => {
         const boundary = fake({ keepPreviewHandshakePending: true });
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), runtimes());
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), manager(runtimes()));
         const input = composition();
 
         const first = flow.previewHandshake(input);
@@ -271,7 +276,7 @@ describe("Preview handshake orchestration", () => {
     it("does not let proof for candidate A admit candidate B", async () => {
         const boundary = fake();
         const port = new TestToolPort();
-        const flow = new PreviewBuildFlow(boundary, port, SESSION_ID, observations(), runtimes());
+        const flow = new PreviewBuildFlow(boundary, port, SESSION_ID, observations(), manager(runtimes()));
         const input = composition();
         await prove(flow, input);
 
@@ -287,7 +292,7 @@ describe("Preview handshake orchestration", () => {
 
     it("refuses source-identity drift before the handshake or request boundary", async () => {
         const boundary = fake();
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), runtimes());
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), manager(runtimes()));
         const valid = emission();
         const changed: HlslEmission = {
             ...valid,
@@ -310,7 +315,7 @@ describe("Preview handshake orchestration", () => {
             },
         });
         const port = new TestToolPort();
-        const flow = new PreviewBuildFlow(boundary, port, SESSION_ID, observations(), runtimes());
+        const flow = new PreviewBuildFlow(boundary, port, SESSION_ID, observations(), manager(runtimes()));
 
         const record = await flow.previewHandshake(composition());
         expect(record).toMatchObject({
@@ -325,7 +330,7 @@ describe("Preview handshake orchestration", () => {
 describe("Preview build orchestration", () => {
     it("derives and issues the exact candidate-bound request after the gate", async () => {
         const boundary = fake();
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), runtimes());
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), manager(runtimes()));
         const input = composition();
         await prove(flow, input);
 
@@ -360,7 +365,7 @@ describe("Preview build orchestration", () => {
             ],
             keepCompilePending: true,
         });
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), runtimes());
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), manager(runtimes()));
         const input = composition();
         await prove(flow, input);
 
@@ -387,7 +392,7 @@ describe("Preview build orchestration", () => {
 
     it("coalesces synchronous duplicate launch requests before either can issue", async () => {
         const boundary = fake();
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), runtimes());
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), manager(runtimes()));
         const input = composition();
         await prove(flow, input);
 
@@ -410,7 +415,7 @@ describe("Preview build orchestration", () => {
                 { stdout: previewBuildFailed(2), exitCode: 4 },
             ],
         });
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), runtimes());
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), manager(runtimes()));
         const input = composition();
         await prove(flow, input);
 
@@ -433,7 +438,7 @@ describe("Preview build orchestration", () => {
 
     it("turns a mismatched result AttemptSequence into a failed binding, never a publication", async () => {
         const boundary = fake({ previewBuild: [{ stdout: previewBuildOk(9), exitCode: 0 }] });
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), runtimes());
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), manager(runtimes()));
         const input = composition();
         await prove(flow, input);
 
@@ -456,7 +461,7 @@ describe("Preview Runtime observation orchestration", () => {
             [{ kind: "read", bytes: observationBytes(1, PUBLICATION_ID) }],
             true,
         );
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observation, runtimes());
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observation, manager(runtimes()));
         const input = composition();
         await prove(flow, input);
         const launch = await flow.buildPreview(input);
@@ -490,7 +495,7 @@ describe("Preview Runtime observation orchestration", () => {
             ],
         });
         const observation = observations([{ kind: "read", bytes: observationBytes(1, PUBLICATION_ID) }]);
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observation, runtimes());
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observation, manager(runtimes()));
         const input = composition();
         await prove(flow, input);
         const first = await flow.buildPreview(input);
@@ -520,7 +525,7 @@ describe("Preview Runtime observation orchestration", () => {
             { kind: "read", bytes: observationBytes(1, PUBLICATION_ID) },
             { kind: "read", bytes: observationBytes(2, unknownPublication) },
         ]);
-        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observation, runtimes());
+        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observation, manager(runtimes()));
         const input = composition();
         await prove(flow, input);
         const launch = await flow.buildPreview(input);
@@ -547,7 +552,7 @@ describe("Preview Runtime observation orchestration", () => {
                 observedIdentity: "candidate-b",
             },
         ]);
-        const flow = new PreviewBuildFlow(fake(), port, SESSION_ID, observation, runtimes());
+        const flow = new PreviewBuildFlow(fake(), port, SESSION_ID, observation, manager(runtimes()));
         const input = composition();
         await prove(flow, input);
         const launch = await flow.buildPreview(input);
@@ -575,7 +580,7 @@ describe("Preview Runtime observation orchestration", () => {
             { kind: "read", bytes: observationBytes(2, nextPublication) },
         ]);
         const port = new TestToolPort();
-        const flow = new PreviewBuildFlow(boundary, port, SESSION_ID, observation, runtimes());
+        const flow = new PreviewBuildFlow(boundary, port, SESSION_ID, observation, manager(runtimes()));
         const input = composition();
 
         await publish(flow, input);
@@ -612,262 +617,52 @@ describe("Preview Runtime observation orchestration", () => {
         });
     });
 });
-
-describe("Attached Preview Runtime lifecycle", () => {
-    it("requires an initial successful publication before launch", async () => {
+describe("Attached Preview Runtime authority - composition facts read by the flow", () => {
+    it("exposes the published launch candidate only after an initial successful publication", async () => {
         const runtime = runtimes();
-        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), runtime);
+        const manager = new AttachedPreviewRuntimeManager(runtime, SESSION_ID);
+        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), manager);
 
-        await expect(flow.launchAttachedPreview()).resolves.toEqual({
-            launched: false,
-            reason: "initial-publication-unavailable",
-        });
+        expect(flow.launchCandidate()).toBeNull();
         expect(runtime.launchCalls).toBe(0);
-        expect(flow.runtimeState).toEqual({ kind: "idle" });
-    });
 
-    it("joins one candidate/session launch and observes a clean process exit", async () => {
-        const runtime = runtimes([{ kind: "launched", runtimeIdentity: "runtime-a" }], true);
-        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), runtime);
         await publish(flow);
-
-        const first = flow.launchAttachedPreview();
-        const second = flow.launchAttachedPreview();
-        expect(second).toBe(first);
-        expect(flow.runtimeState).toEqual({ kind: "launching" });
-        expect(runtime.launchCalls).toBe(1);
-        expect(runtime.lastLaunch).toEqual({ candidate: CANDIDATE_A, sessionId: SESSION_ID });
-        expect(runtime.releaseLaunch()).toBe(true);
-        const launched = await first;
-        expect(launched).toMatchObject({
-            launched: true,
-            runtimeId: { sequence: 1 },
-            runtimeIdentity: "runtime-a",
-        });
-        expect(flow.runtimeState).toEqual({
-            kind: "running",
-            runtimeId: { sequence: 1 },
-            runtimeIdentity: "runtime-a",
-        });
-        expect(runtime.exit({ sequence: 1 }, 0)).toBe(true);
-        if (launched.launched) {
-            await launched.exited;
-        }
-        expect(flow.runtimeState).toEqual({
-            kind: "exited",
-            runtimeIdentity: "runtime-a",
-            exit: { runtimeId: { sequence: 1 }, kind: "exited", exitCode: 0 },
-        });
+        // build success is the only initial-publication proof
+        expect(flow.initialPublicationAvailable).toBe(true);
+        expect(flow.launchCandidate()).toEqual(CANDIDATE_A);
     });
 
-    it("freezes Preview builds until an attached Runtime finishes launching", async () => {
-        const boundary = fake();
+    it("freezes Preview builds while an attached Runtime launch is in flight", async () => {
         const runtime = runtimes([{ kind: "launched", runtimeIdentity: "runtime-a" }], true);
-        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), runtime);
+        const manager = new AttachedPreviewRuntimeManager(runtime, SESSION_ID);
+        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), manager);
         const input = composition();
-        await publish(flow, input);
-        const buildCallsBeforeLaunch = boundary.previewBuildCalls;
 
-        const pendingLaunch = flow.launchAttachedPreview();
-        expect(flow.runtimeState).toEqual({ kind: "launching" });
+        await publish(flow);
+        const launching = manager.launch(CANDIDATE_A);
+        expect(manager.launchInFlight).toBe(true);
         expect(flow.buildGate(input)).toMatchObject({
             admitted: false,
             reasons: [{ reason: "attached-runtime-launching" }],
         });
-        await expect(flow.buildPreview(input)).resolves.toMatchObject({
-            issued: false,
-            reason: "gate-refused",
-        });
-        expect(boundary.previewBuildCalls).toBe(buildCallsBeforeLaunch);
-
         expect(runtime.releaseLaunch()).toBe(true);
-        const launched = await pendingLaunch;
-        expect(flow.buildGate(input).admitted).toBe(true);
-        if (launched.launched) {
-            await flow.stopAttachedPreview();
-            await launched.exited;
-        }
-    });
-
-    it("stops only the host-issued runtime and transitions through stopping", async () => {
-        const runtime = runtimes();
-        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), runtime);
-        await publish(flow);
-        const launched = await flow.launchAttachedPreview();
-        if (!launched.launched) {
-            throw new Error("test Preview Runtime must launch");
-        }
-
-        const stop = flow.stopAttachedPreview();
-        expect(flow.runtimeState).toEqual({
-            kind: "stopping",
-            runtimeId: launched.runtimeId,
-            runtimeIdentity: launched.runtimeIdentity,
-        });
-        await expect(stop).resolves.toEqual({
-            runtimeId: launched.runtimeId,
-            stopRequested: true,
-            alreadySettled: false,
-        });
-        await launched.exited;
-        expect(flow.runtimeState).toEqual({
-            kind: "exited",
-            runtimeIdentity: launched.runtimeIdentity,
-            exit: { runtimeId: launched.runtimeId, kind: "stopped", exitCode: null },
-        });
-    });
-
-    it("ownership transitions complete only when the Runtime has exited, and the next launch attaches after that exit", async () => {
-        const runtime = runtimes(
-            [
-                { kind: "launched", runtimeIdentity: "runtime-old" },
-                { kind: "launched", runtimeIdentity: "runtime-new" },
-            ],
-            false,
-            true, // stop request acknowledged; the process stays "stopping" until released
-        );
-        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), runtime);
-        await publish(flow);
-
-        const old = await flow.launchAttachedPreview();
-        if (old.launched === false) {
-            throw new Error("test Preview Runtime must launch for the prior target");
-        }
-
-        // A stop is requested, but the old process has NOT actually exited yet.
-        const stop = flow.stopAttachedPreview();
-        expect(flow.runtimeState).toMatchObject({ kind: "stopping", runtimeId: old.runtimeId });
-
-        // While the old Runtime is still up, a launch for the next target must
-        // QUEUE (waiting for the old exit) — never be refused as
-        // "already-running" and strand the Preview with no Runtime.
-        const next = flow.launchAttachedPreview();
-
-        // And the ownership transition (stop-and-wait) is NOT complete yet.
-        const teardown = flow.stopAttachedPreviewAndWait();
-        let teardownSettled = false;
-        void teardown.then(() => {
-            teardownSettled = true;
-        });
-        expect(teardownSettled).toBe(false);
-
-        // The old process exits now — and only THEN does everything finish.
-        // (The queued launch for the next target may start immediately once
-        // the old Runtime is gone, so the "exited" state is superseded by the
-        // new ownership rather than observed as a resting state.)
-        expect(runtime.releaseStop()).toBe(true);
-        await expect(stop).resolves.toMatchObject({ stopRequested: true, alreadySettled: false });
-        await expect(teardown).resolves.toEqual({
-            runtimeId: old.runtimeId,
-            kind: "stopped",
-            exitCode: null,
-        });
-        expect(teardownSettled).toBe(true);
-
-        const nextResult = await next;
-        expect(nextResult).toMatchObject({
-            launched: true,
-            runtimeId: { sequence: 2 },
-            runtimeIdentity: "runtime-new",
-        });
-        expect(runtime.launchCalls).toBe(2);
-        if (nextResult.launched) {
-            // The next Runtime's own teardown obeys the same wait-and rule.
-            const finalTeardown = flow.stopAttachedPreviewAndWait();
-            expect(runtime.releaseStop()).toBe(true);
-            expect(await finalTeardown).toMatchObject({ runtimeId: { sequence: 2 } });
-        }
-        expect(flow.runtimeState).toMatchObject({ kind: "exited" });
-    });
-
-    it("treats a stop-and-wait as complete when no attached Runtime is up", async () => {
-        const runtime = runtimes();
-        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), runtime);
-        await publish(flow);
-        await expect(flow.stopAttachedPreviewAndWait()).resolves.toBeNull();
-        expect(flow.runtimeState).toEqual({ kind: "idle" });
-        expect(runtime.launchCalls).toBe(0);
-    });
-
-    it("a host wait-failed exit REJECTS the strict teardown — the ownership transition must not commit", async () => {
-        const runtime = runtimes(
-            [{ kind: "launched", runtimeIdentity: "runtime-a" }],
-            false,
-            true,
-            "wait-failed",
-        );
-        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), runtime);
-        await publish(flow);
-        const launched = await flow.launchAttachedPreview();
-        if (launched.launched === false) {
-            throw new Error("test Preview Runtime must launch");
-        }
-
-        const teardown = flow.stopAttachedPreviewAndWait();
-        // The host releases the stop but could only best-effort kill/wait:
-        // it CANNOT prove the process exited.
-        expect(runtime.releaseStop()).toBe(true);
-
-        // The strict contract must treat that as a FAILED teardown (reject),
-        // never as proven — so the caller keeps the prior ownership.
-        await expect(teardown).rejects.toThrow(/wait-failed/);
-
-        // The flow still records the host's own fact (its state machine
-        // settles on the host event), including the non-proof kind.
-        expect(flow.runtimeState).toMatchObject({
-            kind: "exited",
-            exit: { runtimeId: launched.runtimeId, kind: "wait-failed", exitCode: null },
-        });
-    });
-
-    it("an attached Runtime without its exit settlement is an invariant violation, never a no-op", async () => {
-        const runtime = runtimes();
-        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), runtime);
-        await publish(flow);
-        const launched = await flow.launchAttachedPreview();
-        if (launched.launched === false) {
-            throw new Error("test Preview Runtime must launch");
-        }
-        // Force the bookkeeping state the flow itself can never produce
-        // (running, but the exit settlement missing) to pin the defensive
-        // path: it must fail loudly, never report a proven teardown.
-        (flow as unknown as { runtimeExitSettlement: unknown }).runtimeExitSettlement = null;
-        await expect(flow.stopAttachedPreviewAndWait()).rejects.toThrow(/no exit settlement/);
-    });
-
-    it("routes launch-time candidate invalidation to the ordinary tool owner", async () => {
-        const port = new TestToolPort();
-        const runtime = runtimes([
-            {
-                kind: "candidate-invalidated",
-                candidate: CANDIDATE_A,
-                observation: "changed",
-                observedIdentity: "candidate-b",
-            },
-        ]);
-        const flow = new PreviewBuildFlow(fake(), port, SESSION_ID, observations(), runtime);
-        await publish(flow);
-
-        await expect(flow.launchAttachedPreview()).resolves.toMatchObject({
-            launched: false,
-            reason: "host-refused",
-            result: { kind: "candidate-invalidated" },
-        });
-        expect(port.invalidations).toHaveLength(1);
-        expect(port.state).toEqual({ status: "unavailable" });
-        expect(flow.runtimeState).toMatchObject({
-            kind: "launch-refused",
-            result: { kind: "candidate-invalidated" },
-        });
+        const launched = await launching;
+        expect(launched.launched).toBe(true);
+        expect(manager.launchInFlight).toBe(false);
+        // the build-side verdict is back once the launch settles
+        expect(flow.buildGate(input)).toMatchObject({ admitted: true });
     });
 
     it("keeps a live session on its launch deployment and refuses cross-deployment updates", async () => {
+        const runtime = runtimes([{ kind: "launched", runtimeIdentity: "runtime-a" }]);
+        const manager = new AttachedPreviewRuntimeManager(runtime, SESSION_ID);
         const port = new TestToolPort();
         const observation = observations([{ kind: "read", bytes: observationBytes(1, PUBLICATION_ID) }]);
-        const flow = new PreviewBuildFlow(fake(), port, SESSION_ID, observation, runtimes());
+        const flow = new PreviewBuildFlow(fake(), port, SESSION_ID, observation, manager);
         const input = composition();
-        await publish(flow, input);
-        const launched = await flow.launchAttachedPreview();
+
+        await publish(flow);
+        const launched = await manager.launch(CANDIDATE_A);
         if (!launched.launched) {
             throw new Error("test Preview Runtime must launch");
         }
@@ -877,9 +672,36 @@ describe("Attached Preview Runtime lifecycle", () => {
             admitted: false,
             reasons: [{ reason: "attached-runtime-deployment-mismatch" }],
         });
+        // session-scoped facts stay bound to the LAUNCH deployment (A),
+        // not the now-current C tool
         await expect(flow.refreshObservation()).resolves.toMatchObject({ kind: "accepted" });
         expect(observation.lastRead).toEqual({ candidate: CANDIDATE_A, sessionId: SESSION_ID });
-        await flow.stopAttachedPreview();
-        await launched.exited;
+
+        await expect(manager.terminateAndJoin()).resolves.toEqual({ outcome: "terminated" });
+        expect(manager.ownedRuntime).toBeNull();
+    });
+
+    it("routes a launch candidate-invalidated host fact to the ordinary tool owner", async () => {
+        const runtime = runtimes([
+            {
+                kind: "candidate-invalidated",
+                candidate: CANDIDATE_A,
+                observation: "changed",
+                observedIdentity: "observed-1",
+            },
+        ]);
+        const manager = new AttachedPreviewRuntimeManager(runtime, SESSION_ID);
+        const port = new TestToolPort();
+        const flow = new PreviewBuildFlow(fake(), port, SESSION_ID, observations(), manager);
+
+        const refused = await manager.launch(CANDIDATE_A);
+        if (refused.launched || refused.reason !== "host-refused" || refused.result.kind !== "candidate-invalidated") {
+            throw new Error("test launch must be host-refused as candidate-invalidated");
+        }
+        expect(manager.state).toMatchObject({ kind: "launch-refused" });
+        expect(manager.ownedRuntime).toBeNull();
+        flow.reportCandidateInvalidation(refused.result);
+        expect(port.invalidations).toHaveLength(1);
+        expect(port.state).toEqual({ status: "unavailable" });
     });
 });

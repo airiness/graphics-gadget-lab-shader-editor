@@ -1,6 +1,8 @@
 /** React composition for the attached Shader Graph Preview session. Pure
- * protocol/order rules remain in PreviewBuildFlow; this hook owns only desktop
- * boundary construction, actions, render ticks, and the bounded poll timer. */
+ * protocol/order rules remain in PreviewBuildFlow; the Runtime lifetime
+ * authority lives in AttachedPreviewRuntimeManager; this hook owns only
+ * desktop boundary construction, action wiring, render ticks, and the
+ * bounded poll timer. */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
     PreviewAttemptOutcome,
@@ -14,11 +16,14 @@ import type {
 import type { NativeBuildFlow } from "./native-build-flow.js";
 import {
     PreviewBuildFlow,
-    type AttachedPreviewRuntimeState,
     type PreviewBuildGate,
     type PreviewCompositionInput,
     type PreviewObservationRefresh,
 } from "./preview-build-flow.js";
+import {
+    AttachedPreviewRuntimeManager,
+    type AttachedRuntimeState,
+} from "./preview-runtime-manager.js";
 import { previewProgramDescriptorIdentity, createPreviewSessionId } from "./preview-program-contract.js";
 import {
     createTauriPreviewObservationBoundary,
@@ -43,7 +48,7 @@ export interface ShaderPreviewSurface {
     readonly flow: PreviewBuildFlow | null;
     readonly sessionId: string | null;
     readonly gate: PreviewBuildGate | null;
-    readonly runtime: AttachedPreviewRuntimeState;
+    readonly runtime: AttachedRuntimeState;
     readonly projection: PreviewRuntimeProjection | null;
     readonly lastObservationRefresh: PreviewObservationRefresh | null;
     readonly handshakeInFlight: boolean;
@@ -54,10 +59,10 @@ export interface ShaderPreviewSurface {
     readonly buildPreview: () => Promise<void>;
     readonly launchPreview: () => Promise<void>;
     readonly stopPreview: () => Promise<void>;
-    /** Strict teardown: resolves only when the attached Runtime's exit is
-     * PROVEN (`stopped`/`exited`). Rejects if the stop request fails or the
-     * exit settles as `wait-failed` (the host could only best-effort
-     * kill/wait and cannot prove exit) — a caller must NOT retarget or
+    /** Strict teardown: resolves only after the attached Runtime's exit is
+     * PROVEN (`terminated`). Rejects when the exit settles as
+     * `exit-unproven` (the host could only best-effort kill/wait and cannot
+     * prove exit) or the stop request fails — a caller must NOT retarget or
      * close the target after such a failure. `stopPreview` alone is for the
      * plain user "Stop" button, never for an ownership transition. */
     readonly stopPreviewAndWait: () => Promise<void>;
@@ -71,6 +76,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
     const [launchInFlight, setLaunchInFlight] = useState(false);
     const [notes, setNotes] = useState<ShaderPreviewSurface["notes"]>([]);
     const flowRef = useRef<PreviewBuildFlow | null>(null);
+    const managerRef = useRef<AttachedPreviewRuntimeManager | null>(null);
 
     const note = useCallback((level: "ok" | "info" | "refusal", text: string) => {
         setNotes((previous) => [...previous.slice(-23), { level, text }]);
@@ -92,6 +98,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
                 return;
             }
             const sessionId = createPreviewSessionId();
+            const manager = new AttachedPreviewRuntimeManager(runtime, sessionId);
             const preview = new PreviewBuildFlow(
                 tool,
                 {
@@ -103,8 +110,9 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
                 },
                 sessionId,
                 observation,
-                runtime,
+                manager,
             );
+            managerRef.current = manager;
             flowRef.current = preview;
             setFlow(preview);
         })().catch((error: unknown) => {
@@ -114,12 +122,17 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
         });
         return () => {
             canceled = true;
-            const current = flowRef.current;
+            const currentManager = managerRef.current;
+            const currentFlow = flowRef.current;
+            managerRef.current = null;
             flowRef.current = null;
             setFlow(null);
-            if (current !== null) {
-                void current.stopAttachedPreview();
+            if (currentManager !== null) {
+                // Best-effort stop request at unmount; the join must never
+                // block teardown, and an unproven outcome never rejects it.
+                void currentManager.stop().catch(() => undefined);
             }
+            void currentFlow;
         };
     }, [input.nativeFlow, note]);
 
@@ -153,14 +166,24 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
     }, [flow, composition, note]);
 
     const launchPreview = useCallback(async (): Promise<void> => {
-        if (flow === null) {
+        const current = flowRef.current;
+        const manager = managerRef.current;
+        if (current === null || manager === null) {
             note("refusal", "Attached Preview launch is unavailable: no desktop Preview host.");
             return;
         }
         setLaunchInFlight(true);
         try {
-            const launch = await flow.launchAttachedPreview();
+            const candidate = current.launchCandidate();
+            if (candidate === null) {
+                note("refusal", "Attached Preview was not launched (initial-publication-unavailable).");
+                return;
+            }
+            const launch = await manager.launch(candidate);
             if (!launch.launched) {
+                if (launch.reason === "host-refused" && launch.result.kind === "candidate-invalidated") {
+                    current.reportCandidateInvalidation(launch.result);
+                }
                 note("refusal", `Attached Preview was not launched (${launch.reason}).`);
                 return;
             }
@@ -172,16 +195,18 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             setLaunchInFlight(false);
             bump((value) => value + 1);
         }
-    }, [flow, note]);
+    }, [note]);
 
     const buildPreview = useCallback(async (): Promise<void> => {
-        if (flow === null) {
+        const current = flowRef.current;
+        const manager = managerRef.current;
+        if (current === null || manager === null) {
             note("refusal", "Preview build is unavailable: no desktop Preview host.");
             return;
         }
         setBuildInFlight(true);
         try {
-            const launch = await flow.buildPreview(composition);
+            const launch = await current.buildPreview(composition);
             if (!launch.issued) {
                 note("refusal", `Preview build was not issued (${launch.reason}).`);
                 return;
@@ -193,8 +218,12 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
                 return;
             }
             note("ok", describePreviewAttemptOutcome(launch.attemptSequence, outcome));
-            const runtime = flow.runtimeState;
-            if (runtime.kind !== "running" && runtime.kind !== "stopping") {
+            // Success-first UX: a build publication with no (usable)
+            // attached Runtime auto-launches one. `running` / `terminating`
+            // / `launching` suppress it; `exit-unproven` is refused by
+            // launch admission; `idle` (and the retry lane) admit it.
+            const runtime = manager.state;
+            if (runtime.kind !== "running" && runtime.kind !== "terminating" && runtime.kind !== "launching") {
                 await launchPreview();
             }
         } catch (error) {
@@ -203,43 +232,57 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             setBuildInFlight(false);
             bump((value) => value + 1);
         }
-    }, [flow, composition, launchPreview, note]);
+    }, [composition, launchPreview, note]);
 
     const stopPreview = useCallback(async (): Promise<void> => {
-        if (flow === null) {
+        const manager = managerRef.current;
+        if (manager === null) {
             return;
         }
         try {
-            const outcome = await flow.stopAttachedPreview();
-            if (outcome !== null) {
+            const outcome = await manager.stop();
+            if (outcome.outcome === "stop-requested") {
+                note("info", `Stop requested for attached Runtime #${outcome.runtimeId.sequence}.`);
+            } else if (outcome.outcome === "join-in-progress") {
                 note(
-                    outcome.stopRequested ? "info" : "refusal",
-                    outcome.stopRequested
-                        ? `Stop requested for attached Runtime #${outcome.runtimeId.sequence}.`
-                        : `Attached Runtime #${outcome.runtimeId.sequence} had already settled.`,
+                    "info",
+                    `Stop already in progress for attached Runtime #${outcome.runtimeId.sequence}; joined the same teardown (no second host request).`,
                 );
+            } else if (outcome.outcome === "unproven-rejoin") {
+                note(
+                    "refusal",
+                    `Attached Runtime #${outcome.runtimeId.sequence} could not be proven exited; re-reported the stored unproven fact (no host call was made).`,
+                );
+            } else {
+                note("info", "No attached Preview Runtime to stop.");
             }
         } catch (error) {
             note("refusal", `Stopping attached Preview failed: ${describeError(error)}`);
         }
         bump((value) => value + 1);
-    }, [flow, note]);
+    }, [note]);
 
     // No try/catch here on purpose: an ownership transition (retarget /
     // close the target) needs to KNOW when the teardown did not complete,
     // so the caller refuses the commit instead of splitting ownership.
     const stopPreviewAndWait = useCallback(async (): Promise<void> => {
-        const current = flowRef.current;
-        if (current === null) {
+        const manager = managerRef.current;
+        if (manager === null) {
             return;
         }
-        await current.stopAttachedPreviewAndWait();
+        const proof = await manager.terminateAndJoin();
+        if (proof.outcome === "exit-unproven") {
+            throw new Error(
+                `Attached Preview Runtime #${proof.runtimeId.sequence} could not be proven exited (host wait-failed); the ownership transition was not committed.`,
+            );
+        }
         bump((value) => value + 1);
     }, [bump]);
 
-    const runtimeKind = flow?.runtimeState.kind ?? "idle";
+    const managerState = managerRef.current;
+    const runtimeKind = flow === null || managerState === null ? "idle" : managerState.state.kind;
     useEffect(() => {
-        if (flow === null || runtimeKind !== "running") {
+        if (flow === null || managerState === null || runtimeKind !== "running") {
             return;
         }
         let disposed = false;
@@ -263,13 +306,13 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             disposed = true;
             globalThis.clearInterval(timer);
         };
-    }, [flow, runtimeKind, note]);
+    }, [flow, managerState, runtimeKind, note]);
 
     return {
         flow,
         sessionId: flow?.session.sessionId ?? null,
         gate: flow?.buildGate(composition) ?? null,
-        runtime: flow?.runtimeState ?? { kind: "idle" },
+        runtime: flow !== null && managerState !== null ? managerState.state : { kind: "idle" },
         projection: flow?.runtimeProjection(composition) ?? null,
         lastObservationRefresh: flow?.lastObservationRefresh ?? null,
         handshakeInFlight: flow?.previewHandshakeInFlight ?? false,

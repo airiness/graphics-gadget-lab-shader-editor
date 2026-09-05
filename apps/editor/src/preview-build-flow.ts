@@ -13,8 +13,10 @@
  * - candidate/session-scoped Runtime observations are read single-flight,
  *   strictly decoded, cross-linked, and monotonically accepted before they
  *   can project Current/LastGood/Stale/Rejected;
- * - attached Runtime startup is success-first, candidate/session-bound, and
- *   single-flight, with host-issued process identity and explicit teardown.
+ * - attached Runtime LIFETIME (launch admission, ownership binding, state
+ *   machine, terminate-and-join proof) belongs to the Runtime manager; this
+ *   flow reads its facts and provides the build-line candidate a launch
+ *   would use.
  */
 import {
     admitPreviewBuild,
@@ -43,11 +45,6 @@ import {
     type PreviewObservationOrderingRejection,
     type PreviewObservationReadRejection,
     type PreviewRuntimeProjection,
-    type PreviewRuntimeBoundary,
-    type PreviewRuntimeExit,
-    type PreviewRuntimeId,
-    type PreviewRuntimeLaunchResult,
-    type PreviewRuntimeStopOutcome,
     type PreviewRequestWellFormed,
     type ToolCandidate,
     type ToolCompatibilityState,
@@ -70,6 +67,7 @@ import {
     type PreviewInputContractMismatch,
     type PreviewInputContractSelection,
 } from "./preview-input-contract.js";
+import { AttachedPreviewRuntimeManager } from "./preview-runtime-manager.js";
 
 type CandidateInvalidatedResult = Extract<BoundaryResult, { readonly kind: "candidate-invalidated" }>;
 
@@ -191,44 +189,6 @@ export type PreviewObservationRefresh =
     | { readonly kind: "ordering-rejected"; readonly rejection: PreviewObservationOrderingRejection }
     | { readonly kind: "accepted"; readonly changed: boolean; readonly observation: PreviewObservation };
 
-export type AttachedPreviewRuntimeState =
-    | { readonly kind: "idle" }
-    | { readonly kind: "launching" }
-    | {
-          readonly kind: "running";
-          readonly runtimeId: PreviewRuntimeId;
-          readonly runtimeIdentity: string;
-      }
-    | {
-          readonly kind: "stopping";
-          readonly runtimeId: PreviewRuntimeId;
-          readonly runtimeIdentity: string;
-      }
-    | {
-          readonly kind: "exited";
-          readonly runtimeIdentity: string;
-          readonly exit: PreviewRuntimeExit;
-      }
-    | {
-          readonly kind: "launch-refused";
-          readonly result: Exclude<PreviewRuntimeLaunchResult, { readonly kind: "launched" }>;
-      };
-
-export type AttachedPreviewLaunch =
-    | { readonly launched: false; readonly reason: "initial-publication-unavailable" }
-    | { readonly launched: false; readonly reason: "already-running"; readonly runtimeId: PreviewRuntimeId }
-    | {
-          readonly launched: false;
-          readonly reason: "host-refused";
-          readonly result: Exclude<PreviewRuntimeLaunchResult, { readonly kind: "launched" }>;
-      }
-    | {
-          readonly launched: true;
-          readonly runtimeId: PreviewRuntimeId;
-          readonly runtimeIdentity: string;
-          readonly exited: Promise<PreviewRuntimeExit>;
-      };
-
 function requirementsEqual(left: PreviewEligibilityRequirement, right: PreviewEligibilityRequirement): boolean {
     return (
         left.targetProfile === right.targetProfile &&
@@ -308,25 +268,13 @@ export class PreviewBuildFlow {
         readonly refresh: PreviewObservationRefresh;
     } | null = null;
     private observationLane: Promise<PreviewObservationRefresh> | null = null;
-    private runtimeStateValue: AttachedPreviewRuntimeState = { kind: "idle" };
-    private runtimeLaunchLane: Promise<AttachedPreviewLaunch> | null = null;
-    private runtimeCandidateValue: ToolCandidate | null = null;
-    /** The exit settlement of the current (or last launched) attached
-     *  Runtime. Awaiting exactly this promise is the proof that a specific
-     *  Runtime process has actually left; the stop request's outcome is not.
-     *  Held until that Runtime settles, so a retarget or close can wait for
-     *  the old ownership to be completely gone before the next one begins. */
-    private runtimeExitSettlement: {
-        readonly runtimeId: PreviewRuntimeId;
-        readonly exited: Promise<PreviewRuntimeExit>;
-    } | null = null;
 
     constructor(
         private readonly boundary: HostToolBoundary,
         private readonly toolPort: PreviewToolStatePort,
         sessionId: string,
         private readonly observationBoundary: PreviewObservationBoundary,
-        private readonly runtimeBoundary: PreviewRuntimeBoundary,
+        readonly manager: AttachedPreviewRuntimeManager,
     ) {
         this.sessionState = createPreviewBuildSession(sessionId);
     }
@@ -364,10 +312,6 @@ export class PreviewBuildFlow {
             (candidate !== null && candidatesShareDeployment(this.lastObservationRefreshState.candidate, candidate))
             ? this.lastObservationRefreshState.refresh
             : null;
-    }
-
-    get runtimeState(): AttachedPreviewRuntimeState {
-        return this.runtimeStateValue;
     }
 
     get initialPublicationAvailable(): boolean {
@@ -525,7 +469,7 @@ export class PreviewBuildFlow {
                 eligibility: null,
             };
         }
-        if (this.runtimeStateValue.kind === "launching") {
+        if (this.manager.launchInFlight) {
             return {
                 admitted: false,
                 reasons: [{ reason: "attached-runtime-launching" }],
@@ -533,9 +477,14 @@ export class PreviewBuildFlow {
                 eligibility: null,
             };
         }
+        // The Runtime manager exposes the owned deployment as FACTS; this
+        // build authority maps them into build-refusal vocabulary. The
+        // comparison is the exact deployment toolPath equality — never the
+        // Preview Program Descriptor identity.
+        const ownedRuntime = this.manager.ownedRuntime;
         if (
-            this.runtimeCandidateValue !== null &&
-            !candidatesShareDeployment(this.runtimeCandidateValue, tool.candidate)
+            ownedRuntime !== null &&
+            ownedRuntime.deploymentToolPath !== tool.candidate.toolPath
         ) {
             return {
                 admitted: false,
@@ -720,8 +669,9 @@ export class PreviewBuildFlow {
     }
 
     private currentDeploymentCandidate(): ToolCandidate | null {
-        if (this.runtimeCandidateValue !== null) {
-            return this.observationCandidate(this.runtimeCandidateValue);
+        const owned = this.manager.ownedCandidate;
+        if (owned !== null) {
+            return this.observationCandidate(owned);
         }
         const currentTool = this.toolPort.current();
         if ("candidate" in currentTool) {
@@ -733,7 +683,7 @@ export class PreviewBuildFlow {
     }
 
     private observationCandidate(latestAttemptCandidate: ToolCandidate): ToolCandidate {
-        const runtimeCandidate = this.runtimeCandidateValue;
+        const runtimeCandidate = this.manager.ownedCandidate;
         if (runtimeCandidate === null) {
             return latestAttemptCandidate;
         }
@@ -815,203 +765,25 @@ export class PreviewBuildFlow {
             : null;
         return projectPreviewRuntime(lineForDeployment(this.sessionState.line, candidate), intent, observation);
     }
-
-    /** Success-first attached launch. A strict Preview build result is the
-     *  only way a publication enters the line, so latestPublished is the
-     *  initial-publication proof. Later failed attempts do not erase that
-     *  active last-good pointer and therefore do not block a relaunch. */
-    launchAttachedPreview(): Promise<AttachedPreviewLaunch> {
-        if (this.runtimeLaunchLane !== null) {
-            return this.runtimeLaunchLane;
-        }
-        if (this.runtimeStateValue.kind === "running") {
-            return Promise.resolve({
-                launched: false,
-                reason: "already-running",
-                runtimeId: this.runtimeStateValue.runtimeId,
-            });
-        }
-        if (this.runtimeStateValue.kind === "stopping") {
-            // The old Runtime is still tearing down. Do NOT refuse as
-            // "already-running": that would strand the Preview with no
-            // Runtime once the old one exits (nothing would relaunch it).
-            // Wait for the old process's exit settlement, then launch the
-            // next one — sequential ownership, one attached Runtime at a time.
-            const settlement = this.runtimeExitSettlement;
-            if (settlement === null) {
-                // Defensive: no exit settlement means exit cannot be proven.
-                return Promise.resolve({
-                    launched: false,
-                    reason: "already-running",
-                    runtimeId: this.runtimeStateValue.runtimeId,
-                });
-            }
-            return settlement.exited.then(() => this.launchAttachedPreview());
-        }
+    /** The candidate deployment a launch would use, derived only from
+     *  build-line facts (the latest published attempt for the deployment).
+     *  The launch itself - admission, session binding, state machine,
+     *  teardown proof - belongs to the Runtime manager. */
+    launchCandidate(): ToolCandidate | null {
         const candidate = this.currentDeploymentCandidate();
-        const published = candidate === null ? undefined : [...lineForDeployment(this.sessionState.line, candidate).attempts]
+        if (candidate === null) {
+            return null;
+        }
+        const published = [...lineForDeployment(this.sessionState.line, candidate).attempts]
             .sort((left, right) => right.attemptSequence - left.attemptSequence)
-            .find(
-                (attempt) =>
-                    attempt.state === "settled" && attempt.outcome.kind === "published",
-            );
-        if (published === undefined) {
-            return Promise.resolve({ launched: false, reason: "initial-publication-unavailable" });
-        }
-        this.runtimeStateValue = { kind: "launching" };
-        this.runtimeCandidateValue = published.candidate;
-        const promise = this.runAttachedLaunch(published.candidate).finally(() => {
-            if (this.runtimeLaunchLane === promise) {
-                this.runtimeLaunchLane = null;
-            }
-        });
-        this.runtimeLaunchLane = promise;
-        return promise;
+            .find((attempt) => attempt.state === "settled" && attempt.outcome.kind === "published");
+        return published !== undefined ? published.candidate : null;
     }
 
-    private async runAttachedLaunch(candidate: ToolCandidate): Promise<AttachedPreviewLaunch> {
-        let result: PreviewRuntimeLaunchResult;
-        try {
-            result = await this.runtimeBoundary.launchAttachedPreview(
-                candidate,
-                this.sessionState.sessionId,
-            );
-        } catch (error) {
-            this.runtimeCandidateValue = null;
-            this.runtimeExitSettlement = null;
-            this.runtimeStateValue = { kind: "idle" };
-            throw error;
-        }
-        if (result.kind !== "launched") {
-            if (result.kind === "candidate-invalidated") {
-                this.toolPort.candidateInvalidated(result);
-            }
-            this.runtimeCandidateValue = null;
-            this.runtimeExitSettlement = null;
-            this.runtimeStateValue = { kind: "launch-refused", result };
-            return { launched: false, reason: "host-refused", result };
-        }
-        this.runtimeStateValue = {
-            kind: "running",
-            runtimeId: result.runtimeId,
-            runtimeIdentity: result.runtimeIdentity,
-        };
-        this.runtimeExitSettlement = { runtimeId: result.runtimeId, exited: result.exited };
-        void result.exited.then((exit) => {
-            const state = this.runtimeStateValue;
-            if (
-                (state.kind === "running" || state.kind === "stopping") &&
-                state.runtimeId.sequence === exit.runtimeId.sequence
-            ) {
-                this.runtimeCandidateValue = null;
-                this.runtimeExitSettlement = null;
-                this.runtimeStateValue = {
-                    kind: "exited",
-                    runtimeIdentity: state.runtimeIdentity,
-                    exit,
-                };
-            }
-        });
-        return {
-            launched: true,
-            runtimeId: result.runtimeId,
-            runtimeIdentity: result.runtimeIdentity,
-            exited: result.exited,
-        };
-    }
-
-    /** Request the stop of the attached Runtime. The returned outcome proves
-     *  only that the host ACCEPTED the request (or the Runtime had already
-     *  settled) — NOT that the process has exited. Ownership transitions
-     *  (retarget, closing the Preview target) must instead use
-     *  `stopAttachedPreviewAndWait`, which also awaits the exit settlement. */
-    async stopAttachedPreview(): Promise<PreviewRuntimeStopOutcome | null> {
-        const state = this.runtimeStateValue;
-        if (state.kind !== "running" && state.kind !== "stopping") {
-            return null;
-        }
-        this.runtimeStateValue = {
-            kind: "stopping",
-            runtimeId: state.runtimeId,
-            runtimeIdentity: state.runtimeIdentity,
-        };
-        try {
-            return await this.runtimeBoundary.stopAttachedPreview(state.runtimeId);
-        } catch (error) {
-            const current = this.runtimeStateValue;
-            if (current.kind === "stopping" && current.runtimeId.sequence === state.runtimeId.sequence) {
-                this.runtimeStateValue = {
-                    kind: "running",
-                    runtimeId: state.runtimeId,
-                    runtimeIdentity: state.runtimeIdentity,
-                };
-            }
-            throw error;
-        }
-    }
-
-    /**
-     * The strict teardown used by ownership transitions (retarget, closing
-     * the Preview target). Unlike `stopAttachedPreview`, this resolves ONLY
-     * after the old Runtime has verifiably LEFT:
-     *
-     *   1. a launch in flight settles first (single-flight lane), so state
-     *      reflects the Runtime that actually exists;
-     *   2. the stop is requested (if the Runtime is still running and no
-     *      stop is already in progress);
-     *   3. the exit settlement of THAT exact RuntimeId is awaited.
-     *
-     * Exit-fact judgment: `stopped` / `exited` are the only facts that prove
-     * the process is gone; `wait-failed` means the host could only
-     * best-effort kill/wait and CANNOT prove the Runtime exited — that
-     * REJECTS, and the caller must keep the prior ownership (no retarget
-     * commit, no target-tab close).
-     *
-     * Failing loudly is part of the contract:
-     *   - an attached Runtime (running/stopping) with NO exit settlement is
-     *     a flow invariant violation (the settlement is set at launch and
-     *     cleared at exit) — it throws, never a silent "nothing to do";
-     *   - a failure of the stop request, or a `wait-failed` exit, rejects —
-     *     the transition is NOT complete and must not be followed by a
-     *     retarget commit or a target close.
-     *
-     * Resolves `null` only when no attached Runtime needs tearing down.
-     */
-    async stopAttachedPreviewAndWait(): Promise<PreviewRuntimeExit | null> {
-        if (this.runtimeLaunchLane !== null) {
-            await this.runtimeLaunchLane;
-        }
-        const state = this.runtimeStateValue;
-        if (state.kind !== "running" && state.kind !== "stopping") {
-            return null;
-        }
-        // Capture THIS Runtime's exit settlement BEFORE requesting the stop:
-        // the process may settle — and its exit handler may already have
-        // cleared the field — while the stop request is being delivered. The
-        // awaited handle must be the promise of this exact Runtime, held as a
-        // local, not a field that can be cleared under us.
-        const settlement = this.runtimeExitSettlement;
-        if (settlement === null) {
-            // A running/stopping Runtime ALWAYS has an exit settlement;
-            // reaching this point means the flow's ownership bookkeeping is
-            // broken. Failing loudly is strictly safer than pretending the
-            // teardown is a no-op.
-            throw new Error(
-                `Preview flow invariant: attached Runtime #${state.runtimeId.sequence} is ${state.kind} but has no exit settlement; the teardown cannot be proven complete.`,
-            );
-        }
-        if (state.kind === "running") {
-            await this.stopAttachedPreview();
-        }
-        const result = await settlement.exited;
-        if (result.kind === "wait-failed") {
-            // The host could not prove the process left. Teardown success
-            // requires proof; reject so the caller refuses to retarget or
-            // close against a Runtime that may still be alive.
-            throw new Error(
-                `Attached Preview Runtime #${result.runtimeId.sequence} could not be proven exited (host wait-failed); the ownership transition was not committed.`,
-            );
-        }
-        return result;
+    /** Routes the launch "candidate-invalidated" host fact to the owner of
+     *  the ordinary tool state: the manager reports the fact; the build
+     *  authority applies it. */
+    reportCandidateInvalidation(result: CandidateInvalidatedResult): void {
+        this.toolPort.candidateInvalidated(result);
     }
 }
