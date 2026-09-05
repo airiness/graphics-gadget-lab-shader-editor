@@ -26,7 +26,7 @@ export interface FakePreviewRuntimeSpec {
     readonly stopReleaseKind?: "stopped" | "wait-failed";
     /** When set, the NEXT `stopAttachedPreview` call REJECTS (the host could
      *  not even process the request; the process may still exist).
-     *  One-shot: a later call behaves normally. */
+     *  One-shot per arming; test code may re-arm by writing `true` again. */
     readonly stopRequestFailure?: boolean | undefined;
 }
 
@@ -42,6 +42,12 @@ export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
     private heldStop: { readonly runtimeId: PreviewRuntimeId; readonly settle: (exit: PreviewRuntimeExit) => void } | null = null;
     private settledExitCount = 0;
     private stopRequestFailureArmed = false;
+
+    /** Re-arm the one-shot `stopAttachedPreview` rejection (for "stop #2
+     *  also fails" scenarios). */
+    armStopRequestFailure(): void {
+        this.stopRequestFailureArmed = true;
+    }
 
     constructor(private readonly spec: FakePreviewRuntimeSpec) {
         this.stopRequestFailureArmed = this.spec.stopRequestFailure === true;

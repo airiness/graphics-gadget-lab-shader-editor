@@ -149,6 +149,11 @@ Rules:
   join the same in-flight request; a failed stop request REJECTS the
   teardown and rolls state back to `running` (ownership retained) — it must
   never hang on a stale settlement and never is a proven teardown.
+- Exact stop-lane discipline: a strict teardown awaits the SPECIFIC stop
+  lane it captured; when that exact lane rejects, the teardown rejects
+  IMMEDIATELY. A stop retry started afterwards is a NEW intent and is never
+  auto-joined into the in-flight teardown (no state-based "still
+  terminating" bypass).
 - Unmount / cleanup must call the strict teardown (fire-and-forget), not a
   plain `stop()`: a plain stop is a no-op while `launching` and would orphan
   a Runtime whose launch settles after unmount.
@@ -444,8 +449,8 @@ host-level process-lifetime guarantee.
 Untouched in Slice 1:
 
 - `workspace-session.ts` reducer semantics;
-- `packages/shader-toolchain-client` contracts;
-- fake host boundary;
+- `packages/shader-toolchain-client` PRODUCTION contracts (test fakes may
+  add deterministic failure injection);
 - Tauri/Rust host implementation;
 - `packages/editor-ui`.
 

@@ -28,15 +28,18 @@ export type AttachedRuntimeState =
     | { readonly kind: "launching" }
     | { readonly kind: "running"; readonly runtimeId: PreviewRuntimeId; readonly runtimeIdentity: string }
     | { readonly kind: "terminating"; readonly runtimeId: PreviewRuntimeId }
+    /** `exit-unproven` ALWAYS carries the same owned binding (identity
+     *  non-nullable): the frozen invariant is that ownership persists, and
+     *  the type must not allow `exit-unproven` + `ownedRuntime === null`. */
     | {
           readonly kind: "exit-unproven";
           readonly runtimeId: PreviewRuntimeId;
-          readonly runtimeIdentity: string | null;
+          readonly runtimeIdentity: string;
           readonly exit: PreviewRuntimeExit;
       }
     | {
           readonly kind: "launch-refused";
-          readonly result: Exclude<PreviewRuntimeLaunchResult, { readonly launched: true }>;
+          readonly result: Exclude<PreviewRuntimeLaunchResult, { readonly kind: "launched" }>;
       };
 
 /** The owned Runtime + the deployment toolPath it was launched from
@@ -60,7 +63,7 @@ export type AttachedRuntimeLaunch =
           readonly reason: "launch-in-flight" | "runtime-attached" | "exit-unproven";
           readonly runtimeId: PreviewRuntimeId;
       }
-    | { readonly launched: false; readonly reason: "host-refused"; readonly result: Exclude<PreviewRuntimeLaunchResult, { readonly launched: true }> };
+    | { readonly launched: false; readonly reason: "host-refused"; readonly result: Exclude<PreviewRuntimeLaunchResult, { readonly kind: "launched" }> };
 
 export type AttachedRuntimeStop =
     | { readonly outcome: "stop-requested"; readonly runtimeId: PreviewRuntimeId }
@@ -194,22 +197,20 @@ export class AttachedPreviewRuntimeManager {
         if (state.kind === "running") {
             this.runStopRequest();
         }
-        // A stop request for this Runtime is in flight (ours or a concurrent
-        // caller's): join its outcome and let a FAILURE propagate instead of
-        // hanging on the stale settlement.
+        // Exact stop-lane contract: strict teardown awaits the SINGLE stop
+        // lane captured for THIS teardown (ours or the concurrent caller's).
+        // If that exact lane REJECTS, the teardown rejects immediately — a
+        // later retry is a NEW intent: it is never auto-joined here, so the
+        // teardown cannot hang on a settlement no live stop request owns.
         const stopLane = this.stopLane;
         if (stopLane !== null) {
             try {
                 await stopLane;
             } catch (error) {
-                const current = this.stateValue;
-                if (current.kind !== "terminating") {
-                    throw new Error(
-                        `attached Preview Runtime #${runtimeId.sequence} could not be stopped (the process may still exist, so the strict teardown was not committed).`,
-                        { cause: error },
-                    );
-                }
-                // A fresh stop request is already in progress; join it below.
+                throw new Error(
+                    `attached Preview Runtime #${runtimeId.sequence} could not be stopped (the exact stop request failed and its retry is a new intent; the process may still exist, so the strict teardown was not committed).`,
+                    { cause: error },
+                );
             }
         }
         // Re-read: the exit may have settled (via the stop ACK or naturally)
@@ -230,10 +231,16 @@ export class AttachedPreviewRuntimeManager {
         }
         const exit = await settlement.exited;
         if (exit.kind === "wait-failed") {
+            const identity = this.attachedIdentity;
+            if (identity === null) {
+                throw new Error(
+                    `Preview Runtime invariant: attached Runtime #${settlement.runtimeId.sequence} settled as wait-failed without a launch identity; ownership cannot be projected.`,
+                );
+            }
             this.stateValue = {
                 kind: "exit-unproven",
                 runtimeId: settlement.runtimeId,
-                runtimeIdentity: this.attachedIdentity,
+                runtimeIdentity: identity,
                 exit,
             };
             return { outcome: "exit-unproven", runtimeId: settlement.runtimeId };
@@ -283,11 +290,15 @@ export class AttachedPreviewRuntimeManager {
             },
         );
         this.launchLane = lane;
-        void lane.finally(() => {
+        // `then(clear, clear)`, not `finally`: a finally-chain would DERIVE
+        // another rejected promise that nobody could handle; both arms clear
+        // the lane and re-throw through THIS (already handled) promise.
+        const clearLane = (): void => {
             if (this.launchLane === lane) {
                 this.launchLane = null;
             }
-        });
+        };
+        void lane.then(clearLane, clearLane);
         return lane;
     }
 
@@ -357,10 +368,16 @@ export class AttachedPreviewRuntimeManager {
             return;
         }
         if (exit.kind === "wait-failed") {
+            const identity = this.attachedIdentity;
+            if (identity === null) {
+                throw new Error(
+                    `Preview Runtime invariant: Runtime #${settlement.runtimeId.sequence} settled as wait-failed without a launch identity; ownership cannot be projected.`,
+                );
+            }
             this.stateValue = {
                 kind: "exit-unproven",
                 runtimeId: settlement.runtimeId,
-                runtimeIdentity: this.attachedIdentity,
+                runtimeIdentity: identity,
                 exit,
             };
             return;

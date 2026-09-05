@@ -144,6 +144,45 @@ describe("attached Preview Runtime lifetime authority — termination proof", ()
         expect(manager.state).toEqual({ kind: "idle" });
     });
 
+    it("an exact rejected stop lane rejects the strict teardown even if a stop RETRY follows (never a hang)", async () => {
+        const boundary = runtime(
+            {
+                launches: [{ kind: "launched", runtimeIdentity: "runtime-a" }],
+                holdStopUntilRelease: true,
+                stopReleaseKind: "stopped",
+                stopRequestFailure: true,
+            },
+        );
+        const manager = managerFor(boundary);
+        const launched = await manager.launch(CANDIDATE_A);
+        if (launched.launched !== true) {
+            throw new Error("test launch must attach");
+        }
+
+        // stop #1 (a plain Stop intent) fails; state rolls back to `running`.
+        await expect(manager.stop()).rejects.toThrow(/stop request/i);
+        expect(manager.state).toMatchObject({ kind: "running" });
+
+        // stop #2 (the strict teardown's own lane) also fails, and a
+        // concurrent RETRY joins that same lane. The strict teardown is
+        // bound to the EXACT lane it awaits: when that lane rejects it
+        // must REJECT — never adopt the retry, never hang on a settlement
+        // no live stop request owns.
+        boundary.armStopRequestFailure();
+        const strict = manager.terminateAndJoin();
+        const retry = manager.stop();
+        await expect(strict).rejects.toThrow(/could not be stopped|new intent/i);
+        await expect(retry).rejects.toThrow(/stop request/i);
+        expect(manager.state).toMatchObject({ kind: "running" });
+        expect(manager.ownedRuntime).toMatchObject({ deploymentToolPath: CANDIDATE_A.toolPath });
+
+        // Recovery with a fresh intent:
+        await expect(manager.stop()).resolves.toMatchObject({ outcome: "stop-requested" });
+        expect(boundary.releaseStop()).toBe(true);
+        await expect(manager.terminateAndJoin()).resolves.toEqual({ outcome: "terminated" });
+        expect(manager.state).toEqual({ kind: "idle" });
+    });
+
     it("terminates a launch that settles AFTER an unmount-style strict teardown was started", async () => {
         const boundary = runtime(
             {
