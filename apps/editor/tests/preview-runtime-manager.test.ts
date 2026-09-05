@@ -400,9 +400,15 @@ describe("attached Preview Runtime lifetime authority — launch refusal", () =>
         // but the host may HAVE spawned the Runtime: an admission outcome
         // we do not know is NOT a refusal and NOT proof of absence.
         await expect(manager.launch(CANDIDATE_A)).rejects.toThrow(/launch result|host call/i);
-        expect(manager.state).toEqual({ kind: "launch-outcome-unproven" });
+        // The attempted deployment is retained as an IMMUTABLE
+        // attempted-candidate fact — NOT as an owned binding.
+        expect(manager.state).toEqual({
+            kind: "launch-outcome-unproven",
+            attemptedDeploymentToolPath: CANDIDATE_A.toolPath,
+        });
         // `ownedRuntime === null` here must NOT be read as "no Runtime".
         expect(manager.ownedRuntime).toBeNull();
+        expect(manager.ownedCandidate).toBeNull();
         expect(manager.launchInFlight).toBe(false);
 
         // No second Runtime launch — and no host call.
@@ -416,6 +422,31 @@ describe("attached Preview Runtime lifetime authority — launch refusal", () =>
 
         // A plain stop has no lease to act on.
         await expect(manager.stop()).resolves.toEqual({ outcome: "not-attached" });
+    });
+
+    it("a launch that settles as session-already-running DURING a strict teardown rejects it (never already-exited)", async () => {
+        const boundary = runtime({
+            launches: [{ kind: "session-already-running", runtimeId: { sequence: 42 } }],
+            keepLaunchPending: true,
+            holdStopUntilRelease: true,
+            stopReleaseKind: "stopped",
+        });
+        const manager = managerFor(boundary);
+        const pendingLaunch = manager.launch(CANDIDATE_A);
+        const teardown = manager.terminateAndJoin();
+
+        // The host settles the launch while the teardown waits: it
+        // EXPLICITLY reports a live Runtime for this session.
+        expect(boundary.releaseLaunch()).toBe(true);
+        await pendingLaunch;
+
+        // The strict continuation must re-interpret the FINAL ownership
+        // state (conflict). `already-exited` here would invert the host's
+        // ownership fact; the ownership transition therefore cannot commit.
+        await expect(teardown).rejects.toThrow(/already running for this session/i);
+        expect(manager.state).toEqual({ kind: "runtime-ownership-conflict", runtimeId: { sequence: 42 } });
+        // No lease was ever held and no stop request may be issued:
+        expect(boundary.releaseStop()).toBe(false);
     });
 
     it("throws on an attached Runtime missing its exit settlement (invariant, never a no-op)", async () => {

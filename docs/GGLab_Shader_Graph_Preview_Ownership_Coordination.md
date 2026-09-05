@@ -197,6 +197,17 @@ Rules:
   cannot commit, and no fake recovery (no speculative stop, no
   attach-guess) is performed. Re-proof via a SessionId / Runtime query is a
   host-contract matter, out of Slice 1 scope.
+  The attempted deployment is retained in this state as an immutable
+  attempted-candidate fact (attemptedDeploymentToolPath) — for
+  diagnostics and Slice 2 recovery, and NEVER as an owned binding
+  (ownedRuntime / ownedCandidate stay null/false).
+
+- A strict teardown that JOINS a pending launch must re-interpret the
+  FINAL ownership state — not the raw launch outcome:
+  runtime-ownership-conflict and launch-outcome-unproven REJECT;
+  exit-unproven returns the stored fact; ONLY an explicitly proven
+  no-Runtime state (idle / launch-refused) may resolve already-exited.
+  launched === false is NEVER itself "no Runtime".
 
 The current host removes its registry entry after the settlement thread ends;
 that registry miss is not termination evidence and therefore cannot release

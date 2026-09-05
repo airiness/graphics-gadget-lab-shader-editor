@@ -39,7 +39,7 @@ export type AttachedRuntimeState =
       }
     | {
           readonly kind: "launch-refused";
-          readonly result: Exclude<PreviewRuntimeLaunchResult, { readonly kind: "launched" }>;
+          readonly result: PreviewLaunchRefusal;
       }
     /** The host EXPLICITLY reported a live Runtime for this session, but
      *  this manager has no lease / launch identity / exit settlement for
@@ -55,8 +55,13 @@ export type AttachedRuntimeState =
      *  Runtime launch is forbidden, an ownership transition CANNOT commit,
      *  and the absence of an owned binding here is NOT evidence that no
      *  Runtime exists. No fake recovery in Slice 1; re-proof is a
-     *  host-contract matter (session / Runtime query). */
-    | { readonly kind: "launch-outcome-unproven" };
+     *  host-contract matter (session / Runtime query). The attempted
+     *  deployment is retained as an IMMUTABLE attempted-candidate fact
+     *  (diagnostics / Slice 2 recovery) — it is NOT an owned binding. */
+    | {
+          readonly kind: "launch-outcome-unproven";
+          readonly attemptedDeploymentToolPath: string;
+      };
 
 /** The owned Runtime + the deployment toolPath it was launched from
  *  (exact `ToolCandidate.toolPath`; never a Program Descriptor identity).
@@ -79,7 +84,7 @@ export type AttachedRuntimeLaunch =
           readonly reason: "launch-in-flight" | "runtime-attached" | "exit-unproven" | "runtime-ownership-conflict";
           readonly runtimeId: PreviewRuntimeId;
       }
-    | { readonly launched: false; readonly reason: "host-refused"; readonly result: Exclude<PreviewRuntimeLaunchResult, { readonly kind: "launched" }> }
+    | { readonly launched: false; readonly reason: "host-refused"; readonly result: PreviewLaunchRefusal }
     | { readonly launched: false; readonly reason: "launch-outcome-unproven" };
 
 export type AttachedRuntimeStop =
@@ -87,6 +92,15 @@ export type AttachedRuntimeStop =
     | { readonly outcome: "join-in-progress"; readonly runtimeId: PreviewRuntimeId }
     | { readonly outcome: "unproven-rejoin"; readonly runtimeId: PreviewRuntimeId }
     | { readonly outcome: "not-attached" };
+
+/** The EXPLICIT host refusal kinds that `launch-refused` may carry.
+ *  `session-already-running` is deliberately EXCLUDED: that result is an
+ *  ownership fact (the host KNOWS a Runtime exists), never a refusal —
+ *  `launch-refused + session-already-running` is unrepresentable. */
+export type PreviewLaunchRefusal = Exclude<
+    PreviewRuntimeLaunchResult,
+    { readonly kind: "launched" } | { readonly kind: "session-already-running" }
+>;
 
 /** The tri-valued strict-teardown proof. `exit-unproven` is a HONEST fact
  *  (the host could only best-effort kill/wait): callers must keep the prior
@@ -104,6 +118,11 @@ export class AttachedPreviewRuntimeManager {
     /** The Runtime's exit settlement captured at attach time (never by a
      *  registry lookup). */
     private exitSettlement: { readonly runtimeId: PreviewRuntimeId; readonly exited: Promise<PreviewRuntimeExit> } | null = null;
+    /** The candidate whose launch was attempted — retained through an
+     *  UNKNOWN outcome as an immutable attempted-candidate fact
+     *  (diagnostics / Slice 2 recovery). It is NOT an owned binding:
+     *  `ownedCandidate` stays null until attach. */
+    private attemptedCandidateValue: ToolCandidate | null = null;
     /** The attached Runtime's launch identity (retained for the unproven
      *  projection while the Runtime is NOT proven gone). */
     private attachedIdentity: string | null = null;
@@ -200,16 +219,33 @@ export class AttachedPreviewRuntimeManager {
      *  registry miss as a proof.
      */
     async terminateAndJoin(): Promise<TerminationProof> {
+        // Join a pending launch lane first — then re-interpret the FINAL
+        // ownership state. The launch OUTCOME (launched / refused / conflict
+        // / unproven) never decides on its own: `launched === false` is NOT
+        // "no Runtime" (the host may have reported one — conflict — or the
+        // outcome may be unknown — unproven). Only an explicitly PROVEN
+        // no-Runtime state may resolve `already-exited`.
         const launchLane = this.launchLane;
         if (launchLane !== null) {
-            const outcome = await launchLane;
-            if (outcome.launched === false) {
-                const state = this.stateValue;
-                if (state.kind === "exit-unproven") {
-                    return { outcome: "exit-unproven", runtimeId: state.runtimeId };
-                }
+            await launchLane;
+            const final = this.stateValue;
+            if (final.kind === "runtime-ownership-conflict") {
+                throw new Error(
+                    `attached Preview Runtime #${final.runtimeId.sequence} was reported by the host as already running for this session, but this manager owns no lease for it; the ownership transition cannot commit.`,
+                );
+            }
+            if (final.kind === "launch-outcome-unproven") {
+                throw new Error(
+                    `the last Preview Runtime launch outcome is unproven (the host may have spawned a Runtime); a strict teardown cannot be issued without a lease, so the ownership transition cannot commit.`,
+                );
+            }
+            if (final.kind === "exit-unproven") {
+                return { outcome: "exit-unproven", runtimeId: final.runtimeId };
+            }
+            if (final.kind === "idle" || final.kind === "launch-refused" || final.kind === "launching") {
                 return { outcome: "already-exited" };
             }
+            // a successful launch settles below into the running path
         }
         const state = this.stateValue;
         if (state.kind === "launch-outcome-unproven") {
@@ -305,6 +341,7 @@ export class AttachedPreviewRuntimeManager {
 
     private runLaunch(candidate: ToolCandidate): Promise<AttachedRuntimeLaunch> {
         this.stateValue = { kind: "launching" };
+        this.attemptedCandidateValue = candidate;
         const attempt = this.boundary.launchAttachedPreview(candidate, this.sessionId);
         const lane: Promise<AttachedRuntimeLaunch> = attempt.then(
             (result) => {
@@ -321,6 +358,7 @@ export class AttachedPreviewRuntimeManager {
                     return { launched: false as const, reason: "host-refused" as const, result };
                 }
                 this.ownedCandidateValue = candidate;
+                this.attemptedCandidateValue = null;
                 this.attachedIdentity = result.runtimeIdentity;
                 this.exitSettlement = { runtimeId: result.runtimeId, exited: result.exited };
                 this.stateValue = {
@@ -459,9 +497,13 @@ export class AttachedPreviewRuntimeManager {
         // the host can spawn the process and then fail to deliver the
         // result. Enter `launch-outcome-unproven` (an admission refusal
         // is an explicit host fact; a rejection is only an absence of
-        // proof).
-        this.stateValue = { kind: "launch-outcome-unproven" };
+        // proof). The attempted deployment is retained as an immutable
+        // attempted-candidate fact (diagnostics / Slice 2 recovery) —
+        // NOT an owned binding.
+        const attempted = this.attemptedCandidateValue?.toolPath ?? "unknown";
+        this.stateValue = { kind: "launch-outcome-unproven", attemptedDeploymentToolPath: attempted };
         this.ownedCandidateValue = null;
+        this.attemptedCandidateValue = null;
         this.exitSettlement = null;
         this.attachedIdentity = null;
     }

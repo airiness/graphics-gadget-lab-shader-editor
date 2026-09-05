@@ -740,7 +740,10 @@ describe("Attached Preview Runtime authority - composition facts read by the flo
 
         await publish(flow);
         await expect(manager.launch(CANDIDATE_A)).rejects.toThrow();
-        expect(manager.state).toMatchObject({ kind: "launch-outcome-unproven" });
+        expect(manager.state).toMatchObject({
+            kind: "launch-outcome-unproven",
+            attemptedDeploymentToolPath: CANDIDATE_A.toolPath,
+        });
 
         // One exact structured refusal — never admission on the assumption
         // that no Runtime exists.

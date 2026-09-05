@@ -2401,17 +2401,20 @@ export function App() {
                                 variant="ghost"
                                 onClick={() => void preview.stopPreview()}
                                 disabled={
+                                    // Stop is enabled ONLY where the manager
+                                    // holds a lease and can act:
+                                    // `running` / `terminating` /
+                                    // `exit-unproven`. Every other state —
+                                    // `idle`, `launching`, `launch-refused`,
+                                    // `runtime-ownership-conflict`,
+                                    // `launch-outcome-unproven` — has no
+                                    // lease; offering Stop there and seeing
+                                    // "No attached Runtime" would contradict
+                                    // the host's ownership fact / the unknown
+                                    // launch outcome.
                                     preview.runtime.kind !== "running" &&
                                     preview.runtime.kind !== "terminating" &&
-                                    preview.runtime.kind !== "exit-unproven" &&
-                                    // Under `runtime-ownership-conflict` /
-                                    // `launch-outcome-unproven` the manager
-                                    // holds no lease: Stop must not be
-                                    // offered (reporting "no Runtime" would
-                                    // contradict the host's ownership fact /
-                                    // the unknown launch outcome).
-                                    preview.runtime.kind !== "runtime-ownership-conflict" &&
-                                    preview.runtime.kind !== "launch-outcome-unproven"
+                                    preview.runtime.kind !== "exit-unproven"
                                 }
                             >
                                 Stop attached Lab
