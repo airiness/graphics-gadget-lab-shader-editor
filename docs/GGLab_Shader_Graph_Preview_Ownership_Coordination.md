@@ -1,6 +1,8 @@
 # GGLab Shader Graph Preview Ownership Coordination
 
-> Status: Plan approved 2026-09-04 — Slice 1 implementation not yet started
+> Status: Plan approved 2026-09-04; revised after the strict review of
+> 2c96dba (architecture choice resolved, design freeze pending; Slice 1
+> implementation not yet started)
 >
 > Authority relationship: this document records the preview-ownership
 > architecture decision (ownership authorities, Runtime state machine,
@@ -132,8 +134,14 @@ interface AttachedPreviewRuntimeManager {
     readonly state: AttachedRuntimeState;
     launch(binding: RuntimeTargetBinding): Promise<AttachedRuntimeLaunchResult>;
     terminateAndJoin(): Promise<TerminationProof>;
-    // build-side gate contribution (Runtime half only)
-    buildBlocker(composition: PreviewCompositionInput): BuildGateRefusal | null;
+    // Runtime FACTS only — the manager never speaks build-domain
+    // vocabulary; the coordinator maps these facts to build-gate refusals:
+    readonly launchInFlight: boolean;
+    readonly attached: {
+        readonly runtimeId: PreviewRuntimeId;
+        readonly runtimeIdentity: string;
+        readonly bindingIdentity: string;   // program-descriptor identity at launch
+    } | null;
 }
 ```
 
@@ -159,54 +167,72 @@ interface AttachedPreviewRuntimeManager {
 
 ## Transition procedures (coordinator-owned, sole execution path)
 
-Both procedures take the target document/session inputs plus the
-**`WorkspaceMutationPort`** contract, and return a **structured
-result** — the app maps refusals to user notes in exactly one place.
+Both procedures take the target document/session inputs plus the **Workspace
+store authority** (the synchronous `WorkspaceStore`, defined below), and
+return a **structured result** — now a genuine synchronous return of the
+store's `apply`, mapped by the app to user notes in exactly one place.
 
-### `WorkspaceMutationPort` (the commit authority contract)
+### Workspace store authority (architecture choice — resolved in strict review)
 
-A commit must be an **atomic** `read current` → `revalidate` →
-`reducer(current)` → `publish` against the current session. A read-only
-getter cannot express that guarantee (it permits
-`provider() → compute next → set(next)`, where "next" was computed from a
-stale snapshot), so the contract the coordinator receives expresses commit
-authority, not snapshot access:
+The draft contract (a `Promise`-returning `attempt` implemented app-side via
+`setWorkspace(current => ...)`) cannot hold together with "the
+`terminateAndJoin` proof is the last await; the commit afterwards is a
+synchronous burst". A React functional updater has **no clean synchronous
+result channel**, and manufacturing one (resolving a Promise from inside the
+updater, or writing an external variable during dispatch) is precisely the
+pseudo-synchronous transaction that must not be wrapped around `setWorkspace`.
+Decision:
+
+> **The Workspace session gets a single synchronous store authority; React
+> degrades to a projection of it.** `apply(current => result)` returns the
+> transition result synchronously; the store owns atomicity and the result.
+> (Rejected alternative: keep `setWorkspace` as a façade transaction with a
+> smuggled result channel — non-pure updater, StrictMode double-invocation,
+> no exception-safe completion.)
 
 ```ts
-interface WorkspaceMutationPort {
+class WorkspaceStore {                       // the SINGLE Workspace authority
+    readonly current: WorkspaceSession;      // observation only — never commit authority
     /**
-     * Atomically apply ONE workspace mutation against the session as it
-     * currently stands, and report the structured result. The app-side
-     * implementation is the SAME authority path used by every other
-     * workspace change — a functional state update, i.e. the shape of
-     * `setWorkspace(current => revalidate-and-reduce(current))`.
+     * Synchronous. Applies `reduce` EXACTLY ONCE against `this.current` as
+     * it stands at apply time. `reduce` revalidates the recorded intent on
+     * `current`, then runs the pure reducer (or reports a structured
+     * refusal). Resolves: ok → current is replaced by `next`; refusal →
+     * current is published unchanged. RETURNS the structured result
+     * synchronously. Never throws across the mutation boundary.
      */
-    attempt(mutation: WorkspaceTransitionMutation): Promise<WorkspaceTransitionResult>;
-}
-
-interface WorkspaceTransitionMutation {
-    /** The recorded intent identity (kind, target, sequence) for evidence. */
-    readonly intent: TransitionIntent;
-    /**
-     * Runs INSIDE the atomic update, receiving the session `current` as it
-     * stands at apply time. Returns the reduced session, or a structured
-     * refusal — in which case `current` is published unchanged. Revalidation
-     * of the intent identity must happen here, on `current`, in the same
-     * synchronous application.
-     */
-    readonly apply: (current: WorkspaceSession) =>
-        { readonly ok: true; readonly next: WorkspaceSession; readonly changed?: boolean }
-        | { readonly ok: false; readonly refusal: TransitionRefusal };
+    apply(
+        mutation: {
+            readonly intent: TransitionIntent,   // kind, target, sequence (identity/evidence)
+            readonly reduce: (current: WorkspaceSession) =>
+                | { readonly ok: true; readonly next: WorkspaceSession }
+                | { readonly ok: false; readonly refusal: TransitionRefusal },
+        },
+    ): WorkspaceTransitionResult;
 }
 ```
 
-**Forbidden**: `provider() → compute next → setWorkspace(next)` (a whole next
-session pre-computed from an older read, written back over the state at
-apply time). **Required shape**: `setWorkspace(current => apply(current))` —
-with revalidation, reducer and refusal decision all made inside that single
-synchronous application against `current`. A long-lived ref snapshot (e.g.
-the app's render-cache `workspaceRef`) remains observation-only, never commit
-authority.
+React integration: the app renders the workspace through
+`useSyncExternalStore` (a `useWorkspaceSession(store)` projection); every
+existing `setWorkspace(current => reducer(current))` site becomes
+`store.apply(...)` with the same reducer body; the render-cache
+`workspaceRef` becomes `store.current` (observation only). This is a scoped,
+mechanical rewiring of the app's workspace state wiring — reducers, editor-ui
+and client packages are untouched.
+
+Because the commit is now a synchronous `store.apply`, the three previously
+mutually exclusive requirements hold simultaneously: the proof of
+`terminateAndJoin` remains the transition's last `await`; the commit and its
+revalidation are one synchronous atomic application; and the result is a
+real return value, not a smuggled one.
+
+**Forbidden** (all three): a read-only provider shape —
+`provider() → compute next → set(next)`; a pseudo-synchronous transaction
+wrapped around `setWorkspace` (Promise/external-variable result smuggling);
+any ref snapshot acting as commit authority. **Required**: one synchronous
+`store.apply(current => ...)`, with revalidation, reducer and refusal
+decision all made inside that single application against `current`; a commit
+result computed from a stale session is refused, not applied.
 
 ### Transition discipline (both procedures)
 
@@ -222,31 +248,33 @@ closed, the active tab moved). The discipline therefore is:
    `transition-in-flight` (an honest refusal; the UI prompts a retry). No
    queueing, no auto-supersede — the user retries once the in-flight
    transition completes. The sequence is **never** a latest-intent /
-   supersession protocol.
+   supersession protocol. The claim is exception-safe: every transition is
+   structured `claim → try { … } finally { release }` — no refusal, error, or
+   throw may leave the in-flight claim held (a leaked claim would
+   permanently kill the slot).
 3. **Last await**: `manager.terminateAndJoin()` is the transition's final
    `await`.
 4. **Revalidate current inside one atomic application**: after the last
-   await, the coordinator applies the mutation through the
-   `WorkspaceMutationPort`; the recorded intent identity is revalidated against the `current`
-   that the functional update supplies, in the same synchronous application as the reducer: for `retarget`, the
-   requested document is still open; for `close-target`, the requested document is still the
-   Preview target (and its re-seed, when it commits, is derived from the active
-   document of that same `current` session).
+   await, the coordinator applies the mutation through `store.apply(...)`;
+   the recorded intent identity is revalidated against the `current` that
+   the store supplies at apply time, in the same synchronous application as
+   the reducer: for `retarget`, the requested document is still open; for
+   `close-target`, the requested document is still the Preview target (and
+   its re-seed, when it commits, is derived from the active document of
+   that same `current` session).
 5. **Synchronous commit burst**: from revalidation through the emission
    refresh (where applicable) to the target commit there is **no further
    await** — the commit cannot observe a stale snapshot, and no newer intent
    can interleave between revalidation and commit.
 6. **Commit authority, not snapshot access**: the coordinator holds no
-   getter and no pre-computed next session. Required shape:
-   `setWorkspace(current => revalidate-and-reduce(current))` — exactly the
-   `WorkspaceMutationPort.attempt` contract defined above: revalidation, the
-   reducer, and the refusal decision all happen inside that one synchronous
-   application against `current` (through the same workspace-authority path
-   the app already uses for every other workspace change). Forbidden shape:
-   `provider() → compute next → setWorkspace(next)`. A long-lived ref
-   snapshot (e.g. the app's render-cache `workspaceRef`) is observation-only,
-   never commit authority; a commit result computed from a stale session is
-   refused, not applied.
+   getter and no pre-computed next session. The commit is exactly one
+   synchronous `store.apply(current => revalidate-and-reduce(current))` on
+   the store's `current`, with revalidation, the reducer, and the refusal
+   decision all inside that single application (the store-authority section
+   above lists the forbidden shapes — no provider
+   `provider() → compute next → set(next)`, no pseudo-`setWorkspace`
+   transaction, no ref-snapshot commit authority; a commit result computed
+   from a stale session is refused, not applied).
 
 > Hard invariant: **no Preview ownership transition that crosses an `await`
 > may commit state computed from a stale `WorkspaceSession` snapshot** (the
@@ -259,15 +287,20 @@ closed, the active tab moved). The discipline therefore is:
 | Step | Action | On failure |
 |---|---|---|
 | 1 | Claim the single-flight slot; record the intent identity (kind, target, sequence); guard: target document is open in the current session | refuse `target-not-open` / `transition-in-flight` (strict single-flight — immediate refusal, no queueing) |
-| 2 | No-op path: if the target is already the Preview target, skip steps 3–4 (no Runtime interaction) | n/a |
+| 2 | Same-target fast path: if the target is already the Preview target, skip **only step 3** (the Runtime-termination step) — commit-time Workspace mutation still happens (revalidate, refresh the target's own emission, commit the transition); the PreviewTarget axis is unchanged and the result reports `targetChanged: false` (the presentation may legitimately have changed — hence not a bare `changed`) | n/a |
 | 3 | `proof = await manager.terminateAndJoin()` — the transition's **last await** | `exit-unproven` (sticky stored fact — no host call was made) → refuse `runtime-exit-unproven`, **zero Workspace/target mutation** |
-| 4 | Apply the mutation via the `WorkspaceMutationPort`: revalidate the intent identity inside that one atomic application (requested document still open) | refuse `target-stale` — **zero Workspace/target mutation** (the proven teardown already completed; nothing leaks, no stale state is written) |
+| 4 | Apply the mutation via the synchronous Workspace store (`store.apply`): revalidate the intent identity inside that one atomic application (requested document still open) | refuse `target-stale` — **zero Workspace/target mutation** (the proven teardown already completed; nothing leaks, no stale state is written) |
 | 5 | Refresh the target's own emission from the current document content (`emitHlsl` stored in the target's presentation — never borrowed from the active document) — synchronous | refuse `target-emission-unavailable` |
-| 6 | `commitWorkspacePreviewTarget` inside the same atomic application against `current` (the reducer remains state authority) — synchronous | refuse `target-commit-refused` (defensive) |
-| 7 | Release the single-flight slot; return `{ ok, changed }` | n/a |
+| 6 | `commitWorkspacePreviewTarget` inside the same atomic application against `current` (the reducer remains state authority) — synchronous; report `targetChanged: true` | refuse `target-commit-refused` (defensive) |
+| 7 | Release the single-flight slot — always, `finally`, on every refusal/exception path; return `{ ok, targetChanged }` | n/a |
 
-The coordinator does **not** auto-launch: launching the Runtime remains an
-explicit user action (behavior preserved).
+The retarget transition itself does **not** auto-launch. The existing
+product behavior is preserved as-is: **a build publication that succeeds
+while no Runtime is attached (and none is `stopping`) auto-launches the
+Runtime** — that decision stays in the build-composition flow, and its
+admission now reads the RuntimeManager state (`running` / `terminating` /
+`launching` suppress it; `exit-unproven` is refused by launch admission;
+`idle` admits).
 
 ### `closeTarget(documentId)`
 
@@ -275,9 +308,9 @@ explicit user action (behavior preserved).
 |---|---|---|
 | 1 | Claim the single-flight slot; record the intent identity; guard: `workspace.preview.targetDocumentId === documentId` (a non-target tab close never passes through the coordinator — plain reducer close) | refuse `not-target` / `transition-in-flight` (strict single-flight — immediate refusal, no queueing) |
 | 2 | `proof = await manager.terminateAndJoin()` — the transition's **last await** | `exit-unproven` → refuse `runtime-exit-unproven`; the tab stays open, **zero Workspace/target mutation** |
-| 3 | Apply the mutation via the `WorkspaceMutationPort`: revalidate inside that one atomic application (the requested document is still the target and still open) | refuse `target-stale` — **zero Workspace/target mutation** |
+| 3 | Apply the mutation via the synchronous Workspace store (`store.apply`): revalidate inside that one atomic application (the requested document is still the target and still open) | refuse `target-stale` — **zero Workspace/target mutation** |
 | 4 | `closeWorkspaceDocument` inside the same atomic application — the reducer re-seeds the target onto the surviving active document **of that commit-time `current` session** — synchronous | refuse on reducer rejection (defensive) |
-| 5 | Release the single-flight slot; return `{ ok }` | n/a |
+| 5 | Release the single-flight slot — always, `finally`, on every refusal/exception path; return `{ ok }` | n/a |
 
 Plain (non-target) tab closes continue to call the reducer directly: closing a
 tab that is not the Preview target has no Runtime implications and must not
@@ -290,16 +323,50 @@ controller's state:
 
 ```text
 coordinator.gate(composition)
-    = manager.buildBlocker(composition)        // attached-runtime-launching,
-       ?? controller.buildGate(composition)    //    attached-runtime-deployment-mismatch
-                                              // (manager holds the binding identity)
-                                              // + all build-side reasons (controller)
+    = if (manager.launchInFlight)                                   // Runtime fact
+          refusal "attached-runtime-launching"
+    else if (manager.attached !== null
+          && manager.attached.bindingIdentity
+             !== composition.programDescriptorIdentity)             // Runtime fact
+          refusal "attached-runtime-deployment-mismatch"
+    else
+          controller.buildGate(composition)                         // build-side reasons only
 ```
 
+The build-domain refusal vocabulary exists in **exactly two places**: the
+coordinator (Runtime-fact → refusal mapping) and the build controller; the
+RuntimeManager exposes facts, never build vocabulary.
+
 The existing "if a build publishes and no Runtime is up, launch one" UX
-behavior in the UI composition is preserved and now reads the manager's state
-(`running` / `terminating` / `launching` suppress the auto-launch) instead of
-the flow's private state.
+behavior in the UI composition is **preserved**: a successful build
+publication with no attached Runtime (and none `stopping`) **auto-launches
+the Runtime**. That admission decision stays in the build-composition flow
+and now reads the manager's state (`running` / `terminating` / `launching`
+suppress it; `exit-unproven` is refused by launch admission; `idle` admits)
+instead of the flow's private state. A retarget transition itself never
+auto-launches (see the retarget table note).
+
+### Commit-time emission dependency boundary (the clarified step dependency)
+
+When a transition refreshes the target's emission, it must resolve the
+**target** document under core-owned rules — never by borrowing the
+descriptor/profile context of whatever tab is merely ACTIVE. Boundary:
+
+- **Inputs**: (a) the target session's document as it stands in the
+  `current` session at apply time; (b) the workspace descriptor instance —
+  the host-provided profile descriptor **data document**, workspace-scoped,
+  not a per-tab UI selection;
+- **Resolution ownership**: core owns the profile-line selection and the
+  descriptor compatibility judgment (the highest supported `descriptorVersion`
+  only within the document's requested profile line; graphs are never
+  implicitly upgraded; an out-of-line descriptor is an explicit refusal,
+  never a silent substitution);
+- **Forbidden**: pre-selecting or capturing a "descriptor for the target"
+  from the active tab's UI context, or baking a descriptor snapshot taken at
+  call time into a transition that crosses an `await`;
+- **Refusal**: a descriptor incompatible with the target document refuses the
+  transition as `target-emission-unavailable`, aborting the same synchronous
+  application with zero mutation.
 
 ## Recovery semantics
 
@@ -347,17 +414,19 @@ All changes stay inside `apps/editor`:
 
 | File | Action |
 |---|---|
-| `src/preview-runtime-manager.ts` | **New**: state machine, launch lane, `terminateAndJoin`, Registry binding, `buildBlocker`, `TerminationProof` type |
+| `src/preview-runtime-manager.ts` | **New**: state machine, launch lane, `terminateAndJoin`, Registry binding, Runtime facts (`launchInFlight`, `attached` binding identity), `TerminationProof` type |
 | `tests/preview-runtime-manager.test.ts` | **New**: all Runtime lifecycle tests migrate here (state names updated) + the unenforced-invariant red test + sticky `exit-unproven` semantics (re-invoking `terminateAndJoin` returns the stored fact and issues **no second host stop call** — the fake records stop calls; never derives `already-exited` from a registry miss) |
 | `src/preview-coordinator.ts` | **Rewritten/extended**: pure `resolvePreviewTarget` / `hasExplicitPreviewTarget` retained (now the class's pure core) + new `PreviewCoordinator` class |
-| `tests/preview-coordinator.test.ts` | New transition tests (procedure ordering, refusal zero-Workspace/target-mutation on the unproven and stale paths, close/re-seed through one path, strict single-flight — a second transition refused immediately with `transition-in-flight` while one is in flight, no queueing and no supersession — stale transitions never taking effect, re-seed defined by the active at commit time, commit via the WorkspaceMutationPort (one atomic application against `current`; no pre-computed older session ever written back)) + sticky `exit-unproven` reporting (repeated Stop re-reports, no host call); existing pure-target tests retained |
+| `tests/preview-coordinator.test.ts` | New transition tests (procedure ordering, refusal zero-Workspace/target-mutation on the unproven and stale paths, close/re-seed through one path, strict single-flight — a second transition refused immediately with `transition-in-flight` while one is in flight, no queueing and no supersession — stale transitions never taking effect, re-seed defined by the active at commit time, commit is one synchronous `WorkspaceStore.apply` (real synchronous result; no pre-computed older session ever written back)) + sticky `exit-unproven` reporting (repeated Stop re-reports, no host call) + single-flight re-claim safety (the slot is re-claimable after each of: `exit-unproven` refusal, `target-stale` refusal, emission failure, commit refusal or exception — nothing leaves the claim held); existing pure-target tests retained |
+| `src/workspace-store.ts` | **New**: the single synchronous Workspace authority — `WorkspaceStore` (`current` observation; `apply(mutation)`: exactly one synchronous application against `current`, structured result returned synchronously, refusal publishes `current` unchanged, exception-safe) + `useWorkspaceSession` projection hook (`useSyncExternalStore`) |
+| `tests/workspace-store.test.ts` | **New**: exactly-one application (refusal → session unchanged; ok → replaced), the synchronous result channel, purity (no external-variable/smuggled result), no exception escaping the mutation boundary |
 | `src/preview-build-flow.ts` | **Slimmed**: Runtime members, `launchAttachedPreview`, `stopAttachedPreview`, `stopAttachedPreviewAndWait`, `runtimeExitSettlement` removed; `buildGate` keeps only build-side reasons; constructor no longer takes a Runtime boundary |
 | `src/useShaderPreview.ts` | Composes controller + manager + coordinator (still one instance per `nativeFlow`); unmount uses `void manager.terminateAndJoin()` (best-effort, never blocks unmount); the plain Stop action becomes `terminateAndJoin`; `stopPreviewAndWait` retires |
-| `src/app.tsx` | `onPreviewThisGraph` and the target path of `closeOneTab` become thin coordinator calls with one shared refusal→note mapping; `stopPreviewRuntimeIfAttached` and the two hand-rolled catch blocks are deleted |
+| `src/app.tsx` | `onPreviewThisGraph` and the target path of `closeOneTab` become thin coordinator calls with one shared refusal→note mapping; `stopPreviewRuntimeIfAttached` and the two hand-rolled catch blocks are deleted; **workspace rewiring**: every `setWorkspace(current => reducer(...))` site becomes `store.apply(...)` with the same reducer bodies, rendering goes through `useWorkspaceSession(store)`, and `workspaceRef` becomes `store.current` (observation only) |
 | `tests/gui-surface.test.tsx` | Pins migrate to the new seams (list in the churn inventory) |
 | — | **Untouched**: `workspace-session.ts`, everything in `packages/shader-toolchain-client`, the fake host boundary, Tauri/Rust host code, `packages/editor-ui` |
 
-One known UI-adjacent surface to inventory inside Step 2 (not editor-ui):
+One known UI-adjacent surface to inventory inside step 3 (not editor-ui):
 every consumer of the runtime state *kind* for display copy (`stopping` →
 `terminating`, `exited` → `idle`/`exit-unproven`). Label text must be updated
 at that step; editor-ui itself is not modified.
@@ -368,13 +437,15 @@ at that step; editor-ui itself is not modified.
 |---|---|---|
 | 0 | **Red test first**: assert "after a `wait-failed` settling, a launch admission is refused". Current code fails this test (today: `wait-failed` → state `exited` → launch admitted). Confirm the other six hard invariants already hold at the current seams (baseline green). | The new test is red for the right reason; baseline table recorded |
 | 1 | **Extract the manager** (`preview-runtime-manager.ts`): state machine per this document, launch admission only from `idle`/`launch-refused`, `terminateAndJoin` implemented over the existing boundary with the already-fixed race semantics (local settlement capture, `runtimeId`-matched exit migration). Flow delegates; its public surface stays unchanged for this step. Migrate all Runtime tests; state-kind literals rewritten per the state table; red test goes green. | `pnpm typecheck`; flow + manager + `shader-preview-surface` tests green; lint on touched files |
-| 2 | **Formalize the coordinator** (class in `preview-coordinator.ts`): `retargetTo` / `closeTarget` / composed `gate` / sticky `exit-unproven` reporting (no host re-proof claim) / transition discipline (intent identity, strict single-flight — immediate refusal, no queueing or supersede — last-await, current-session revalidation, synchronous commit burst, WorkspaceMutationPort commit (one atomic application against `current`)). Rewire the hook; thin the two app handlers and delete `stopPreviewRuntimeIfAttached`; one shared refusal→note map; display-copy inventory update; gui-surface pins updated. | `pnpm typecheck`; full `apps/editor` test suite green (includes the invariant #8 stale-transition and strict-single-flight tests); lint |
-| 3 | **Rename (approved, separate commit)**: `PreviewBuildFlow` → `PreviewBuildController` (class, file name, imports, residual pins). After the split the object is a build controller and the "flow" name only describes a bygone two-domain object. Small isolated diff; behavior unchanged. | Full workspace gates |
-| 4 | **Closure**: root `pnpm typecheck`, `pnpm test`, `pnpm lint`; the invariant→test mapping table (§ below) into the report; known limitations (real-host timing only exercisable on the desktop host; web path has no flow and is a proven no-op); commit proposals. | All three gates green from the repository root |
+| 2 | **Synchronous Workspace store authority** (`workspace-store.ts`): the store owns the session (the reducer is unchanged — still pure functions); `apply(mutation)` is exactly one synchronous application against `current` (revalidation + reducer inside it), returning the structured result synchronously, exception-safe. Rewire the app's workspace state wiring: `useSyncExternalStore` projection, every `setWorkspace(current => reducer(...))` site becomes `store.apply(...)`, `workspaceRef` → `store.current` (observation only). Behavior is unchanged at this boundary (same reducers, same session). | Full workspace gates + the new store tests green |
+| 3 | **Formalize the coordinator** (class in `preview-coordinator.ts`): `retargetTo` / `closeTarget` / composed `gate` / sticky `exit-unproven` reporting (no host re-proof claim) / transition discipline (intent identity, strict single-flight — immediate refusal, no queueing or supersede — last-await, current-session revalidation, synchronous commit burst = exactly one `store.apply` (real synchronous result)). Rewire the hook; thin the two app handlers and delete `stopPreviewRuntimeIfAttached`; one shared refusal→note map; display-copy inventory update; gui-surface pins updated. | `pnpm typecheck`; full `apps/editor` test suite green (includes the invariant #8 stale-transition and strict-single-flight tests); lint |
+| 4 | **Rename (approved, separate commit)**: `PreviewBuildFlow` → `PreviewBuildController` (class, file name, imports, residual pins). After the split the object is a build controller and the "flow" name only describes a bygone two-domain object. Small isolated diff; behavior unchanged. | Full workspace gates |
+| 5 | **Closure**: root `pnpm typecheck`, `pnpm test`, `pnpm lint`; the invariant→test mapping table (§ below) into the report; known limitations (real-host timing only exercisable on the desktop host; web path has no flow and is a proven no-op); commit proposals. | All three gates green from the repository root |
 
-Step 1 and step 2 are the first two commit boundaries; step 3 is the approved
-third isolated commit. Every boundary is green and independently
-reviewable — consistent with the owner's per-slice commit discipline.
+Steps 1–4 are each an independent commit boundary (manager → store
+authority → coordinator → rename); step 5 is the closure gate, not a commit.
+Every boundary is green and independently reviewable — consistent with the
+owner's per-slice commit discipline.
 
 ## Hard invariants and their tests (acceptance mapping)
 
@@ -386,8 +457,8 @@ reviewable — consistent with the owner's per-slice commit discipline.
 | 4 | After `wait-failed`, a repeated retarget still fails | Manager state `exit-unproven` refusal | Coordinator refusal test (unproven case) | Partially enforced (flow reject) — strengthened |
 | 5 | After `wait-failed`, launching a second Runtime is impossible | **Launch admission only from `idle`/`launch-refused`** | Manager admission test (the Step 0 red test) | **NOT enforced — this slice closes it** |
 | 6 | Closing the Preview target goes through the same coordinator transition | `closeTarget` | Coordinator close-target test | Enforced (round 1 close path) — migrates |
-| 7 | The build/runtime cross-state gate is composed by the coordinator; no controller owns another's state | `coordinator.gate` = `manager.buildBlocker ?? controller.buildGate` | Coordinator gate-composition tests | Enforced (flow-private) — restructured |
-| 8 | **No Preview ownership transition that crosses an `await` may commit state computed from a stale `WorkspaceSession` snapshot** (a stale transition never takes effect; a close-target re-seed is defined by the current active document at commit time; the commit is a single atomic `WorkspaceMutationPort` application — shape `setWorkspace(current => revalidate-and-reduce(current))` — through the same workspace-authority path the app already uses, with ref snapshots observation-only and a pre-computed older session never written back on top of the current state) | Transition discipline: intent identity at start, strict single-flight, last-await rule, current-session revalidation, synchronous commit burst, WorkspaceMutationPort commit | Coordinator stale-transition and strict-single-flight tests (document closed during teardown, active moved during teardown, a second transition refused by `transition-in-flight` while one is in flight — no queueing, no supersession) | **Not yet expressed — this slice introduces it** |
+| 7 | The build/runtime cross-state gate is composed by the coordinator; no controller owns another's state | `coordinator.gate` = the manager's Runtime facts (launch-in-flight, attached-binding identity) mapped to refusals by the coordinator, else `controller.buildGate` | Coordinator gate-composition tests | Enforced (flow-private) — restructured |
+| 8 | **No Preview ownership transition that crosses an `await` may commit state computed from a stale `WorkspaceSession` snapshot** (a stale transition never takes effect; a close-target re-seed is defined by the current active document at commit time; the commit is one synchronous `WorkspaceStore.apply` application — a real synchronous result, no pseudo-transaction over React state — with ref snapshots observation-only and a pre-computed older session never written back on top of the current state) | Transition discipline: intent identity at start, strict single-flight (claim/`finally` release), last-await rule, current-session revalidation, synchronous `store.apply` commit | Coordinator stale-transition and strict-single-flight tests (document closed during teardown, active moved during teardown, a second transition refused by `transition-in-flight` while one is in flight — no queueing, no supersession) | **Not yet expressed — this slice introduces it** |
 
 ## Churn inventory (honest rewrite surface)
 
@@ -419,20 +490,27 @@ Known pin/assertion rewrites required by the state rename and the seam move
 | Unmount cleanup semantics regress | The current fire-and-forget stop request becomes `void manager.terminateAndJoin()` (best-effort join; an unproven result never blocks unmount) — semantics only widen |
 | Step 1 → Step 2 intermediate state breaks review | Step 1 keeps the flow's public surface unchanged (internal delegation), so the intermediate boundary is independently green |
 | Scope creep beyond the seam | Non-goals are explicit: no client-package types, no fake host boundary, no Rust, no editor-ui, no file relocations |
-| An async transition commits a stale Workspace snapshot (a document closed or the active tab moved while the teardown proof was pending; a slow older transition out-writes a newer user intent) | The transition discipline of the procedure section: strict single-flight (immediate refusal while in flight), last-await rule, current-session revalidation (intent identity still holds), a synchronous commit burst, and the WorkspaceMutationPort commit path (one atomic application against `current`) — pinned as invariant #8 by the coordinator's stale-transition and strict-single-flight tests |
+| An async transition commits a stale Workspace snapshot (a document closed or the active tab moved while the teardown proof was pending; a slow older transition out-writes a newer user intent) | The transition discipline of the procedure section: strict single-flight (immediate refusal while in flight), last-await rule, current-session revalidation (intent identity still holds), a synchronous commit burst, and one synchronous `WorkspaceStore.apply` commit (real synchronous result; the single-flight claim is released in `finally` on every path) — pinned as invariant #8 by the coordinator's stale-transition and strict-single-flight tests |
+| A pseudo-synchronous "store transaction" is built over React's functional updater (resolving a Promise from inside the updater, or smuggling the result through an external variable) | **Rejected by the architecture decision**: the synchronous Workspace store owns `apply` and the result; the anti-pattern is explicitly forbidden in the store-authority section |
 | Slice 1 claims a re-proof the host cannot perform | `exit-unproven` is sticky; a repeated Stop only re-reports the stored unproven condition; real re-proof and process queries are deferred to the Slice 2 host-native contract |
 | A still-alive (zombie) Runtime outlives an editor restart and is mistaken for released | Editor restart is documented as an **operational reset, not a termination proof**; the cross-restart "no second Runtime" guarantee is explicitly out of scope for Slice 1 and requires the Slice 2 host-native contract or a host-level process-lifetime guarantee (kill-on-host-exit) |
 
 ## Confirmed decisions
 
-1. **Rename approved, as a separate third commit**: `PreviewBuildFlow` →
-   `PreviewBuildController` ships with this slice but as an isolated
-   third boundary (behavior unchanged; small diff).
-2. **Same-target `Preview This Graph` semantics approved**: when the
-   requested target is already the Preview target, the transition refreshes
-   that target's own emission, performs **no Runtime interaction** at all,
-   and reports `{ ok, changed: false }` (no teardown, no launch, no
-   re-commit churn).
+1. **Rename approved, as an isolated separate commit**: `PreviewBuildFlow` →
+   `PreviewBuildController` ships with this slice but lands as the isolated
+   rename boundary after manager / store / coordinator (behavior unchanged;
+   small diff).
+2. **Same-target `Preview This Graph` semantics approved (revised in strict
+   review)**: when the requested target is already the Preview target, the
+   transition performs **no Runtime interaction at all** (no teardown, no
+   launch, no re-commit churn), but **still goes through the commit-time
+   Workspace mutation**: revalidate the target/document on the store's
+   `current`, refresh the target's own emission under the core-owned
+   resolver, commit the transition without moving the PreviewTarget axis,
+   and report `{ ok, targetChanged: false }` (the presentation may
+   legitimately have changed — a bare `changed: false` would mislead
+   callers).
 
 ## Slice 2 boundary (planned, not implemented here)
 
@@ -489,14 +567,32 @@ as "exited".
 Boundary 2 (step 2):
 
 ```
+refactor(editor): make the Workspace session a synchronous store authority
+
+The Workspace session becomes the single synchronous authority:
+WorkspaceStore owns current and apply — one atomic application against
+current that returns the structured result synchronously, with the
+revalidation, the pure reducer and the refusal decision all inside that
+one application. React degrades to a projection via useSyncExternalStore:
+every workspace mutation rewires from setWorkspace to store.apply, and the
+render-cache workspaceRef becomes observation of store.current. No
+pseudo-synchronous transaction over React state; behavior is unchanged at
+this boundary.
+```
+
+Boundary 3 (step 3):
+
+```
 refactor(editor): consolidate Preview ownership transitions in the PreviewCoordinator
 
 Retarget-to-target and close-the-target become the sole coordinator
 transitions: terminate-and-join first, revalidate the intent identity
 against the CURRENT WorkspaceSession (strict single-flight — refused
 immediately while one is in flight, no queueing or supersession — last-await
-rule, synchronous commit burst applied via the WorkspaceMutationPort
-against `current` in one atomic application), refresh the target's own emission, then commit through the
+rule — the commit is exactly one synchronous store apply with a real
+synchronous result, and the single-flight claim is released in finally on
+every path), refresh the target's own emission under the core-owned
+resolver, then commit through the
 WorkspaceSession reducer — with zero Workspace/target mutation on any
 refusal. A transition that crosses an await never commits a stale snapshot,
 and an older transition never out-writes a newer user intent. The app
@@ -508,7 +604,7 @@ restart (operational reset, not a termination proof) never releases
 ownership.
 ```
 
-Boundary 3 (step 3 — approved separate commit):
+Boundary 4 (step 4 — the approved isolated rename commit):
 
 ```
 refactor(editor): rename PreviewBuildFlow to PreviewBuildController
