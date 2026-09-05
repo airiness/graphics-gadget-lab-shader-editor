@@ -148,6 +148,7 @@ export type PreviewBuildGateReason =
     | { readonly reason: "ordinary-tool-not-compatible"; readonly toolStatus: ToolCompatibilityState["status"] }
     | { readonly reason: "attached-runtime-launching" }
     | { readonly reason: "attached-runtime-ownership-conflict" }
+    | { readonly reason: "attached-runtime-launch-outcome-unproven" }
     | { readonly reason: "attached-runtime-deployment-mismatch" }
     | { readonly reason: "preview-proof-missing" }
     | { readonly reason: "preview-ineligible"; readonly eligibility: PreviewEligibility }
@@ -466,6 +467,17 @@ export class PreviewBuildFlow {
             return {
                 admitted: false,
                 reasons: [{ reason: "ordinary-tool-not-compatible", toolStatus: tool.status }],
+                request: null,
+                eligibility: null,
+            };
+        }
+        if (this.manager.state.kind === "launch-outcome-unproven") {
+            // The last launch outcome is UNKNOWN (the host may have spawned
+            // a Runtime): a build is a structured refusal — never admitted
+            // on the assumption that no Runtime exists.
+            return {
+                admitted: false,
+                reasons: [{ reason: "attached-runtime-launch-outcome-unproven" }],
                 request: null,
                 eligibility: null,
             };

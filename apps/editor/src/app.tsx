@@ -2328,7 +2328,9 @@ export function App() {
                                                 : "")
                                         : preview.runtime.kind === "launch-refused"
                                           ? ` · ${preview.runtime.result.kind}`
-                                          : ""}
+                                          : preview.runtime.kind === "launch-outcome-unproven"
+                                            ? " · launch-outcome-unproven"
+                                            : ""}
                                 </dd>
                             </div>
                             <div className="gglab-fact">
@@ -2402,7 +2404,14 @@ export function App() {
                                     preview.runtime.kind !== "running" &&
                                     preview.runtime.kind !== "terminating" &&
                                     preview.runtime.kind !== "exit-unproven" &&
-                                    preview.runtime.kind !== "runtime-ownership-conflict"
+                                    // Under `runtime-ownership-conflict` /
+                                    // `launch-outcome-unproven` the manager
+                                    // holds no lease: Stop must not be
+                                    // offered (reporting "no Runtime" would
+                                    // contradict the host's ownership fact /
+                                    // the unknown launch outcome).
+                                    preview.runtime.kind !== "runtime-ownership-conflict" &&
+                                    preview.runtime.kind !== "launch-outcome-unproven"
                                 }
                             >
                                 Stop attached Lab

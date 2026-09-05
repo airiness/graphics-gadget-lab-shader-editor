@@ -732,6 +732,27 @@ describe("Attached Preview Runtime authority - composition facts read by the flo
         });
     });
 
+    it("refuses Preview builds while a launch outcome is unproven", async () => {
+        const fakeRuntime = new FakePreviewRuntimeBoundary({ launches: [{ kind: "launched" }], rejectLaunch: true });
+        const manager = new AttachedPreviewRuntimeManager(fakeRuntime, SESSION_ID);
+        const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observations(), manager);
+        const input = composition();
+
+        await publish(flow);
+        await expect(manager.launch(CANDIDATE_A)).rejects.toThrow();
+        expect(manager.state).toMatchObject({ kind: "launch-outcome-unproven" });
+
+        // One exact structured refusal — never admission on the assumption
+        // that no Runtime exists.
+        expect(flow.buildGate(input)).toMatchObject({
+            admitted: false,
+            reasons: [{ reason: "attached-runtime-launch-outcome-unproven" }],
+        });
+        // And structurally no second Runtime launch.
+        await expect(manager.launch(CANDIDATE_A)).resolves.toMatchObject({ launched: false, reason: "launch-outcome-unproven" });
+        expect(fakeRuntime.launchCalls).toBe(1);
+    });
+
     it("routes a launch candidate-invalidated host fact to the ordinary tool owner", async () => {
         const runtime = runtimes([
             {

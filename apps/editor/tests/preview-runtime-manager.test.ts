@@ -392,6 +392,32 @@ describe("attached Preview Runtime lifetime authority — launch refusal", () =>
         await expect(manager.stop()).resolves.toEqual({ outcome: "not-attached" });
     });
 
+    it("a REJECTING launch outcome is unproven: no second launch, no strict teardown, no false already-exited", async () => {
+        const boundary = runtime({ launches: [{ kind: "launched" }], rejectLaunch: true });
+        const manager = managerFor(boundary);
+
+        // The host call REJECTED (the result never reached the WebView),
+        // but the host may HAVE spawned the Runtime: an admission outcome
+        // we do not know is NOT a refusal and NOT proof of absence.
+        await expect(manager.launch(CANDIDATE_A)).rejects.toThrow(/launch result|host call/i);
+        expect(manager.state).toEqual({ kind: "launch-outcome-unproven" });
+        // `ownedRuntime === null` here must NOT be read as "no Runtime".
+        expect(manager.ownedRuntime).toBeNull();
+        expect(manager.launchInFlight).toBe(false);
+
+        // No second Runtime launch — and no host call.
+        const callsBefore = boundary.launchCalls;
+        await expect(manager.launch(CANDIDATE_A)).resolves.toEqual({ launched: false, reason: "launch-outcome-unproven" });
+        expect(boundary.launchCalls).toBe(callsBefore);
+
+        // A strict teardown must REJECT, not resolve `already-exited` — the
+        // ownership transition cannot commit (no fake recovery in Slice 1).
+        await expect(manager.terminateAndJoin()).rejects.toThrow(/unproven|no lease/i);
+
+        // A plain stop has no lease to act on.
+        await expect(manager.stop()).resolves.toEqual({ outcome: "not-attached" });
+    });
+
     it("throws on an attached Runtime missing its exit settlement (invariant, never a no-op)", async () => {
         const boundary = runtime({ launches: [{ kind: "launched", runtimeIdentity: "runtime-a" }] });
         const manager = managerFor(boundary);

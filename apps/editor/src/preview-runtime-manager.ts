@@ -47,7 +47,16 @@ export type AttachedRuntimeState =
      *  Runtime launch is forbidden, an ownership transition CANNOT commit,
      *  and the absence of an owned binding here is NOT evidence that no
      *  Runtime exists. */
-    | { readonly kind: "runtime-ownership-conflict"; readonly runtimeId: PreviewRuntimeId };
+    | { readonly kind: "runtime-ownership-conflict"; readonly runtimeId: PreviewRuntimeId }
+    /** The launch command's final admission outcome is UNKNOWN: the host
+     *  call REJECTED (e.g. the invoke never delivered a result), but the
+     *  host may HAVE spawned the Runtime before failing. This manager has
+     *  no RuntimeId / launch identity / exit settlement for it. A second
+     *  Runtime launch is forbidden, an ownership transition CANNOT commit,
+     *  and the absence of an owned binding here is NOT evidence that no
+     *  Runtime exists. No fake recovery in Slice 1; re-proof is a
+     *  host-contract matter (session / Runtime query). */
+    | { readonly kind: "launch-outcome-unproven" };
 
 /** The owned Runtime + the deployment toolPath it was launched from
  *  (exact `ToolCandidate.toolPath`; never a Program Descriptor identity).
@@ -70,7 +79,8 @@ export type AttachedRuntimeLaunch =
           readonly reason: "launch-in-flight" | "runtime-attached" | "exit-unproven" | "runtime-ownership-conflict";
           readonly runtimeId: PreviewRuntimeId;
       }
-    | { readonly launched: false; readonly reason: "host-refused"; readonly result: Exclude<PreviewRuntimeLaunchResult, { readonly kind: "launched" }> };
+    | { readonly launched: false; readonly reason: "host-refused"; readonly result: Exclude<PreviewRuntimeLaunchResult, { readonly kind: "launched" }> }
+    | { readonly launched: false; readonly reason: "launch-outcome-unproven" };
 
 export type AttachedRuntimeStop =
     | { readonly outcome: "stop-requested"; readonly runtimeId: PreviewRuntimeId }
@@ -153,6 +163,9 @@ export class AttachedPreviewRuntimeManager {
             return existing;
         }
         const state = this.stateValue;
+        if (state.kind === "launch-outcome-unproven") {
+            return Promise.resolve({ launched: false, reason: "launch-outcome-unproven" });
+        }
         if (state.kind === "runtime-ownership-conflict") {
             return Promise.resolve({ launched: false, reason: "runtime-ownership-conflict", runtimeId: state.runtimeId });
         }
@@ -199,6 +212,16 @@ export class AttachedPreviewRuntimeManager {
             }
         }
         const state = this.stateValue;
+        if (state.kind === "launch-outcome-unproven") {
+            // The last launch outcome is UNKNOWN: the host may have spawned
+            // a Runtime. `already-exited` would be a false ownership proof —
+            // a strict teardown is PROHIBITED, not vacuous; the ownership
+            // transition cannot commit, and Slice 1 performs no fake
+            // recovery (re-proof is a host-contract matter).
+            throw new Error(
+                `the last Preview Runtime launch outcome is unproven (the host may have spawned a Runtime); a strict teardown cannot be issued without a lease, so the ownership transition cannot commit.`,
+            );
+        }
         if (state.kind === "runtime-ownership-conflict") {
             // The host reported a live Runtime for this session and this
             // manager owns NO lease for it: `already-exited` would invert
@@ -342,10 +365,14 @@ export class AttachedPreviewRuntimeManager {
             return existing;
         }
         const state = this.stateValue;
-        if (state.kind === "runtime-ownership-conflict") {
-            // No lease to act on: a host request for a Runtime we never
-            // observed is out of contract. (Strict callers use
-            // `terminateAndJoin()`, which PROHIBITS this situation.)
+        if (
+            state.kind === "runtime-ownership-conflict" ||
+            state.kind === "launch-outcome-unproven"
+        ) {
+            // No lease to act on in either case: a host stop request for a
+            // Runtime we never observed (or whose very existence is
+            // unproven) is out of contract. (Strict callers use
+            // `terminateAndJoin()`, which PROHIBITS both situations.)
             return Promise.resolve({ outcome: "not-attached" });
         }
         if (state.kind === "exit-unproven") {
@@ -428,7 +455,12 @@ export class AttachedPreviewRuntimeManager {
     }
 
     private resetAfterFailure(): void {
-        this.stateValue = { kind: "idle" };
+        // A launch command REJECTION is NOT proof that no Runtime exists:
+        // the host can spawn the process and then fail to deliver the
+        // result. Enter `launch-outcome-unproven` (an admission refusal
+        // is an explicit host fact; a rejection is only an absence of
+        // proof).
+        this.stateValue = { kind: "launch-outcome-unproven" };
         this.ownedCandidateValue = null;
         this.exitSettlement = null;
         this.attachedIdentity = null;

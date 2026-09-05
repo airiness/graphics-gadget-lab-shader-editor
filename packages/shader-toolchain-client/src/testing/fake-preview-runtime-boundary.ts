@@ -28,6 +28,10 @@ export interface FakePreviewRuntimeSpec {
      *  not even process the request; the process may still exist).
      *  One-shot per arming; test code may re-arm by writing `true` again. */
     readonly stopRequestFailure?: boolean | undefined;
+    /** When set, the NEXT `launchAttachedPreview` call REJECTS (the host
+     *  call failed BEFORE delivering a result — a Runtime may still have
+     *  spawned). One-shot per arming. */
+    readonly rejectLaunch?: boolean | undefined;
 }
 
 export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
@@ -42,6 +46,7 @@ export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
     private heldStop: { readonly runtimeId: PreviewRuntimeId; readonly settle: (exit: PreviewRuntimeExit) => void } | null = null;
     private settledExitCount = 0;
     private stopRequestFailureArmed = false;
+    private rejectLaunchArmed = false;
 
     /** Re-arm the one-shot `stopAttachedPreview` rejection (for "stop #2
      *  also fails" scenarios). */
@@ -51,6 +56,7 @@ export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
 
     constructor(private readonly spec: FakePreviewRuntimeSpec) {
         this.stopRequestFailureArmed = this.spec.stopRequestFailure === true;
+        this.rejectLaunchArmed = this.spec.rejectLaunch === true;
     }
 
     /** Number of exit settlements actually delivered (natural exit or a
@@ -72,6 +78,10 @@ export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
         sessionId: string,
     ): Promise<PreviewRuntimeLaunchResult> {
         this.launchCount += 1;
+        if (this.rejectLaunchArmed) {
+            this.rejectLaunchArmed = false;
+            return Promise.reject(new Error("the host call failed before delivering a launch result"));
+        }
         this.lastLaunchRecord = { candidate, sessionId };
         const script = this.scriptFor(this.launchCount);
         const result = script.kind === "launched" ? this.launched(script.runtimeIdentity) : script;

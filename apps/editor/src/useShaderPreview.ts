@@ -225,15 +225,17 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             // Success-first UX: a build publication with no (usable)
             // attached Runtime auto-launches one. `running` / `terminating`
             // / `launching` suppress it; `exit-unproven` is refused by
-            // launch admission; `runtime-ownership-conflict` suppresses it
-            // (the host KNOWS a Runtime exists — a second one is forbidden);
-            // `idle` (and the retry lane) admit it.
+            // launch admission; `runtime-ownership-conflict` and
+            // `launch-outcome-unproven` suppress it (the host KNOWS / MAY
+            // HAVE a Runtime — a second one is forbidden); `idle` (and the
+            // retry lane) admit it.
             const runtime = manager.state;
             if (
                 runtime.kind !== "running" &&
                 runtime.kind !== "terminating" &&
                 runtime.kind !== "launching" &&
-                runtime.kind !== "runtime-ownership-conflict"
+                runtime.kind !== "runtime-ownership-conflict" &&
+                runtime.kind !== "launch-outcome-unproven"
             ) {
                 await launchPreview();
             }

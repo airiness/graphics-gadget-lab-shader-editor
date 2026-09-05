@@ -1,8 +1,11 @@
 # GGLab Shader Graph Preview Ownership Coordination
 
-> Status: **design-freeze candidate, 2026-09-05** — this revision folds the
-> final architecture review into the plan. Slice 1 implementation has not
-> started.
+> Status: **design-freeze, 2026-09-05** — this revision folds the final
+> architecture review into the plan. Slice 1 (Runtime lifetime authority) is
+> implemented and under boundary-by-boundary acceptance; its review rounds
+> additionally froze `runtime-ownership-conflict` and
+> `launch-outcome-unproven` as first-class safety states (see the Runtime
+> state machine below).
 >
 > Authority relationship: this document records the Preview ownership
 > architecture decision and the Slice 1 implementation plan. The normative
@@ -54,6 +57,8 @@ running
 terminating
 exit-unproven
 launch-refused
+runtime-ownership-conflict
+launch-outcome-unproven
 ```
 
 Transitions:
@@ -63,15 +68,20 @@ Transitions:
 | `idle` | launch admitted | `launching` |
 | `launch-refused` | retry admitted | `launching` |
 | `launching` | host launch accepted | `running` |
-| `launching` | host launch refused | `launch-refused` |
+| `launching` | host launch refused (other kinds) | `launch-refused` |
+| `launching` | host reports `session-already-running` | `runtime-ownership-conflict` |
+| `launching` | launch command REJECTS (outcome unknown) | `launch-outcome-unproven` |
 | `running` | stop requested | `terminating` |
 | `running` | natural proven exit (`exited` / `stopped`) | `idle` |
 | `running` | natural `wait-failed` | `exit-unproven` |
 | `terminating` | proven exit | `idle` |
 | `terminating` | `wait-failed` | `exit-unproven` |
 
-`exit-unproven` is a first-class safety state. Settlement arrival is not
-synonymous with proven process death.
+`exit-unproven`, `runtime-ownership-conflict`, and
+`launch-outcome-unproven` are first-class safety states. Settlement arrival
+is not synonymous with proven process death; a launch outcome we never
+received is not a refusal nor proof of absence; and a host-reported existing
+Runtime is an ownership fact, not a refusal.
 
 ### Runtime ownership binding and identity
 
@@ -116,12 +126,14 @@ interface AttachedPreviewRuntimeManager {
 `ownedRuntime` projection is exact:
 
 ```text
-idle             -> null
-launching        -> null
-launch-refused   -> null
-running          -> same owned binding
-terminating      -> same owned binding
-exit-unproven    -> same owned binding
+idle                         -> null
+launching                    -> null
+launch-refused               -> null
+runtime-ownership-conflict   -> null   (NOT "no Runtime" — the host KNOWS one)
+launch-outcome-unproven      -> null   (NOT "no Runtime" — one MAY exist)
+running                      -> same owned binding
+terminating                  -> same owned binding
+exit-unproven                -> same owned binding
 ```
 
 The binding is released only by a **proven** exit. In particular,
@@ -174,6 +186,17 @@ Rules:
   `ownedRuntime === null` must never be read as "no Runtime exists".
   Attaching to (recovering) an already-running host Runtime is out of
   Slice 1 scope; it is a host-contract decision.
+   The Slice 1 UI disables Stop in this state and surfaces the
+   ownership-conflict evidence — it must never report "no Runtime".
+- `launch-outcome-unproven`: the launch command REJECTED before the host
+  delivered a result, but the host may HAVE spawned the Runtime. A launch
+  outcome that was never received is NOT a refusal and NOT proof of
+  absence: a second Runtime launch is forbidden (no host call), the build
+  gate must refuse `attached-runtime-launch-outcome-unproven`, a strict
+  teardown must REJECT (never `already-exited`) so the ownership transition
+  cannot commit, and no fake recovery (no speculative stop, no
+  attach-guess) is performed. Re-proof via a SessionId / Runtime query is a
+  host-contract matter, out of Slice 1 scope.
 
 The current host removes its registry entry after the settlement thread ends;
 that registry miss is not termination evidence and therefore cannot release
@@ -396,7 +419,13 @@ The existing deployment isolation is preserved:
 
 ```text
 coordinator.gate(composition)
-    if manager.launchInFlight
+    if manager.state == launch-outcome-unproven
+        -> attached-runtime-launch-outcome-unproven
+
+    else if manager.state == runtime-ownership-conflict
+        -> attached-runtime-ownership-conflict
+
+    else if manager.launchInFlight
         -> attached-runtime-launching
 
     else if manager.ownedRuntime != null
@@ -420,13 +449,23 @@ Preview build publishes
 -> if Runtime manager is idle, auto-launch is permitted
 -> running / terminating / launching suppress auto-launch
 -> exit-unproven refuses launch structurally
+-> runtime-ownership-conflict / launch-outcome-unproven suppress launch
+   (a second Runtime while one is KNOWN or MAY EXIST is forbidden)
 ```
 
 A retarget transition itself never auto-launches.
 
 ## Recovery semantics
 
-`exit-unproven` means the old Runtime may still exist.
+The three safety states express different epistemic situations, and all of
+them block recovery in Slice 1:
+
+- `exit-unproven` — the old Runtime MAY STILL EXIST (the host could not
+  prove its exit);
+- `runtime-ownership-conflict` — a host runtime EXISTS for this session
+  (host-reported) and the editor has no lease for it;
+- `launch-outcome-unproven` — a launch outcome was NEVER RECEIVED and a
+  runtime MAY EXIST.
 
 Slice 1 therefore provides no formal recovery inside the current editor
 session:
@@ -435,7 +474,14 @@ session:
 - closing the Preview target is blocked;
 - a second Runtime launch is blocked;
 - repeated Stop re-reports the stored unproven fact without a host call;
-- a user declaration never releases ownership.
+- a user declaration never releases ownership;
+- `terminateAndJoin()` must REJECT (never resolve `already-exited`) when a
+  Runtime is KNOWN to exist (conflict) or MAY EXIST (either unproven state),
+  so the ownership transition cannot commit;
+- no fake recovery (no speculative stop, no attach-guess) is performed;
+  re-proof of an existing Runtime is a host-contract matter — a
+  SessionId / Runtime query capability — and is explicitly out of
+  Slice 1 scope.
 
 Restarting the Editor is an **operational reset only**, not termination proof.
 The Slice 1 "no second Runtime after an unproven exit" guarantee is therefore
