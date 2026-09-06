@@ -75,7 +75,7 @@ import {
 } from "./host-io.js";
 import { useNativeBuild } from "./useNativeBuild.js";
 import { useShaderPreview } from "./useShaderPreview.js";
-import { resolvePreviewTarget } from "./preview-coordinator.js";
+import { describeTransitionRefusal, resolvePreviewTarget } from "./preview-coordinator.js";
 import type { NativeBuildReadiness } from "./native-build-readiness.js";
 import {
     basenameOf,
@@ -107,7 +107,6 @@ import {
     activeWorkspaceDocument,
     activateWorkspaceDocument,
     closeWorkspaceDocument,
-    commitWorkspacePreviewTarget,
     createDocumentSessionId,
     createWorkspaceSession,
     openWorkspaceDocument,
@@ -542,24 +541,32 @@ export function App() {
         await closeOneTab(documentSessionId);
     };
 
-    /** Apply one accepted tab close through the Workspace reducer. If the
-     * tab being closed is the attached Runtime's Preview target, complete the
-     * Runtime teardown FIRST (ownership order) so the Runtime never out-points
-     * a document that no longer exists. */
+    /** Apply one accepted tab close. If the tab being closed IS the Preview
+     * target, the PreviewCoordinator owns the transition: strict teardown
+     * LAST-await, then one synchronous commit where the close + the
+     * Preview-target re-seed land together. A refusal leaves the tab open
+     * and the snapshot untouched. A NON-target tab close is a plain
+     * Workspace reducer operation — it never touches the Preview
+     * machinery. */
     async function closeOneTab(documentSessionId: DocumentSessionId): Promise<void> {
-        if (workspace.preview.targetDocumentId === documentSessionId) {
-            try {
-                // Strict teardown: the Runtime must have fully exited before the
-                // close transition. If it cannot be torn down, abort the close
-                // — otherwise a still-running Runtime would out-point the target.
-                await stopPreviewRuntimeIfAttached();
-            } catch (error) {
+        if (authoringStore.getSnapshot().session.preview.targetDocumentId === documentSessionId) {
+            const coordinator = preview.coordinator;
+            if (coordinator === null) {
                 setOperationNotes((previous) => [
                     ...previous,
-                    `Cannot close this tab yet: the attached Preview Runtime teardown failed (${error instanceof Error ? error.message : String(error)}). Stop the Preview first, then close.`,
+                    "Cannot close this tab yet: the Preview target must be resolved but no desktop Preview host is attached.",
                 ]);
                 return;
             }
+            const result = await coordinator.closeTarget(documentSessionId);
+            if (result.ok === false) {
+                setOperationNotes((previous) => [
+                    ...previous,
+                    `Cannot close this tab yet: ${describeTransitionRefusal(result.refusal)}.`,
+                ]);
+                return;
+            }
+            return;
         }
         applyWorkspaceTransition((current) => closeWorkspaceDocument(current, documentSessionId));
     }
@@ -578,39 +585,36 @@ export function App() {
      * axis (guidance §12.1) — switching tabs or editing never re-targets the
      * Runtime implicitly; only this deliberate action does.
      *
-     * The order is ownership-first: (1) tear down the Runtime that belongs to
-     * a prior target, (2) refresh the NEW target's own emission (it is
-     * f(document, descriptor), stored in ITS presentation, never borrowed
-     * from the active document), (3) commit the Workspace target transition. */
+     * The PreviewCoordinator executes the transition: strict teardown is
+     * its LAST await (skipped for the same-target fast path), and the
+     * commit revalidates the intent, refreshes the TARGET's own emission
+     * against the CURRENT descriptor, and moves the target in ONE
+     * synchronous store transaction. A refusal leaves the snapshot
+     * untouched. */
     const onPreviewThisGraph = async (): Promise<void> => {
         const target = session;
         const name = tabNameFor(target);
-        try {
-            // Strict teardown first: the attached Runtime (bound to a prior
-            // target) must be fully EXITED before retarget commits. If the
-            // host could not tear it down, abort the transition — a prior
-            // Runtime must never still be up while the target moves.
-            await stopPreviewRuntimeIfAttached();
-        } catch (error) {
+        const coordinator = preview.coordinator;
+        if (coordinator === null) {
             setOperationNotes((previous) => [
                 ...previous,
-                `Cannot retarget the Preview yet: the attached Runtime teardown failed (${error instanceof Error ? error.message : String(error)}). Try "Stop Preview" first.`,
+                "Cannot retarget the Preview yet: no desktop Preview host is attached.",
             ]);
             return;
         }
-        if (descriptor !== null) {
-            updateDocumentSession(target.sessionId, (previous) => ({
+        const result = await coordinator.retargetTo(target.sessionId);
+        if (result.ok === false) {
+            setOperationNotes((previous) => [
                 ...previous,
-                presentation: {
-                    ...previous.presentation,
-                    emission: emitHlsl(previous.history.present, descriptor),
-                },
-            }));
+                `Cannot retarget the Preview yet: ${describeTransitionRefusal(result.refusal)}.`,
+            ]);
+            return;
         }
-        applyWorkspaceTransition((current) => commitWorkspacePreviewTarget(current, target.sessionId));
         setOperationNotes((previous) => [
             ...previous,
-            `Preview target set to "${name}" — switching tabs keeps it until you choose another.`,
+            result.targetChanged
+                ? `Preview target set to "${name}" — switching tabs keeps it until you choose another.`
+                : `Preview target remains "${name}" — its emission was refreshed against the current descriptor.`,
         ]);
     };
 
@@ -1704,25 +1708,8 @@ export function App() {
         emission: previewEmission,
         configuredTarget: native.target.target,
         nativeFlow: native.flow,
+        workspaceStore: authoringStore,
     });
-
-    /** Tear down the attached Preview Runtime (if one is live) and await its
-     * PROVEN exit. This is the ownership transition that must complete BEFORE
-     * a retarget commit or a Preview-target close — a mere "stop requested"
-     * outcome is not enough: the old Runtime belongs to a prior
-     * target/candidate and must be verifiably gone before the next ownership
-     * begins. A no-op when no flow exists or the Runtime already settled.
-     * Rejects when the stop request fails OR the exit settles as
-     * `wait-failed` (the host could not prove the process left) OR the
-     * manager is in `runtime-ownership-conflict` (the host KNOWS a Runtime
-     * exists and the editor owns no lease for it) — the caller then refuses
-     * the transition and keeps the prior ownership instead of splitting it. */
-    const stopPreviewRuntimeIfAttached = async (): Promise<void> => {
-        if (preview.flow === null) {
-            return;
-        }
-        await preview.stopPreviewAndWait();
-    };
 
     // The flow object is stable while handshake facts change inside it. Read
     // supportedTargets on every render so a completed handshake immediately

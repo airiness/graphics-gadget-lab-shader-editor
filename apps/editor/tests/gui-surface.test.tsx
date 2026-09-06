@@ -2409,43 +2409,58 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         expect(app).toMatch(/useShaderPreview\(\{[\s\S]*?document: previewDocument,[\s\S]*?emission: previewEmission/);
     });
 
-    it("retarget tears down the attached Runtime BEFORE committing the new target", () => {
+    it("retarget is owned by the PreviewCoordinator: the app delegates the WHOLE transition, and the coordinator tears down LAST, committing in one apply against CURRENT", () => {
         const app = read("../src/app.tsx");
+        const coordinator = read("../src/preview-coordinator.ts");
+        // The app delegates: no local teardown choreography remains.
         const onPreview = app.match(/const onPreviewThisGraph[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
-        expect(onPreview).toContain("await stopPreviewRuntimeIfAttached()");
-        expect(onPreview).toContain("commitWorkspacePreviewTarget(current, target.sessionId)");
-        // Teardown order: stopPreviewRuntimeIfAttached precedes the commit.
-        const stopAt = onPreview.indexOf("await stopPreviewRuntimeIfAttached()");
-        const commitAt = onPreview.indexOf("commitWorkspacePreviewTarget");
-        expect(stopAt).toBeGreaterThanOrEqual(0);
-        expect(commitAt).toBeGreaterThan(stopAt);
+        expect(onPreview).toContain("const coordinator = preview.coordinator;");
+        expect(onPreview).toContain("await coordinator.retargetTo(target.sessionId)");
+        expect(onPreview).not.toContain("stopPreviewRuntimeIfAttached");
+        expect(onPreview).not.toContain("commitWorkspacePreviewTarget");
+        // The coordinator owns the discipline: the LAST await is the strict
+        // teardown, and the commit is exactly one store.apply AFTER it,
+        // resolving the emission from the CURRENT descriptor.
+        const retargetBody = coordinator.match(/async retargetTo[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
+        const teardownAt = retargetBody.indexOf("await this.teardownProof()");
+        const applyAt = retargetBody.indexOf("this.store.apply");
+        expect(teardownAt).toBeGreaterThanOrEqual(0);
+        expect(applyAt).toBeGreaterThan(teardownAt);
+        expect(coordinator).toMatch(/const descriptor = state\.profileDescriptor/);
+        expect(coordinator).toMatch(/emitHlsl\(target\.history\.present, descriptor\)/);
+        expect(coordinator).toMatch(/target-emission-unavailable/);
     });
 
-    it("closing a tab that is the Preview target completes the Runtime transition before the close", () => {
+    it("closing the Preview target is the coordinator's; a NON-target close stays a plain Workspace reducer operation", () => {
         const app = read("../src/app.tsx");
         const closeFn = app.match(/async function closeOneTab[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
-        expect(closeFn).toContain("workspace.preview.targetDocumentId === documentSessionId");
-        expect(closeFn).toContain("await stopPreviewRuntimeIfAttached()");
-        expect(closeFn).toContain("closeWorkspaceDocument(current, documentSessionId)");
+        expect(closeFn).toContain("authoringStore.getSnapshot().session.preview.targetDocumentId === documentSessionId");
+        expect(closeFn).toContain("await coordinator.closeTarget(documentSessionId)");
+        expect(closeFn).toContain("applyWorkspaceTransition((current) => closeWorkspaceDocument(current, documentSessionId))");
+        expect(closeFn).not.toContain("stopPreviewRuntimeIfAttached");
     });
 
-    it("the target-resolution rule is a pure, isolated module (not inlined in the render)", () => {
+    it("the target-resolution rule is a pure, isolated module (not inlined in the render); the authority is one class in the same module", () => {
         const coordinator = read("../src/preview-coordinator.ts");
         expect(coordinator).toMatch(/export function resolvePreviewTarget/);
         expect(coordinator).toMatch(/export function hasExplicitPreviewTarget/);
         expect(coordinator).toMatch(/workspace\.preview\.targetDocumentId \?\? workspace\.activeDocumentId/);
+        expect(coordinator).toMatch(/export class PreviewCoordinator/);
     });
 
-    it("the ownership transition is a strict teardown: the Runtime must have EXITED before the target moves, and a failed teardown ABORTS the commit", () => {
+    it("the app keeps the structured refusal UX: both transition paths abort with a note on refusal, and the hook exposes the coordinator (with the store)", () => {
         const app = read("../src/app.tsx");
-        expect(app).toMatch(/await preview\.stopPreviewAndWait\(\)/);
-        // Retarget and target-close both gate the commit on the teardown
-        // SUCCEEDING; on failure they note the problem and abort (target
-        // unchanged / tab still open), before the commit/close can run.
-        expect(app).toMatch(/onPreviewThisGraph[\s\S]*?stopPreviewRuntimeIfAttached\(\);\s*\} catch \(error\)[\s\S]*?return;[\s\S]*?commitWorkspacePreviewTarget/);
-        expect(app).toMatch(/closeOneTab[\s\S]*?stopPreviewRuntimeIfAttached\(\);\s*\} catch \(error\)[\s\S]*?return;[\s\S]*?closeWorkspaceDocument/);
+        const hook = read("../src/useShaderPreview.ts");
+        expect(app).toMatch(/describeTransitionRefusal\(result\.refusal\)/);
         expect(app).toMatch(/Cannot retarget the Preview yet/);
         expect(app).toMatch(/Cannot close this tab yet/);
+        expect(app).toMatch(/const coordinator = preview\.coordinator;/);
+        expect(app).toMatch(/if \(coordinator === null\)/);
+        expect(app).toMatch(/workspaceStore: authoringStore/);
+        expect(hook).toMatch(/readonly coordinator: PreviewCoordinator \| null/);
+        expect(hook).toMatch(/new PreviewCoordinator\(manager, preview, input\.workspaceStore\)/);
+        expect(hook).toMatch(/gate: coordinator\?\.gate\(composition\) \?\? null/);
+        expect(hook).toMatch(/projection: coordinator\?\.runtimeProjection\(composition\) \?\? null/);
     });
 
     it("the Runtime manager owns the strict teardown: proven exit, sticky unproven, no second host request", () => {

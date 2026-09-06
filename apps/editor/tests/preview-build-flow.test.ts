@@ -21,9 +21,23 @@ import { canonicalV1Fixture } from "../../../packages/shader-graph-core/tests/fi
 import { PreviewBuildFlow, type PreviewCompositionInput, type PreviewToolStatePort } from "../src/preview-build-flow.js";
 import { AttachedPreviewRuntimeManager } from "../src/preview-runtime-manager.js";
 import { previewSessionReport } from "../src/preview-build-session.js";
+import { PreviewCoordinator } from "../src/preview-coordinator.js";
+import { WorkspaceStore, type WorkspaceAuthoringState } from "../src/workspace-store.js";
+import { createWorkspaceSession } from "../src/workspace-session.js";
 
 function manager(boundary: FakePreviewRuntimeBoundary): AttachedPreviewRuntimeManager {
     return new AttachedPreviewRuntimeManager(boundary, SESSION_ID);
+}
+
+/** The attached-Runtime refusal vocabulary is mapped by the Coordinator
+ * (before the Controller's build gate), so these scenarios are observed
+ * through `coordinator.gate`. */
+function coordinator(manager: AttachedPreviewRuntimeManager, flow: PreviewBuildFlow): PreviewCoordinator {
+    return new PreviewCoordinator(
+        manager,
+        flow,
+        new WorkspaceStore<WorkspaceAuthoringState>({ session: createWorkspaceSession(), profileDescriptor: null }),
+    );
 }
 
 const DESCRIPTOR_IDENTITY = "a7".repeat(32);
@@ -641,7 +655,7 @@ describe("Attached Preview Runtime authority - composition facts read by the flo
         await publish(flow);
         const launching = manager.launch(CANDIDATE_A);
         expect(manager.launchInFlight).toBe(true);
-        expect(flow.buildGate(input)).toMatchObject({
+        expect(coordinator(manager, flow).gate(input)).toMatchObject({
             admitted: false,
             reasons: [{ reason: "attached-runtime-launching" }],
         });
@@ -650,7 +664,7 @@ describe("Attached Preview Runtime authority - composition facts read by the flo
         expect(launched.launched).toBe(true);
         expect(manager.launchInFlight).toBe(false);
         // the build-side verdict is back once the launch settles
-        expect(flow.buildGate(input)).toMatchObject({ admitted: true });
+        expect(coordinator(manager, flow).gate(input)).toMatchObject({ admitted: true });
     });
 
     it("keeps a live session on its launch deployment and refuses cross-deployment updates", async () => {
@@ -668,7 +682,7 @@ describe("Attached Preview Runtime authority - composition facts read by the flo
         }
 
         port.state = compatible(CANDIDATE_C);
-        expect(flow.buildGate(input)).toMatchObject({
+        expect(coordinator(manager, flow).gate(input)).toMatchObject({
             admitted: false,
             reasons: [{ reason: "attached-runtime-deployment-mismatch" }],
         });
@@ -702,7 +716,7 @@ describe("Attached Preview Runtime authority - composition facts read by the flo
         // The current tool has since moved to a DIFFERENT deployment (C):
         // the build gate still refuses against the owned deployment A.
         port.state = compatible(CANDIDATE_C);
-        expect(flow.buildGate(input)).toMatchObject({
+        expect(coordinator(manager, flow).gate(input)).toMatchObject({
             admitted: false,
             reasons: [{ reason: "attached-runtime-deployment-mismatch" }],
         });
@@ -726,7 +740,7 @@ describe("Attached Preview Runtime authority - composition facts read by the flo
 
         // A single, exact structured refusal — not deployment-mismatch
         // (there is no owned binding to compare against).
-        expect(flow.buildGate(input)).toMatchObject({
+        expect(coordinator(manager, flow).gate(input)).toMatchObject({
             admitted: false,
             reasons: [{ reason: "attached-runtime-ownership-conflict" }],
         });
@@ -747,7 +761,7 @@ describe("Attached Preview Runtime authority - composition facts read by the flo
 
         // One exact structured refusal — never admission on the assumption
         // that no Runtime exists.
-        expect(flow.buildGate(input)).toMatchObject({
+        expect(coordinator(manager, flow).gate(input)).toMatchObject({
             admitted: false,
             reasons: [{ reason: "attached-runtime-launch-outcome-unproven" }],
         });

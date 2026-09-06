@@ -16,6 +16,13 @@ import {
 import { canonicalV1Fixture } from "../../../packages/shader-graph-core/tests/fixtures/descriptor-v1.js";
 import type { NativeBuildFlow } from "../src/native-build-flow.js";
 import { useShaderPreview } from "../src/useShaderPreview.js";
+import { WorkspaceStore, type WorkspaceAuthoringState } from "../src/workspace-store.js";
+import { createWorkspaceSession } from "../src/workspace-session.js";
+
+const workspaceStore = new WorkspaceStore<WorkspaceAuthoringState>({
+    session: createWorkspaceSession(),
+    profileDescriptor: null,
+});
 
 const previewWorld = vi.hoisted(() => ({
     tool: null as unknown,
@@ -199,6 +206,7 @@ describe("attached Shader Preview React surface", () => {
                 emission,
                 configuredTarget: "gglab-dx12",
                 nativeFlow,
+                workspaceStore,
             }),
         );
         await waitFor(() => expect(hook.result.current.flow).not.toBeNull());
@@ -250,6 +258,7 @@ describe("attached Shader Preview React surface", () => {
                 emission,
                 configuredTarget: "gglab-dx12",
                 nativeFlow,
+                workspaceStore,
             }),
         );
         await waitFor(() => expect(hook.result.current.flow).not.toBeNull());

@@ -24,6 +24,11 @@ import {
     AttachedPreviewRuntimeManager,
     type AttachedRuntimeState,
 } from "./preview-runtime-manager.js";
+import { PreviewCoordinator } from "./preview-coordinator.js";
+import {
+    WorkspaceStore,
+    type WorkspaceAuthoringState,
+} from "./workspace-store.js";
 import { previewProgramDescriptorIdentity, createPreviewSessionId } from "./preview-program-contract.js";
 import {
     createTauriPreviewObservationBoundary,
@@ -42,10 +47,16 @@ export interface UseShaderPreviewInput {
     readonly emission: HlslEmission | null;
     readonly configuredTarget: string;
     readonly nativeFlow: NativeBuildFlow | null;
+    /** The Workspace commit authority the Preview ownership transitions
+     *  commit to (the same instance the app renders from). */
+    readonly workspaceStore: WorkspaceStore<WorkspaceAuthoringState>;
 }
 
 export interface ShaderPreviewSurface {
     readonly flow: PreviewBuildFlow | null;
+    /** Ownership-transition + gate authority over the Runtime manager and
+     *  the build flow. Null while no desktop Preview host exists. */
+    readonly coordinator: PreviewCoordinator | null;
     readonly sessionId: string | null;
     readonly gate: PreviewBuildGate | null;
     readonly runtime: AttachedRuntimeState;
@@ -77,6 +88,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
     const [notes, setNotes] = useState<ShaderPreviewSurface["notes"]>([]);
     const flowRef = useRef<PreviewBuildFlow | null>(null);
     const managerRef = useRef<AttachedPreviewRuntimeManager | null>(null);
+    const coordinatorRef = useRef<PreviewCoordinator | null>(null);
 
     const note = useCallback((level: "ok" | "info" | "refusal", text: string) => {
         setNotes((previous) => [...previous.slice(-23), { level, text }]);
@@ -114,6 +126,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             );
             managerRef.current = manager;
             flowRef.current = preview;
+            coordinatorRef.current = new PreviewCoordinator(manager, preview, input.workspaceStore);
             setFlow(preview);
         })().catch((error: unknown) => {
             if (!canceled) {
@@ -126,6 +139,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             const currentFlow = flowRef.current;
             managerRef.current = null;
             flowRef.current = null;
+            coordinatorRef.current = null;
             setFlow(null);
             if (currentManager !== null) {
                 // Strict teardown, fire-and-forget. A plain `stop()` is a
@@ -204,13 +218,14 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
     const buildPreview = useCallback(async (): Promise<void> => {
         const current = flowRef.current;
         const manager = managerRef.current;
-        if (current === null || manager === null) {
+        const coordinator = coordinatorRef.current;
+        if (current === null || manager === null || coordinator === null) {
             note("refusal", "Preview build is unavailable: no desktop Preview host.");
             return;
         }
         setBuildInFlight(true);
         try {
-            const launch = await current.buildPreview(composition);
+            const launch = await coordinator.buildPreview(composition);
             if (!launch.issued) {
                 note("refusal", `Preview build was not issued (${launch.reason}).`);
                 return;
@@ -321,12 +336,14 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
         };
     }, [flow, managerState, runtimeKind, note]);
 
+    const coordinator = flow !== null ? coordinatorRef.current : null;
     return {
         flow,
+        coordinator,
         sessionId: flow?.session.sessionId ?? null,
-        gate: flow?.buildGate(composition) ?? null,
+        gate: coordinator?.gate(composition) ?? null,
         runtime: flow !== null && managerState !== null ? managerState.state : { kind: "idle" },
-        projection: flow?.runtimeProjection(composition) ?? null,
+        projection: coordinator?.runtimeProjection(composition) ?? null,
         lastObservationRefresh: flow?.lastObservationRefresh ?? null,
         handshakeInFlight: flow?.previewHandshakeInFlight ?? false,
         buildInFlight,

@@ -471,53 +471,11 @@ export class PreviewBuildFlow {
                 eligibility: null,
             };
         }
-        if (this.manager.state.kind === "launch-outcome-unproven") {
-            // The last launch outcome is UNKNOWN (the host may have spawned
-            // a Runtime): a build is a structured refusal — never admitted
-            // on the assumption that no Runtime exists.
-            return {
-                admitted: false,
-                reasons: [{ reason: "attached-runtime-launch-outcome-unproven" }],
-                request: null,
-                eligibility: null,
-            };
-        }
-        if (this.manager.state.kind === "runtime-ownership-conflict") {
-            // The host KNOWS a Runtime exists for this session and the
-            // manager owns no lease for it: a build is a structured refusal,
-            // never a deployment-mismatch (there is no owned binding
-            // to compare) and never admission.
-            return {
-                admitted: false,
-                reasons: [{ reason: "attached-runtime-ownership-conflict" }],
-                request: null,
-                eligibility: null,
-            };
-        }
-        if (this.manager.launchInFlight) {
-            return {
-                admitted: false,
-                reasons: [{ reason: "attached-runtime-launching" }],
-                request: null,
-                eligibility: null,
-            };
-        }
-        // The Runtime manager exposes the owned deployment as FACTS; this
-        // build authority maps them into build-refusal vocabulary. The
-        // comparison is the exact deployment toolPath equality — never the
-        // Preview Program Descriptor identity.
-        const ownedRuntime = this.manager.ownedRuntime;
-        if (
-            ownedRuntime !== null &&
-            ownedRuntime.deploymentToolPath !== tool.candidate.toolPath
-        ) {
-            return {
-                admitted: false,
-                reasons: [{ reason: "attached-runtime-deployment-mismatch" }],
-                request: null,
-                eligibility: null,
-            };
-        }
+        // The attached-Runtime refusal vocabulary (launch-outcome-unproven,
+        // runtime-ownership-conflict, launching, deployment-mismatch) is
+        // mapped by the PreviewCoordinator BEFORE this build gate runs: the
+        // Runtime manager exposes facts, and the Coordinator — not this
+        // controller — composes them into the build gate order.
         const requirement = requirementOf(composition.facts);
         const proof = this.lastHandshakeState;
         if (
@@ -572,12 +530,24 @@ export class PreviewBuildFlow {
         return { admitted: true, reasons: [], request, eligibility };
     }
 
+    /** The current ordinary tool state, read from its single owner. */
+    toolState(): ToolCompatibilityState {
+        return this.toolPort.current();
+    }
+
     /** Strict same-session single-flight launch. A newer eligible request
      *  immediately asks the active older attempt to cancel, then waits for
      *  that attempt's terminal outcome before re-gating and issuing. Queued
-     *  requests superseded before issue never consume AttemptSequence. */
-    buildPreview(input: PreviewCompositionInput): Promise<PreviewBuildLaunch> {
-        const initialGate = this.buildGate(input);
+     *  requests superseded before issue never consume AttemptSequence.
+     *
+     *  The gate is injected so the PreviewCoordinator can compose its
+     *  attached-Runtime refusal checks BEFORE the build gate; unadorned
+     *  callers (tests of the controller alone) get the build gate. */
+    buildPreview(
+        input: PreviewCompositionInput,
+        evaluateGate: (input: PreviewCompositionInput) => PreviewBuildGate = (candidate) => this.buildGate(candidate),
+    ): Promise<PreviewBuildLaunch> {
+        const initialGate = evaluateGate(input);
         if (!initialGate.admitted) {
             return Promise.resolve({ issued: false, reason: "gate-refused", gate: initialGate });
         }
@@ -590,7 +560,7 @@ export class PreviewBuildFlow {
             if (ordinal !== this.latestBuildRequestOrdinal) {
                 return { issued: false, reason: "superseded-before-issue", gate: initialGate };
             }
-            const gate = this.buildGate(input);
+            const gate = evaluateGate(input);
             if (!gate.admitted || gate.request === null || gate.eligibility?.status !== "eligible") {
                 return { issued: false, reason: "gate-refused", gate };
             }
@@ -773,9 +743,14 @@ export class PreviewBuildFlow {
 
     /** The honest runtime view for the graph currently in the editor. A
      *  present build request is used only to derive semantic intent; this
-     *  method never issues work or advances AttemptSequence. */
-    runtimeProjection(input: PreviewCompositionInput): PreviewRuntimeProjection {
-        const gate = this.buildGate(input);
+     *  method never issues work or advances AttemptSequence. The gate is
+     *  injectable so the PreviewCoordinator composes its attached-Runtime
+     *  refusal checks BEFORE the build gate. */
+    runtimeProjection(
+        input: PreviewCompositionInput,
+        evaluateGate: (input: PreviewCompositionInput) => PreviewBuildGate = (candidate) => this.buildGate(candidate),
+    ): PreviewRuntimeProjection {
+        const gate = evaluateGate(input);
         const intent =
             gate.admitted && gate.request !== null && gate.eligibility?.status === "eligible"
                 ? previewBuildIntentOf(gate.request, gate.eligibility.facts)
