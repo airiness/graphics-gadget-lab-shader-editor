@@ -853,8 +853,8 @@ describe("typed port presentation (core types → data categories)", () => {
         it("wires the advanced gestures: Alt+port = core port disconnect; Ctrl+edge → armed → port click = ONE atomic reconnect; Esc/blank cancel untouched", () => {
             const viewport = read("../../../packages/editor-ui/src/flow/flow-viewport.tsx");
             // Ctrl(+Meta) click arms the reconnect of THAT connection; a
-            // plain click is selection (Slice 1 path). Ports report their
-            // activation as raw data through the gesture context.
+            // plain click is selection. Ports report their activation as
+            // raw data through the gesture context.
             expect(viewport).toMatch(/event\.ctrlKey \|\| event\.metaKey/);
             expect(viewport).toContain("props.onEdgeReconnectArm?.(edge.id)");
             expect(viewport).toContain("PortGestureContext.Provider");

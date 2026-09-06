@@ -1684,7 +1684,7 @@ export function App() {
     const contractProblemCount = contractSets.reduce((sum, set) => sum + set.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length, 0);
     const emissionIdentity = emission !== null && emission.ok && emission.sourceMap?.generatedSourceIdentity !== undefined ? emission.sourceMap.generatedSourceIdentity.slice(0, 12) + "…" : undefined;
 
-    // ---- native build (Step 4 surface) — the composition and gate ----
+    // ---- native build — the composition and gate ----
     // Every RULE lives in the client (verdicts, the state machine, the
     // build-line) and the pure editor modules (readiness composition,
     // the session store, the inspector projection); the app owns only
