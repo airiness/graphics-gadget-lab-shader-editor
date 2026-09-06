@@ -254,7 +254,7 @@ function lineForDeployment(line: PreviewBuildLine, candidate: ToolCandidate): Pr
     };
 }
 
-export class PreviewBuildFlow {
+export class PreviewBuildController {
     private sessionState: PreviewBuildSession;
     private lastHandshakeState: PreviewHandshakeAttemptRecord | null = null;
     private currentHandshakeLane: {
@@ -772,12 +772,16 @@ export class PreviewBuildFlow {
 
     /** The honest runtime view for the graph currently in the editor. A
      *  present build request is used only to derive semantic intent; this
-     *  method never issues work or advances AttemptSequence. The gate is
-     *  injectable so the PreviewCoordinator composes its attached-Runtime
-     *  refusal checks BEFORE the build gate. */
+     *  method never issues work or advances AttemptSequence.
+     *
+     *  The gate is REQUIRED, not defaulted: an unadorned `buildGate` would be
+     *  a BYPASS of the PreviewCoordinator (which composes its attached-Runtime
+     *  and transition-in-flight facts BEFORE the build gate). Production
+     *  projections therefore always go through the Coordinator's composed
+     *  gate; tests of the controller alone pass `buildGate` explicitly. */
     runtimeProjection(
         input: PreviewCompositionInput,
-        evaluateGate: (input: PreviewCompositionInput) => PreviewBuildGate = (candidate) => this.buildGate(candidate),
+        evaluateGate: (input: PreviewCompositionInput) => PreviewBuildGate,
     ): PreviewRuntimeProjection {
         const gate = evaluateGate(input);
         const intent =

@@ -2518,7 +2518,7 @@ describe("preview target ownership (PreviewCoordinator)", () => {
 
     it("close/retarget discipline: revision binding, build↔transition mutual exclusion, proven-no-Runtime commits, and the bypass is closed", () => {
         const coordinator = read("../src/preview-coordinator.ts");
-        const flow = read("../src/preview-build-flow.ts");
+        const flow = read("../src/preview-build-controller.ts");
         const hook = read("../src/useShaderPreview.ts");
 
         // Revision binding (no data loss): closeTarget binds to the exact
@@ -2542,13 +2542,14 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         expect(coordinator).toMatch(/preview-host-unavailable/);
 
         // The bypass is closed: the strict teardown is reachable ONLY
-        // through the coordinator (no public stopPreviewAndWait), and the
-        // build gate is a REQUIRED argument (no uncomposed default to fall
-        // into) — read-only projection keeps its default, but that is not
-        // the issuance path.
+        // through the coordinator (no public stopPreviewAndWait), and BOTH
+        // the build gate and the projection gate are REQUIRED arguments
+        // (no uncomposed `buildGate` default to fall into) — every
+        // production build or projection goes through the Coordinator.
         expect(hook).not.toMatch(/stopPreviewAndWait/);
         expect(flow).not.toMatch(/stopPreviewAndWait/);
         expect(flow).toMatch(/buildPreview\([\s\S]*?evaluateGate: \(input: PreviewCompositionInput\) => PreviewBuildGate,[\s\S]*?\): Promise<PreviewBuildLaunch>/);
+        expect(flow).toMatch(/runtimeProjection\([\s\S]*?evaluateGate: \(input: PreviewCompositionInput\) => PreviewBuildGate,[\s\S]*?\): PreviewRuntimeProjection/);
     });
 });
 

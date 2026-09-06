@@ -606,7 +606,7 @@ host-level process-lifetime guarantee.
 | `tests/workspace-store.test.ts` | exactly-once apply, snapshot stability, notify ordering, strong exception safety, reentrancy refusal |
 | `src/preview-coordinator.ts` | Formal transition executor and Runtime-fact -> build-refusal composition |
 | `tests/preview-coordinator.test.ts` | retarget/close ordering, stale-state revalidation, descriptor-during-await regression, strict single-flight, finally re-claim |
-| `src/preview-build-flow.ts` | Remove Runtime lifetime fields/methods; retain build/observation authority |
+| `src/preview-build-controller.ts` | Remove Runtime lifetime fields/methods; retain build/observation authority (renamed from `preview-build-flow.ts` in the isolated rename step) |
 | `src/useShaderPreview.ts` | Compose controller + Runtime manager + Coordinator; preserve build-success auto-launch |
 | `src/app.tsx` | Workspace/descriptor facts project from `WorkspaceStore`; handlers become thin Coordinator calls |
 | `tests/gui-surface.test.tsx` | Move pins to the new seams |

@@ -74,10 +74,10 @@ import {
     resolvePreviewTarget,
 } from "../src/preview-coordinator.js";
 import {
-    PreviewBuildFlow,
+    PreviewBuildController,
     type PreviewCompositionInput,
     type PreviewToolStatePort,
-} from "../src/preview-build-flow.js";
+} from "../src/preview-build-controller.js";
 import { AttachedPreviewRuntimeManager } from "../src/preview-runtime-manager.js";
 import {
     WorkspaceStore,
@@ -339,7 +339,7 @@ function docSession(id: string, document: ShaderGraphDocument, emission: HlslEmi
 interface World {
     readonly runtime: FakePreviewRuntimeBoundary;
     readonly manager: AttachedPreviewRuntimeManager;
-    readonly flow: PreviewBuildFlow;
+    readonly flow: PreviewBuildController;
     readonly port: TestToolPort;
     readonly coordinator: PreviewCoordinator;
     readonly store: WorkspaceStore<WorkspaceAuthoringState>;
@@ -367,7 +367,7 @@ function makeWorld(
     });
     const observation = new FakePreviewObservationBoundary({ reads: [{ kind: "not-found" }] });
     const port = new TestToolPort();
-    const flow = new PreviewBuildFlow(tool, port, SESSION_ID, observation, manager);
+    const flow = new PreviewBuildController(tool, port, SESSION_ID, observation, manager);
     const store = new WorkspaceStore<WorkspaceAuthoringState>(state);
     // This world HAS a host (real manager + flow); the accessors stand in
     // for the hook's live refs.

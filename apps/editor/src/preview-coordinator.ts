@@ -40,12 +40,12 @@ import type {
     PreviewRuntimeProjection,
 } from "@gglab/shader-toolchain-client";
 import {
-    type PreviewBuildFlow,
+    type PreviewBuildController,
     type PreviewBuildGate,
     type PreviewBuildGateReason,
     type PreviewBuildLaunch,
     type PreviewCompositionInput,
-} from "./preview-build-flow.js";
+} from "./preview-build-controller.js";
 import { documentRevision, type DocumentSession } from "./document-session.js";
 import { type AttachedPreviewRuntimeManager } from "./preview-runtime-manager.js";
 import {
@@ -175,7 +175,7 @@ export class PreviewCoordinator {
      *                              (unproven exit / conflict) BLOCK. */
     constructor(
         private readonly managerSource: () => AttachedPreviewRuntimeManager | null,
-        private readonly flowSource: () => PreviewBuildFlow | null,
+        private readonly flowSource: () => PreviewBuildController | null,
         private readonly store: WorkspaceStore<WorkspaceAuthoringState>,
     ) {}
 
@@ -183,7 +183,7 @@ export class PreviewCoordinator {
         return this.managerSource();
     }
 
-    private get flow(): PreviewBuildFlow | null {
+    private get flow(): PreviewBuildController | null {
         return this.flowSource();
     }
 
@@ -216,7 +216,7 @@ export class PreviewCoordinator {
         return flow.buildGate(input);
     }
 
-    private attachedRuntimeRefusal(flow: PreviewBuildFlow): AttachedRuntimeGateRefusal | null {
+    private attachedRuntimeRefusal(flow: PreviewBuildController): AttachedRuntimeGateRefusal | null {
         const manager = this.manager;
         if (manager === null) {
             return null; // no desktop host → no attached-Runtime facts to map

@@ -1,8 +1,8 @@
 /** React composition for the attached Shader Graph Preview session. Pure
- * protocol/order rules remain in PreviewBuildFlow; the Runtime lifetime
- * authority lives in AttachedPreviewRuntimeManager; this hook owns only
- * desktop boundary construction, action wiring, render ticks, and the
- * bounded poll timer. */
+ * protocol/order rules remain in PreviewBuildController; the Runtime
+ * lifetime authority lives in AttachedPreviewRuntimeManager; this hook
+ * owns only desktop boundary construction, action wiring, render ticks,
+ * and the bounded poll timer. */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
     PreviewAttemptOutcome,
@@ -15,11 +15,11 @@ import type {
 } from "@gglab/shader-graph-core";
 import type { NativeBuildFlow } from "./native-build-flow.js";
 import {
-    PreviewBuildFlow,
+    PreviewBuildController,
     type PreviewBuildGate,
     type PreviewCompositionInput,
     type PreviewObservationRefresh,
-} from "./preview-build-flow.js";
+} from "./preview-build-controller.js";
 import {
     AttachedPreviewRuntimeManager,
     type AttachedRuntimeState,
@@ -53,7 +53,7 @@ export interface UseShaderPreviewInput {
 }
 
 export interface ShaderPreviewSurface {
-    readonly flow: PreviewBuildFlow | null;
+    readonly flow: PreviewBuildController | null;
     /** Ownership-transition + gate authority over the Runtime manager and
      * the build flow. Always present for a mounted editor: with no desktop
      * host it executes pure Workspace transitions (proven no Runtime) and
@@ -79,11 +79,11 @@ export interface ShaderPreviewSurface {
 
 export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSurface {
     const [, bump] = useState(0);
-    const [flow, setFlow] = useState<PreviewBuildFlow | null>(null);
+    const [flow, setFlow] = useState<PreviewBuildController | null>(null);
     const [buildInFlight, setBuildInFlight] = useState(false);
     const [launchInFlight, setLaunchInFlight] = useState(false);
     const [notes, setNotes] = useState<ShaderPreviewSurface["notes"]>([]);
-    const flowRef = useRef<PreviewBuildFlow | null>(null);
+    const flowRef = useRef<PreviewBuildController | null>(null);
     const managerRef = useRef<AttachedPreviewRuntimeManager | null>(null);
     // One coordinator per mount, independent of whether the desktop host
     // arrives. It reads the LIVE host bindings through the accessors below,
@@ -121,7 +121,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             }
             const sessionId = createPreviewSessionId();
             const manager = new AttachedPreviewRuntimeManager(runtime, sessionId);
-            const preview = new PreviewBuildFlow(
+            const preview = new PreviewBuildController(
                 tool,
                 {
                     current: () => nativeFlow.tool,
