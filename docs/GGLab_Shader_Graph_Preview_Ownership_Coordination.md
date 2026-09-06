@@ -208,6 +208,11 @@ Rules:
   exit-unproven returns the stored fact; ONLY an explicitly proven
   no-Runtime state (idle / launch-refused) may resolve already-exited.
   launched === false is NEVER itself "no Runtime".
+  Exact launch-lane discipline (mirrors the stop-lane contract): a strict
+  teardown is bound to the SPECIFIC launch lane it captured — if a fresh
+  launch intent starts in the settlement gap (a new lane, or a `launching`
+  state), that teardown REJECTS and never auto-joins the new intent.
+  `launching` must NEVER be mapped to `already-exited`.
 
 The current host removes its registry entry after the settlement thread ends;
 that registry miss is not termination evidence and therefore cannot release

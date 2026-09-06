@@ -225,25 +225,47 @@ export class AttachedPreviewRuntimeManager {
         // "no Runtime" (the host may have reported one — conflict — or the
         // outcome may be unknown — unproven). Only an explicitly PROVEN
         // no-Runtime state may resolve `already-exited`.
-        const launchLane = this.launchLane;
-        if (launchLane !== null) {
-            await launchLane;
-            const final = this.stateValue;
-            if (final.kind === "runtime-ownership-conflict") {
+        // Exact launch-lane discipline (mirrors the stop-lane contract):
+        // capture the SPECIFIC launch lane this teardown joins and validate
+        // it by identity after the await. A launch lane that settles here
+        // can never settle `launching` itself — so if a NEW launch intent
+        // started in the gap, the captured lane is no longer the current
+        // one and this teardown must REJECT. `launching` is an UNKNOWN
+        // outcome, NOT a proven no-Runtime state: it must never resolve
+        // `already-exited`.
+        const capturedLaunchLane = this.launchLane;
+        if (capturedLaunchLane !== null) {
+            const captured = await capturedLaunchLane;
+            if (captured.launched !== true) {
+                if (this.launchLane !== null || this.stateValue.kind === "launching") {
+                    throw new Error(
+                        `a new Preview Runtime launch intent started while this strict teardown was settling its captured launch; the teardown is bound to its captured lane and a fresh launch is a new intent, so the ownership transition was not committed.`,
+                    );
+                }
+                const final = this.stateValue;
+                if (final.kind === "runtime-ownership-conflict") {
+                    throw new Error(
+                        `attached Preview Runtime #${final.runtimeId.sequence} was reported by the host as already running for this session, but this manager owns no lease for it; the ownership transition cannot commit.`,
+                    );
+                }
+                if (final.kind === "launch-outcome-unproven") {
+                    throw new Error(
+                        `the last Preview Runtime launch outcome is unproven (the host may have spawned a Runtime); a strict teardown cannot be issued without a lease, so the ownership transition cannot commit.`,
+                    );
+                }
+                if (final.kind === "exit-unproven") {
+                    return { outcome: "exit-unproven", runtimeId: final.runtimeId };
+                }
+                if (final.kind === "idle" || final.kind === "launch-refused") {
+                    // Only an EXPLICIT host refusal (host-declined) or a
+                    // clean start proves no Runtime exists.
+                    return { outcome: "already-exited" };
+                }
+                // `launching` or anything else here is an anomaly: a lane
+                // we captured can never settle itself into `launching`.
                 throw new Error(
-                    `attached Preview Runtime #${final.runtimeId.sequence} was reported by the host as already running for this session, but this manager owns no lease for it; the ownership transition cannot commit.`,
+                    `Preview Runtime invariant: strict teardown joined a launch lane whose final state ${final.kind} carries no proven no-Runtime fact; the ownership transition was not committed.`,
                 );
-            }
-            if (final.kind === "launch-outcome-unproven") {
-                throw new Error(
-                    `the last Preview Runtime launch outcome is unproven (the host may have spawned a Runtime); a strict teardown cannot be issued without a lease, so the ownership transition cannot commit.`,
-                );
-            }
-            if (final.kind === "exit-unproven") {
-                return { outcome: "exit-unproven", runtimeId: final.runtimeId };
-            }
-            if (final.kind === "idle" || final.kind === "launch-refused" || final.kind === "launching") {
-                return { outcome: "already-exited" };
             }
             // a successful launch settles below into the running path
         }
@@ -267,7 +289,15 @@ export class AttachedPreviewRuntimeManager {
                 `attached Preview Runtime #${state.runtimeId.sequence} was reported by the host as already running for this session, but this manager owns no lease for it; the ownership transition cannot commit.`,
             );
         }
-        if (state.kind === "idle" || state.kind === "launch-refused" || state.kind === "launching") {
+        if (state.kind === "launching") {
+            // No captured launch lane yet a `launching` state: the lane was
+            // lost without settling — an integrity violation, never a
+            // proven no-Runtime fact.
+            throw new Error(
+                `Preview Runtime invariant: the manager observes a launching state with no active launch lane; the ownership transition was not committed.`,
+            );
+        }
+        if (state.kind === "idle" || state.kind === "launch-refused") {
             return { outcome: "already-exited" };
         }
         if (state.kind === "exit-unproven") {
@@ -345,16 +375,28 @@ export class AttachedPreviewRuntimeManager {
         const attempt = this.boundary.launchAttachedPreview(candidate, this.sessionId);
         const lane: Promise<AttachedRuntimeLaunch> = attempt.then(
             (result) => {
+                // Clear the lane SYNCHRONOUsly here (before any awaited
+                // continuation can run): once the settle is decided, a new
+                // launch intent may be admitted — while strict teardowns
+                // that captured THIS lane validate it by identity and
+                // REJECT rather than adopting that new intent.
+                if (this.launchLane === lane) {
+                    this.launchLane = null;
+                }
                 if (result.kind === "session-already-running") {
                     // The host EXPLICITLY knows a live Runtime for this
                     // session; this manager has no lease / identity /
                     // settlement for it. This is an OWNERSHIP fact, not a
-                    // plain refusal (the host is not declining).
+                    // plain refusal (the host is not declining). The
+                    // attempted-candidate fact no longer describes an
+                    // unknown outcome — clear it.
                     this.stateValue = { kind: "runtime-ownership-conflict", runtimeId: result.runtimeId };
+                    this.attemptedCandidateValue = null;
                     return { launched: false as const, reason: "runtime-ownership-conflict" as const, runtimeId: result.runtimeId };
                 }
                 if (result.kind !== "launched") {
                     this.stateValue = { kind: "launch-refused", result };
+                    this.attemptedCandidateValue = null;
                     return { launched: false as const, reason: "host-refused" as const, result };
                 }
                 this.ownedCandidateValue = candidate;
@@ -375,20 +417,14 @@ export class AttachedPreviewRuntimeManager {
                 };
             },
             (error: unknown) => {
+                if (this.launchLane === lane) {
+                    this.launchLane = null;
+                }
                 this.resetAfterFailure();
                 throw error;
             },
         );
         this.launchLane = lane;
-        // `then(clear, clear)`, not `finally`: a finally-chain would DERIVE
-        // another rejected promise that nobody could handle; both arms clear
-        // the lane and re-throw through THIS (already handled) promise.
-        const clearLane = (): void => {
-            if (this.launchLane === lane) {
-                this.launchLane = null;
-            }
-        };
-        void lane.then(clearLane, clearLane);
         return lane;
     }
 
@@ -500,7 +536,15 @@ export class AttachedPreviewRuntimeManager {
         // proof). The attempted deployment is retained as an immutable
         // attempted-candidate fact (diagnostics / Slice 2 recovery) —
         // NOT an owned binding.
-        const attempted = this.attemptedCandidateValue?.toolPath ?? "unknown";
+        const attempted = this.ownedCandidateValue?.toolPath ?? this.attemptedCandidateValue?.toolPath;
+        if (attempted === undefined) {
+            // An unknown outcome MUST carry its attempted deployment — a
+            // missing fact is an integrity violation, never a silent
+            // placeholder.
+            throw new Error(
+                "Preview Runtime invariant: a rejected launch outcome has no recorded attempted deployment; ownership facts are incomplete.",
+            );
+        }
         this.stateValue = { kind: "launch-outcome-unproven", attemptedDeploymentToolPath: attempted };
         this.ownedCandidateValue = null;
         this.attemptedCandidateValue = null;

@@ -449,6 +449,63 @@ describe("attached Preview Runtime lifetime authority — launch refusal", () =>
         expect(boundary.releaseStop()).toBe(false);
     });
 
+    it("rejects when a FRESH launch starts in the gap while its captured launch lane settles (never already-exited)", async () => {
+        const boundary = new FakePreviewRuntimeBoundary({
+            launches: [
+                { kind: "launch-failed" },
+                { kind: "session-already-running", runtimeId: { sequence: 7 } },
+            ],
+            keepLaunchPending: true,
+        });
+        // A QUEUED CALLER starts launch #2 the moment #1 settles — inside
+        // the settlement microtasks, i.e. BEFORE the pending teardown's
+        // continuation resumes.
+        let manager: AttachedPreviewRuntimeManager | null = null;
+        const wrapping: PreviewRuntimeBoundary = {
+            launchAttachedPreview: (candidate: ToolCandidate, sessionId: string) => {
+                const inner = boundary.launchAttachedPreview(candidate, sessionId);
+                if (boundary.launchCalls === 1) {
+                    // The QUEUED CALLER awaits #1's lane settling (the
+                    // manager's settlement arm has run and cleared the
+                    // lane), then IMMEDIATELY starts launch #2 — a NEW
+                    // intent — before the pending teardown's continuation
+                    // resumes. (One extra .then hop: a join while the lane
+                    // is still active would not be a fresh intent.)
+                    inner
+                        .then(() => undefined, () => undefined)
+                        .then(() => {
+                            manager?.launch(candidate);
+                        });
+                }
+                return inner;
+            },
+            stopAttachedPreview: (id: PreviewRuntimeId) => boundary.stopAttachedPreview(id),
+        };
+        manager = new AttachedPreviewRuntimeManager(wrapping, SESSION_ID);
+
+        // launch #1 pending; strict teardown in flight
+        const first = manager.launch(CANDIDATE_A);
+        const teardown = manager.terminateAndJoin();
+        // the host settles #1 as an EXPLICIT refusal; the QUEUED CALLER
+        // starts launch #2 inside the settlement microtasks — before this
+        // teardown's continuation can resume
+        expect(boundary.releaseLaunch()).toBe(true);
+        await expect(first).resolves.toMatchObject({ launched: false, reason: "host-refused" });
+
+        // The teardown is bound to its CAPTURED lane; the fresh launch is a
+        // NEW intent and must make the teardown REJECT — never
+        // already-exited.
+        await expect(teardown).rejects.toThrow(/new intent|fresh launch|was not committed/i);
+
+        // The queued caller's launch #2 owns the final state once it
+        // settles (it reports the host conflict).
+        expect(boundary.releaseLaunch()).toBe(true);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(manager.state).toMatchObject({ kind: "runtime-ownership-conflict", runtimeId: { sequence: 7 } });
+        expect(manager.ownedRuntime).toBeNull();
+        expect(boundary.launchCalls).toBe(2);
+    });
+
     it("throws on an attached Runtime missing its exit settlement (invariant, never a no-op)", async () => {
         const boundary = runtime({ launches: [{ kind: "launched", runtimeIdentity: "runtime-a" }] });
         const manager = managerFor(boundary);
