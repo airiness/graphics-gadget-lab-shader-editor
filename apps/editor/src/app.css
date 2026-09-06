@@ -271,7 +271,8 @@ body {
     border-top: 1px solid var(--border-soft);
 }
 
-/* The drag handle: a visible 5px strip along the panel's top edge. */
+/* The resize control: a visible 5px strip along the panel's top edge — an
+   accessible, focusable vertical slider (pointer-drag AND arrow keys). */
 .gglab-bottom-panel-resize {
     flex: 0 0 5px;
     cursor: row-resize;
@@ -279,6 +280,12 @@ body {
 
 .gglab-bottom-panel-resize:hover {
     background: var(--accent-soft);
+}
+
+.gglab-bottom-panel-resize:focus-visible {
+    outline: none;
+    background: var(--accent-soft);
+    box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .gglab-bottom-panel-header {
@@ -320,7 +327,7 @@ body {
     color: var(--text);
     background: var(--panel-hi);
     border-color: var(--border-soft);
-    font-weight: 700;
+    font-weight: var(--weight-heading);
 }
 
 .gglab-bottom-panel-actions {

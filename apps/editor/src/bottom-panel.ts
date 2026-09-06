@@ -3,16 +3,21 @@
  *
  * The bottom panel is a pure editor PRESENTATION container: it owns the
  * visible view (tab), the collapsed/open state, and the drag-resize height —
- * nothing else. Its four views project their owners' structured facts;
+ * nothing else. Its four views will project their owners' structured facts —
  * Output, Build, and Preview are CHRONOLOGICAL event projections, while
  * Problems is a REPLACEABLE current diagnostic snapshot. The panel never
- * adds, mirrors, or re-orders a Build, Preview, or Workspace authority —
- * it only presents what its owners already hold (the same rule the right
- * inspector already obeys: the badge/rows project, they do not own).
+ * adds, mirrors, or re-orders a Build, Preview, or Workspace authority; it
+ * only presents what its owners already hold (the same rule the right
+ * inspector already obeys).
  *
- * The tab vocabulary and the height clamp live here, next to the inspector
- * zone vocabulary, so the clamp rule is unit-testable without React and the
- * composition root stays declarative.
+ * Two layout rules are enforced here so the composition root stays
+ * declarative and both are unit-testable without a browser:
+ *  - the panel keeps the Canvas row above an explicit floor (the max is
+ *    always capped by the body's CURRENT available height, not a fixed px);
+ *  - a pointer-resize height is clamped into [min, effective max].
+ *
+ * The tab vocabulary and the floor/clamp rules live here (next to the
+ * inspector zone vocabulary) for exactly that reason.
  */
 
 export const BOTTOM_PANEL_TABS = [
@@ -29,18 +34,40 @@ export function bottomPanelTabLabel(tab: BottomPanelTab): string {
     return BOTTOM_PANEL_TABS.find((entry) => entry.id === tab)?.label ?? "Bottom panel";
 }
 
-/** Drag-resize bounds (px): the panel stays usable but can never consume
- *  the whole canvas. */
+/** The minimum the Canvas row must always retain (px) — the panel must
+ *  never be able to press the Canvas away. */
+export const CANVAS_MIN_FLOOR_HEIGHT = 240;
+
+/** Drag-resize bounds (px): the panel stays usable. `BOTTOM_PANEL_MAX_HEIGHT`
+ *  is only an absolute ceiling; the EFFECTIVE max is always lower, capped by
+ *  the body's current available height minus the Canvas floor. */
 export const BOTTOM_PANEL_MIN_HEIGHT = 96;
 export const BOTTOM_PANEL_MAX_HEIGHT = 480;
 export const BOTTOM_PANEL_DEFAULT_HEIGHT = 220;
 
-/** Clamp a pointer-resize height into the supported range. A non-finite
- *  read (a degenerate event) falls back to the default rather than
- *  producing a broken layout. */
-export function clampBottomPanelHeight(height: number): number {
-    if (!Number.isFinite(height)) {
-        return BOTTOM_PANEL_DEFAULT_HEIGHT;
+/** The keyboard step the resize handle moves the height by (px). */
+export const BOTTOM_PANEL_KEYBOARD_STEP = 8;
+
+/**
+ * Resolve the EFFECTIVE maximum panel height for one resize gesture, given
+ * the CURRENT height of `.gglab-body` (the Canvas row + this panel). The
+ * Canvas row must keep at least its floor, so the panel can never exceed
+ * `bodyHeight - floor`. A non-finite / degenerate body height falls back to
+ * the absolute ceiling (the Canvas floor is still honored by the CSS row).
+ */
+export function resolvePanelMaxHeight(bodyHeight: number): number {
+    if (!Number.isFinite(bodyHeight)) {
+        return BOTTOM_PANEL_MAX_HEIGHT;
     }
-    return Math.min(BOTTOM_PANEL_MAX_HEIGHT, Math.max(BOTTOM_PANEL_MIN_HEIGHT, Math.round(height)));
+    const byBody = bodyHeight - CANVAS_MIN_FLOOR_HEIGHT;
+    return Math.max(BOTTOM_PANEL_MIN_HEIGHT, Math.min(BOTTOM_PANEL_MAX_HEIGHT, byBody));
+}
+
+/** Clamp a pointer-resize height into [min, effective max]. A non-finite
+ *  read (a degenerate event) falls back to the default rather than a broken
+ *  layout, still capped by the effective max. */
+export function clampBottomPanelHeight(height: number, effectiveMax: number): number {
+    const upper = Math.max(BOTTOM_PANEL_MIN_HEIGHT, effectiveMax);
+    const value = Number.isFinite(height) ? Math.round(height) : BOTTOM_PANEL_DEFAULT_HEIGHT;
+    return Math.min(upper, Math.max(BOTTOM_PANEL_MIN_HEIGHT, value));
 }

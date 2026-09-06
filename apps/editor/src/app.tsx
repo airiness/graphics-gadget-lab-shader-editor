@@ -7,7 +7,7 @@
  * defined here: validation, port-level types, conformance, compatibility,
  * and emission all come from @gglab/shader-graph-core.
  */
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
 import {
     addConnection,
     removeConnection,
@@ -127,8 +127,12 @@ import { INSPECTOR_ZONES, INSPECTOR_ZONE_LABELS, inspectorZoneBadge, type Inspec
 import {
     BOTTOM_PANEL_TABS,
     BOTTOM_PANEL_DEFAULT_HEIGHT,
+    BOTTOM_PANEL_KEYBOARD_STEP,
+    BOTTOM_PANEL_MAX_HEIGHT,
+    BOTTOM_PANEL_MIN_HEIGHT,
     bottomPanelTabLabel,
     clampBottomPanelHeight,
+    resolvePanelMaxHeight,
     type BottomPanelTab,
 } from "./bottom-panel.js";
 // Type-only (erased at compile time): the official dialog option shapes,
@@ -289,29 +293,143 @@ export function App() {
     const [bottomPanelOpen, setBottomPanelOpen] = useState(true);
     const [bottomPanelTab, setBottomPanelTab] = useState<BottomPanelTab>("output");
     const [bottomPanelHeight, setBottomPanelHeight] = useState(BOTTOM_PANEL_DEFAULT_HEIGHT);
-    // Drag-resize from the panel's top edge: the pointer-down captures the
-    // starting position + height, a window-level move updates the CLAMPED
-    // height, and up/cancel ends the gesture. The handle sits on the TOP of
-    // the panel, so dragging UP grows it. The gesture is pure presentation —
-    // it touches only `bottomPanelHeight`.
+    // The `.gglab-body` element (Canvas row + panel row) — measured at the
+    // start of a gesture to cap the panel by its CURRENT available height.
+    const panelBodyRef = useRef<HTMLDivElement | null>(null);
+    // The in-flight resize gesture, if any. A single gesture is current at a
+    // time; its identity (pointerId) guards against a stale/other pointer.
+    const resizeGestureRef = useRef<{ readonly pointerId: number; readonly startY: number; readonly startHeight: number; readonly effectiveMax: number } | null>(null);
+
+    // The effective max for a gesture: the body's CURRENT height minus the
+    // Canvas floor, then the absolute ceiling. Reading the body here (not a
+    // constant) is what keeps the Canvas from being pressed away in a small
+    // window.
+    function panelEffectiveMax(): number {
+        const bodyEl = panelBodyRef.current;
+        const bodyHeight = bodyEl !== null ? bodyEl.getBoundingClientRect().height : 0;
+        return resolvePanelMaxHeight(bodyHeight);
+    }
+
+    // Pointer-capture boundary: a real browser captures the pointer on the
+    // handle (so release is delivered even outside the window); jsdom and a
+    // synthetic/lost pointer do not implement the API, and the gesture still
+    // works without it — capture only widens the delivery, nothing depends on
+    // it being present.
+    function capturePointer(target: HTMLElement, pointerId: number): void {
+        (target as unknown as { setPointerCapture?: (id: number) => void }).setPointerCapture?.(pointerId);
+    }
+
+    function capturePointerEnd(target: HTMLElement, pointerId: number): void {
+        const el = target as unknown as { hasPointerCapture?: (id: number) => boolean; releasePointerCapture?: (id: number) => void };
+        if (el.hasPointerCapture !== undefined && el.hasPointerCapture(pointerId)) {
+            el.releasePointerCapture?.(pointerId);
+        }
+    }
+
+    // Drag-resize from the panel's top edge via POINTER CAPTURE: pointerdown
+    // starts the gesture and captures the pointer; move (while captured)
+    // updates the CLAMPED height; up/cancel ends it. The gesture is pure
+    // presentation and touches only `bottomPanelHeight`.
     function beginBottomPanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
         event.preventDefault();
-        const startY = event.clientY;
-        const startHeight = bottomPanelHeight;
-        const onMove = (move: PointerEvent): void => {
-            setBottomPanelHeight(clampBottomPanelHeight(startHeight + (startY - move.clientY)));
+        resizeGestureRef.current = {
+            pointerId: event.pointerId,
+            startY: event.clientY,
+            startHeight: bottomPanelHeight,
+            effectiveMax: panelEffectiveMax(),
         };
-        const end = (): void => {
-            window.removeEventListener("pointermove", onMove);
-            window.removeEventListener("pointerup", end);
-            window.removeEventListener("pointercancel", end);
-            window.document.body.classList.remove("gglab-resizing");
-        };
-        window.addEventListener("pointermove", onMove);
-        window.addEventListener("pointerup", end);
-        window.addEventListener("pointercancel", end);
+        capturePointer(event.currentTarget, event.pointerId);
         window.document.body.classList.add("gglab-resizing");
     }
+
+    function moveBottomPanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
+        const gesture = resizeGestureRef.current;
+        if (gesture === null || gesture.pointerId !== event.pointerId) {
+            return;
+        }
+        setBottomPanelHeight(clampBottomPanelHeight(gesture.startHeight + (gesture.startY - event.clientY), gesture.effectiveMax));
+    }
+
+    function endBottomPanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
+        const gesture = resizeGestureRef.current;
+        if (gesture === null || gesture.pointerId !== event.pointerId) {
+            return;
+        }
+        resizeGestureRef.current = null;
+        capturePointerEnd(event.currentTarget, event.pointerId);
+        window.document.body.classList.remove("gglab-resizing");
+    }
+
+    // Keyboard resize (the handle is a real, focusable value control): up /
+    // right grow, down / left shrink, each by a fixed step within the current
+    // effective range.
+    function stepBottomPanelResize(delta: number): void {
+        const effectiveMax = panelEffectiveMax();
+        setBottomPanelHeight((current) => clampBottomPanelHeight(current + delta * BOTTOM_PANEL_KEYBOARD_STEP, effectiveMax));
+    }
+
+    function onBottomPanelResizeKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+        // A vertical value control: up grows the panel, down shrinks it, each
+        // one keyboard step within the current effective range.
+        switch (event.key) {
+            case "ArrowUp":
+                event.preventDefault();
+                stepBottomPanelResize(1);
+                return;
+            case "ArrowDown":
+                event.preventDefault();
+                stepBottomPanelResize(-1);
+                return;
+            default:
+                return;
+        }
+    }
+
+    // Keyboard tab navigation (roving selection): arrows move the active
+    // view, Home/End jump to the ends.
+    function selectBottomPanelTab(index: number): void {
+        const length = BOTTOM_PANEL_TABS.length;
+        const wrapped = ((index % length) + length) % length;
+        const tab = BOTTOM_PANEL_TABS[wrapped];
+        if (tab !== undefined) {
+            setBottomPanelTab(tab.id);
+        }
+    }
+
+    function onBottomPanelTabKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>): void {
+        const index = BOTTOM_PANEL_TABS.findIndex((entry) => entry.id === bottomPanelTab);
+        switch (event.key) {
+            case "ArrowRight":
+            case "ArrowDown":
+                event.preventDefault();
+                selectBottomPanelTab(index + 1);
+                return;
+            case "ArrowLeft":
+            case "ArrowUp":
+                event.preventDefault();
+                selectBottomPanelTab(index - 1);
+                return;
+            case "Home":
+                event.preventDefault();
+                selectBottomPanelTab(0);
+                return;
+            case "End":
+                event.preventDefault();
+                selectBottomPanelTab(BOTTOM_PANEL_TABS.length - 1);
+                return;
+            default:
+                return;
+        }
+    }
+
+    // The unmount / HMR boundary: an in-flight gesture must never strand the
+    // window-level "resizing" state or a dangling pointer capture.
+    useEffect(() => {
+        return () => {
+            resizeGestureRef.current = null;
+            window.document.body.classList.remove("gglab-resizing");
+        };
+    }, []);
     // The tab the user asked to close while it is dirty (a confirm guard).
     // `null` = no pending close. Closing discards only if the user
     // explicitly confirms; otherwise the document stays open.
@@ -1888,7 +2006,7 @@ export function App() {
                     </Button>
                 </div>
             </div>
-            <div className={`gglab-body${libraryOpen ? "" : " gglab-body-library-collapsed"}${inspectorOpen ? "" : " gglab-body-inspector-collapsed"}`}>
+            <div ref={panelBodyRef} className={`gglab-body${libraryOpen ? "" : " gglab-body-library-collapsed"}${inspectorOpen ? "" : " gglab-body-inspector-collapsed"}`}>
                 <aside className="gglab-side gglab-side-left gglab-primary-sidebar">
                     {/* Activity bar — switches the primary sidebar panel.
                         "Nodes" is the default (the existing library), and
@@ -2516,10 +2634,19 @@ export function App() {
                     <section className="gglab-bottom-panel" style={{ height: `${bottomPanelHeight}px` }} aria-label="Bottom panel">
                         <div
                             className="gglab-bottom-panel-resize"
-                            role="separator"
-                            aria-orientation="horizontal"
-                            aria-label="Resize the bottom panel"
+                            role="slider"
+                            aria-orientation="vertical"
+                            aria-label="Resize the bottom panel height"
+                            aria-valuemin={BOTTOM_PANEL_MIN_HEIGHT}
+                            aria-valuemax={BOTTOM_PANEL_MAX_HEIGHT}
+                            aria-valuenow={bottomPanelHeight}
+                            tabIndex={0}
+                            title="Resize the bottom panel (drag, or use the arrow keys)"
                             onPointerDown={beginBottomPanelResize}
+                            onPointerMove={moveBottomPanelResize}
+                            onPointerUp={endBottomPanelResize}
+                            onPointerCancel={endBottomPanelResize}
+                            onKeyDown={onBottomPanelResizeKeyDown}
                         />
                         <div className="gglab-bottom-panel-header">
                             <div className="gglab-bottom-panel-tabs" role="tablist" aria-label="Bottom panel views">
@@ -2529,8 +2656,10 @@ export function App() {
                                         type="button"
                                         role="tab"
                                         aria-selected={bottomPanelTab === tab.id}
+                                        tabIndex={bottomPanelTab === tab.id ? 0 : -1}
                                         className={bottomPanelTab === tab.id ? "gglab-bottom-panel-tab active" : "gglab-bottom-panel-tab"}
                                         onClick={() => setBottomPanelTab(tab.id)}
+                                        onKeyDown={onBottomPanelTabKeyDown}
                                     >
                                         {tab.label}
                                     </button>

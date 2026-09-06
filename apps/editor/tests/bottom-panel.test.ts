@@ -1,16 +1,19 @@
 /**
- * The bottom panel's pure surface vocabulary and its drag-resize clamp.
+ * The bottom panel's pure surface vocabulary and its resize rules.
  * Headless by construction: no React, no authority — the tab ids/labels,
- * the label lookup, and the height clamp rule.
+ * the label lookup, the CANVAS-FLOOR height resolution, and the clamp rule.
  */
 import { describe, expect, it } from "vitest";
 import {
     BOTTOM_PANEL_DEFAULT_HEIGHT,
+    BOTTOM_PANEL_KEYBOARD_STEP,
     BOTTOM_PANEL_MAX_HEIGHT,
     BOTTOM_PANEL_MIN_HEIGHT,
     BOTTOM_PANEL_TABS,
+    CANVAS_MIN_FLOOR_HEIGHT,
     bottomPanelTabLabel,
     clampBottomPanelHeight,
+    resolvePanelMaxHeight,
 } from "../src/bottom-panel.js";
 
 describe("the bottom panel vocabulary", () => {
@@ -30,28 +33,72 @@ describe("the bottom panel vocabulary", () => {
         expect(BOTTOM_PANEL_DEFAULT_HEIGHT).toBeGreaterThanOrEqual(BOTTOM_PANEL_MIN_HEIGHT);
         expect(BOTTOM_PANEL_DEFAULT_HEIGHT).toBeLessThanOrEqual(BOTTOM_PANEL_MAX_HEIGHT);
     });
+
+    it("uses a positive keyboard step smaller than the minimum height", () => {
+        expect(BOTTOM_PANEL_KEYBOARD_STEP).toBeGreaterThan(0);
+        expect(BOTTOM_PANEL_KEYBOARD_STEP).toBeLessThan(BOTTOM_PANEL_MIN_HEIGHT);
+    });
 });
 
-describe("the drag-resize height clamp", () => {
-    it("clamps below the minimum up to the minimum", () => {
-        expect(clampBottomPanelHeight(1)).toBe(BOTTOM_PANEL_MIN_HEIGHT);
-        expect(clampBottomPanelHeight(BOTTOM_PANEL_MIN_HEIGHT - 10)).toBe(BOTTOM_PANEL_MIN_HEIGHT);
+describe("the Canvas-floor effective max", () => {
+    it("caps the panel by the body's CURRENT height minus the Canvas floor", () => {
+        // A 600px-tall body reserves the Canvas floor for the Canvas row.
+        expect(resolvePanelMaxHeight(600)).toBe(600 - CANVAS_MIN_FLOOR_HEIGHT);
+        // 880px body: 880 - 240 = 640, but the ABSOLUTE ceiling (480) wins.
+        expect(resolvePanelMaxHeight(880)).toBe(BOTTOM_PANEL_MAX_HEIGHT);
     });
 
-    it("clamps above the maximum down to the maximum", () => {
-        expect(clampBottomPanelHeight(100000)).toBe(BOTTOM_PANEL_MAX_HEIGHT);
-        expect(clampBottomPanelHeight(BOTTOM_PANEL_MAX_HEIGHT + 5)).toBe(BOTTOM_PANEL_MAX_HEIGHT);
+    it("never lets the Canvas row drop below the floor (small body)", () => {
+        // A 300px body minus the 240px floor is 60px — below the panel's own
+        // minimum, so the effective max floors at the minimum (96px): the
+        // panel can never be smaller, and the Canvas keeps its floor when the
+        // panel is at any height the user can actually reach.
+        expect(resolvePanelMaxHeight(300)).toBe(BOTTOM_PANEL_MIN_HEIGHT);
+        // The invariant the supervisor requires: effectiveMax + floor <= body
+        // height is guaranteed by construction (effectiveMax = body - floor,
+        // clamped up to min only).
+        for (const bodyHeight of [400, 500, 600, 720]) {
+            const effectiveMax = resolvePanelMaxHeight(bodyHeight);
+            expect(effectiveMax + CANVAS_MIN_FLOOR_HEIGHT).toBeLessThanOrEqual(bodyHeight);
+            expect(effectiveMax).toBeGreaterThanOrEqual(BOTTOM_PANEL_MIN_HEIGHT);
+            expect(effectiveMax).toBeLessThanOrEqual(BOTTOM_PANEL_MAX_HEIGHT);
+        }
+    });
+
+    it("falls back to the absolute ceiling for a non-finite body height", () => {
+        expect(resolvePanelMaxHeight(Number.NaN)).toBe(BOTTOM_PANEL_MAX_HEIGHT);
+        expect(resolvePanelMaxHeight(Number.POSITIVE_INFINITY)).toBe(BOTTOM_PANEL_MAX_HEIGHT);
+        expect(resolvePanelMaxHeight(Number.NEGATIVE_INFINITY)).toBe(BOTTOM_PANEL_MAX_HEIGHT);
+    });
+});
+
+describe("the panel height clamp", () => {
+    it("clamps below the minimum up to the minimum", () => {
+        expect(clampBottomPanelHeight(1, 480)).toBe(BOTTOM_PANEL_MIN_HEIGHT);
+        expect(clampBottomPanelHeight(BOTTOM_PANEL_MIN_HEIGHT - 10, 480)).toBe(BOTTOM_PANEL_MIN_HEIGHT);
+    });
+
+    it("clamps above the EFFECTIVE max down to that max (not the absolute ceiling)", () => {
+        expect(clampBottomPanelHeight(100000, 300)).toBe(300);
+        expect(clampBottomPanelHeight(400, 300)).toBe(300);
     });
 
     it("keeps an in-range height, rounded to a whole pixel", () => {
-        expect(clampBottomPanelHeight(150)).toBe(150);
-        expect(clampBottomPanelHeight(150.4)).toBe(150);
-        expect(clampBottomPanelHeight(150.6)).toBe(151);
+        expect(clampBottomPanelHeight(150, 480)).toBe(150);
+        expect(clampBottomPanelHeight(150.4, 480)).toBe(150);
+        expect(clampBottomPanelHeight(150.6, 480)).toBe(151);
     });
 
-    it("falls back to the default for a non-finite read (never a broken layout)", () => {
-        expect(clampBottomPanelHeight(Number.NaN)).toBe(BOTTOM_PANEL_DEFAULT_HEIGHT);
-        expect(clampBottomPanelHeight(Number.POSITIVE_INFINITY)).toBe(BOTTOM_PANEL_DEFAULT_HEIGHT);
-        expect(clampBottomPanelHeight(Number.NEGATIVE_INFINITY)).toBe(BOTTOM_PANEL_DEFAULT_HEIGHT);
+    it("treats the effective max as the true ceiling even when it is below the default", () => {
+        // The default (220) sits above a 180px effective max: any read is
+        // capped at 180, and the default itself is clamped down too.
+        expect(clampBottomPanelHeight(BOTTOM_PANEL_DEFAULT_HEIGHT, 180)).toBe(180);
+    });
+
+    it("falls back to the default for a non-finite read, capped by the effective max", () => {
+        expect(clampBottomPanelHeight(Number.NaN, 480)).toBe(BOTTOM_PANEL_DEFAULT_HEIGHT);
+        expect(clampBottomPanelHeight(Number.POSITIVE_INFINITY, 480)).toBe(BOTTOM_PANEL_DEFAULT_HEIGHT);
+        // Even the non-finite fallback honors a low effective max.
+        expect(clampBottomPanelHeight(Number.NaN, 180)).toBe(180);
     });
 });
