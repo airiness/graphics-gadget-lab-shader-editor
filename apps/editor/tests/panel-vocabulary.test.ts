@@ -41,6 +41,7 @@ import {
     problemEntriesFromPreviewAttempt,
     previewChronology,
     replaceProblemSnapshot,
+    type PreviewRow,
     type EvidenceCorrelation,
     type PanelDocumentContext,
     type ProblemSnapshotEntry,
@@ -301,6 +302,20 @@ describe("the Preview projection (over the owner's Preview session)", () => {
         expect(previewSessionA.line.attempts).toHaveLength(3);
         expect(previewSessionA.line.attempts[0]).toBe(previewPending); // arrival order preserved
     });
+
+    it("is a branded projection value: a hand-assembled record/correlation pairing cannot satisfy the row type", () => {
+        const row = previewChronology(previewSessionA)[0];
+        expect(row).not.toBeUndefined();
+        if (row !== undefined) {
+            // Type-level pin: the directive below makes typecheck fail if
+            // this assignment ever stops erroring — i.e. if the module's
+            // projection brand disappears and the normal typed path to
+            // forge a row opens again.
+            // @ts-expect-error a PreviewRow carries the projection's module-private brand, which a literal cannot carry
+            const forged: PreviewRow = { record: previewOne, correlation: row.correlation };
+            expect(forged).toBeDefined();
+        }
+    });
 });
 
 describe("the toolchain diagnostics, projected from the enclosing attempt", () => {
@@ -493,8 +508,11 @@ describe("the vocabulary boundary", () => {
         expect(source).toContain("NativeBuildSession");
         expect(source).toContain("PreviewBuildSession");
         // …and the record/session binding is produced inside the projection
-        // only: the per-record preview entry point is private.
+        // only: the per-record preview entry point is private…
         expect(source).not.toContain("export function previewRowFromAttempt");
+        // …and the row type is a branded projection value (normal typed
+        // construction of a forged pairing is closed).
+        expect(source).toContain("declare const previewRowBrand: unique symbol");
         // …but does not reach into the sealed ownership internals:
         expect(source).not.toContain("preview-coordinator");
         expect(source).not.toContain("workspace-store");

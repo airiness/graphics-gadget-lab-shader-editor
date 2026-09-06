@@ -275,9 +275,19 @@ export function buildChronology(session: NativeBuildSession): readonly BuildRow[
     const report = reportBuildLine(session.line, anchor.intent);
     const settled: BuildRow[] = session.line.attempts.map(
         (record): SettledBuildRow => {
-            const state = report.states.find((entry) => entry.buildId.sequence === record.buildId.sequence)?.state;
+            // The owner's own invariant: the line's report assigns exactly
+            // ONE state to every settled attempt of the line. A missing
+            // state is a broken invariant, not a state the panel may fill
+            // in — refuse to project rather than re-judge (in particular,
+            // rather than quietly call the absent attempt `stale`).
+            const reported = report.states.find((entry) => entry.buildId.sequence === record.buildId.sequence);
+            if (reported === undefined) {
+                throw new Error(
+                    `build line state for BuildId ${record.buildId.sequence} is missing from the owner's line report`,
+                );
+            }
             return {
-                state: state === undefined ? "stale" : state,
+                state: reported.state,
                 buildId: record.buildId,
                 intent: record.intent,
                 record,
@@ -300,12 +310,25 @@ export function buildChronology(session: NativeBuildSession): readonly BuildRow[
 
 // ---- Preview chronology (owner: the editor's Preview build session) --------
 
+/**
+ * The module-private brand of a Preview row. The preview-chronology
+ * projection alone produces rows: the brand carries the record and its
+ * owning session identity as ONE unit, and closes the normal typed path by
+ * which a caller could hand-assemble a record/correlation pairing (and
+ * thereby mix another session's identity into a row's correlation). An
+ * `as any` escape is outside the scope of every such boundary, as usual.
+ */
+declare const previewRowBrand: unique symbol;
+
 /** One row of the Preview chronology: the owner's preview attempt record,
  *  carried by reference, under the correlation derived from that record and
- *  the session identity that owns the line. */
+ *  the session identity that owns the line. A branded projection value —
+ *  CONSUMABLE anywhere, PRODUCIBLE only by the preview-chronology
+ *  projection (the module's single brand site). */
 export interface PreviewRow {
     readonly record: PreviewAttemptRecord;
     readonly correlation: EvidenceCorrelation;
+    readonly [previewRowBrand]: true;
 }
 
 /**
@@ -326,17 +349,19 @@ export interface PreviewRow {
 function previewRowFromAttempt(session: PreviewBuildSession, record: PreviewAttemptRecord): PreviewRow {
     const publicationId =
         record.state === "settled" && record.outcome.kind === "published" ? record.outcome.envelope.publicationId : null;
-    return {
-        record,
-        correlation: {
-            ...EMPTY_EVIDENCE_CORRELATION,
-            generatedSourceIdentity: record.intent.generatedSourceIdentity,
-            buildId: record.buildId,
-            previewAttemptSequence: record.attemptSequence,
-            previewSessionId: session.sessionId,
-            publicationId,
-        },
+    const correlation: EvidenceCorrelation = {
+        ...EMPTY_EVIDENCE_CORRELATION,
+        generatedSourceIdentity: record.intent.generatedSourceIdentity,
+        buildId: record.buildId,
+        previewAttemptSequence: record.attemptSequence,
+        previewSessionId: session.sessionId,
+        publicationId,
     };
+    // The module's SINGLE brand site: the record and its owning session
+    // identity are coupled into one projection value here, and nowhere
+    // else. (A phantom brand cannot be set by an object literal, so the
+    // one type assertion lives at this one producer, by construction.)
+    return { record, correlation } as PreviewRow;
 }
 
 /**
