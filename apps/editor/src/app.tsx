@@ -128,7 +128,6 @@ import {
     BOTTOM_PANEL_TABS,
     BOTTOM_PANEL_DEFAULT_HEIGHT,
     BOTTOM_PANEL_KEYBOARD_STEP,
-    BOTTOM_PANEL_MAX_HEIGHT,
     BOTTOM_PANEL_MIN_HEIGHT,
     bottomPanelTabLabel,
     clampBottomPanelHeight,
@@ -293,21 +292,24 @@ export function App() {
     const [bottomPanelOpen, setBottomPanelOpen] = useState(true);
     const [bottomPanelTab, setBottomPanelTab] = useState<BottomPanelTab>("output");
     const [bottomPanelHeight, setBottomPanelHeight] = useState(BOTTOM_PANEL_DEFAULT_HEIGHT);
-    // The `.gglab-body` element (Canvas row + panel row) — measured at the
-    // start of a gesture to cap the panel by its CURRENT available height.
+    // The `.gglab-body` element (Canvas row + panel row) — the element whose
+    // size is observed so the Canvas floor stays a CONTINUOUS invariant.
     const panelBodyRef = useRef<HTMLDivElement | null>(null);
     // The in-flight resize gesture, if any. A single gesture is current at a
     // time; its identity (pointerId) guards against a stale/other pointer.
     const resizeGestureRef = useRef<{ readonly pointerId: number; readonly startY: number; readonly startHeight: number; readonly effectiveMax: number } | null>(null);
+    // The MEASURED available height of `.gglab-body` (px). This is presentation
+    // state (a live layout measurement), not an authority: it only bounds the
+    // panel height and the resize slider's ARIA range, and is continuously
+    // refreshed by the body's ResizeObserver (see below).
+    const [measuredBodyHeight, setMeasuredBodyHeight] = useState(0);
 
-    // The effective max for a gesture: the body's CURRENT height minus the
-    // Canvas floor, then the absolute ceiling. Reading the body here (not a
-    // constant) is what keeps the Canvas from being pressed away in a small
-    // window.
+    // The effective max for the CURRENT available height: the measured body
+    // height minus the Canvas floor, then the absolute ceiling. Reading the
+    // measured body here (not a constant) is what keeps the Canvas from being
+    // pressed away whenever the window changes — not only mid-gesture.
     function panelEffectiveMax(): number {
-        const bodyEl = panelBodyRef.current;
-        const bodyHeight = bodyEl !== null ? bodyEl.getBoundingClientRect().height : 0;
-        return resolvePanelMaxHeight(bodyHeight);
+        return resolvePanelMaxHeight(measuredBodyHeight);
     }
 
     // Pointer-capture boundary: a real browser captures the pointer on the
@@ -421,6 +423,44 @@ export function App() {
                 return;
         }
     }
+
+    // The Canvas-floor invariant is CONTINUOUS, not gesture-local: observe the
+    // body's size and, whenever it changes (window resize, a layout shift),
+    // refresh the measured available height. Seeded from the current layout on
+    // mount (a real browser reports a real height; a headless DOM reports 0,
+    // which is the conservative degenerate case).
+    useEffect(() => {
+        const bodyEl = panelBodyRef.current;
+        if (bodyEl === null) {
+            return;
+        }
+        const readBodyHeight = (): number => bodyEl.getBoundingClientRect().height;
+        const seed = readBodyHeight();
+        if (Number.isFinite(seed) && seed > 0) {
+            setMeasuredBodyHeight((previous) => (previous === seed ? previous : seed));
+        }
+        if (typeof ResizeObserver === "undefined") {
+            return;
+        }
+        const observer = new ResizeObserver((entries) => {
+            const entry = entries[0];
+            const measured = entry !== undefined ? entry.contentRect.height : 0;
+            if (Number.isFinite(measured) && measured > 0) {
+                setMeasuredBodyHeight((previous) => (previous === measured ? previous : measured));
+            }
+        });
+        observer.observe(bodyEl);
+        return () => observer.disconnect();
+    }, []);
+
+    // Whenever the measured available height changes, re-clamp the CURRENT
+    // panel height into the new effective range. This is what keeps the
+    // Canvas above its floor in a shrinking window — including after a
+    // collapse → shrink → reopen round-trip — so the stored height is always a
+    // legal one for the body it will render into.
+    useEffect(() => {
+        setBottomPanelHeight((current) => clampBottomPanelHeight(current, resolvePanelMaxHeight(measuredBodyHeight)));
+    }, [measuredBodyHeight]);
 
     // The unmount / HMR boundary: an in-flight gesture must never strand the
     // window-level "resizing" state or a dangling pointer capture.
@@ -2638,7 +2678,7 @@ export function App() {
                             aria-orientation="vertical"
                             aria-label="Resize the bottom panel height"
                             aria-valuemin={BOTTOM_PANEL_MIN_HEIGHT}
-                            aria-valuemax={BOTTOM_PANEL_MAX_HEIGHT}
+                            aria-valuemax={Math.round(panelEffectiveMax())}
                             aria-valuenow={bottomPanelHeight}
                             tabIndex={0}
                             title="Resize the bottom panel (drag, or use the arrow keys)"
@@ -2646,6 +2686,7 @@ export function App() {
                             onPointerMove={moveBottomPanelResize}
                             onPointerUp={endBottomPanelResize}
                             onPointerCancel={endBottomPanelResize}
+                            onLostPointerCapture={endBottomPanelResize}
                             onKeyDown={onBottomPanelResizeKeyDown}
                         />
                         <div className="gglab-bottom-panel-header">

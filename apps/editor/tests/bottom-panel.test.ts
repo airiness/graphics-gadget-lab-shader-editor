@@ -48,21 +48,24 @@ describe("the Canvas-floor effective max", () => {
         expect(resolvePanelMaxHeight(880)).toBe(BOTTOM_PANEL_MAX_HEIGHT);
     });
 
-    it("never lets the Canvas row drop below the floor (small body)", () => {
-        // A 300px body minus the 240px floor is 60px — below the panel's own
-        // minimum, so the effective max floors at the minimum (96px): the
-        // panel can never be smaller, and the Canvas keeps its floor when the
-        // panel is at any height the user can actually reach.
-        expect(resolvePanelMaxHeight(300)).toBe(BOTTOM_PANEL_MIN_HEIGHT);
-        // The invariant the supervisor requires: effectiveMax + floor <= body
-        // height is guaranteed by construction (effectiveMax = body - floor,
-        // clamped up to min only).
+    it("guarantees the Canvas floor whenever the body can hold both", () => {
+        // effectiveMax + floor <= bodyHeight is guaranteed by construction
+        // (effectiveMax = body - floor, clamped up to the minimum only).
         for (const bodyHeight of [400, 500, 600, 720]) {
             const effectiveMax = resolvePanelMaxHeight(bodyHeight);
             expect(effectiveMax + CANVAS_MIN_FLOOR_HEIGHT).toBeLessThanOrEqual(bodyHeight);
             expect(effectiveMax).toBeGreaterThanOrEqual(BOTTOM_PANEL_MIN_HEIGHT);
             expect(effectiveMax).toBeLessThanOrEqual(BOTTOM_PANEL_MAX_HEIGHT);
         }
+    });
+
+    it("prioritizes the panel minimum over the Canvas floor in the degenerate case", () => {
+        // 300px body is below floor + min (240 + 96 = 336): the panel keeps its
+        // minimum (the smallest usable height) — never below 96px — and the
+        // Canvas takes the remainder, which here is below the floor. This is the
+        // documented trade-off; the product's minimum window never reaches it.
+        expect(resolvePanelMaxHeight(300)).toBe(BOTTOM_PANEL_MIN_HEIGHT);
+        expect(300 - BOTTOM_PANEL_MIN_HEIGHT).toBeLessThan(CANVAS_MIN_FLOOR_HEIGHT);
     });
 
     it("falls back to the absolute ceiling for a non-finite body height", () => {

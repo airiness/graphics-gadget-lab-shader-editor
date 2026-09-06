@@ -49,11 +49,22 @@ export const BOTTOM_PANEL_DEFAULT_HEIGHT = 220;
 export const BOTTOM_PANEL_KEYBOARD_STEP = 8;
 
 /**
- * Resolve the EFFECTIVE maximum panel height for one resize gesture, given
- * the CURRENT height of `.gglab-body` (the Canvas row + this panel). The
- * Canvas row must keep at least its floor, so the panel can never exceed
- * `bodyHeight - floor`. A non-finite / degenerate body height falls back to
- * the absolute ceiling (the Canvas floor is still honored by the CSS row).
+ * Resolve the EFFECTIVE maximum panel height for the CURRENT available height
+ * of `.gglab-body` (the Canvas row + this panel). The Canvas row must keep at
+ * least its floor, so the panel can never exceed `bodyHeight - floor`.
+ *
+ * Degenerate cases (the window is simply too small to hold BOTH a usable
+ * panel and the Canvas floor, i.e. `bodyHeight < floor + min`):
+ *  - the panel keeps its MINIMUM (the smallest height it is still usable at);
+ *  - the Canvas row then receives whatever remains (`bodyHeight - min`), which
+ *    in this case may be below the floor;
+ *  - a non-finite body height (unmeasurable layout) falls back to the absolute
+ *    ceiling.
+ * This is an unavoidable trade-off — the panel cannot shrink past its minimum
+ * without becoming unusable. In the product (minimum window ≈ 600px, so the
+ * body ≈ 520px > floor + min = 336px) the body is always large enough that the
+ * Canvas floor is honored in full; the degenerate path only exists to keep the
+ * layout honest at sizes the product never reaches.
  */
 export function resolvePanelMaxHeight(bodyHeight: number): number {
     if (!Number.isFinite(bodyHeight)) {
