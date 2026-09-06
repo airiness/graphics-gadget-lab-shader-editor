@@ -837,6 +837,55 @@ describe("PreviewCoordinator — build / transition mutual exclusion", () => {
         const result = await close;
         expect(result).toMatchObject({ ok: true, identity: { kind: "close-target", targetDocumentId: A.sessionId } });
     });
+
+    it("gate() and runtimeProjection() agree: while a transition is in flight the composed gate refuses (preview-transition-in-flight) and the projection is suspended — never Ready/current", async () => {
+        const A = docSession("A", V1_GRAPH);
+        const B = docSession("B", V2_GRAPH);
+        const world = makeWorld(
+            {
+                session: {
+                    workspaceRoot: null,
+                    documents: [A, B],
+                    activeDocumentId: B.sessionId,
+                    preview: { targetDocumentId: A.sessionId },
+                },
+                profileDescriptor: D2,
+            },
+            { launches: [{ kind: "launched", runtimeIdentity: "runtime-a" }], holdStopUntilRelease: true, stopReleaseKind: "stopped" },
+        );
+
+        await attach(world);
+        // Kick off a retarget whose strict teardown is held pending (the
+        // single-flight slot is owned).
+        const retarget = world.coordinator.retargetTo(B.sessionId);
+        expect(world.manager.state).toMatchObject({ kind: "terminating" });
+
+        // The composed gate is the SAME authority a real Build action would
+        // take: it is a STRUCTURAL refusal (preview-transition-in-flight),
+        // never "admitted" while the build would be refused.
+        const gate = world.coordinator.gate(readyComposition());
+        expect(gate.admitted).toBe(false);
+        expect(gate.reasons).toEqual([{ reason: "preview-transition-in-flight" }]);
+
+        // And the honest runtime view is SUSPENDED (neutral idle) — it must
+        // not project as Ready/current for a build line we cannot admit.
+        const projection = world.coordinator.runtimeProjection(readyComposition());
+        expect(projection.freshness).not.toBe("current");
+        expect(projection).toMatchObject({
+            freshness: "idle",
+            latestBuildState: null,
+            currentPublicationId: null,
+            lastGoodPublicationId: null,
+            observationBinding: "none",
+        });
+
+        // Once the teardown settles and the transition commits, the gate no
+        // longer refuses as transition-in-flight (the slot is released).
+        expect(world.runtime.releaseStop()).toBe(true);
+        await retarget;
+        const after = world.coordinator.gate(readyComposition());
+        expect(after.reasons.some((reason) => reason.reason === "preview-transition-in-flight")).toBe(false);
+    });
 });
 
 describe("PreviewCoordinator — proven no Runtime (no host) still commits Workspace transitions", () => {

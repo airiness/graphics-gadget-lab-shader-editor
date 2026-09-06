@@ -394,6 +394,30 @@ transition B arrives
 The transition sequence is evidence/identity only; it is not a
 latest-intent-wins protocol.
 
+#### Host-binding lifecycle (known boundary)
+
+"`manager === null ⇒ proven no Runtime`" is only one of three real host
+binding states. The three must be distinguished, and a detach must NOT be
+projected as a proven absence:
+
+- **never-bound / hostless** — no desktop host was ever bound to this mount;
+  `manager === null` and the flow is null. Ownership transitions are pure
+  Workspace commits (there is nothing to join).
+- **bound** — a host is attached; `manager !== null`. Transitions carry the
+  strict-teardown discipline.
+- **detaching / teardown-unresolved** — the host binding is being cleared
+  while the old-Runtime teardown / ownership may still be unresolved (the
+  cleanup nulls the manager ref before the fire-and-forget
+  `terminateAndJoin()` settles). Here `manager === null` is NOT proven no
+  Runtime.
+
+In the current product flow this is low-risk (the detaching window does not
+normally coincide with a user transition), but BEFORE a host reconnect /
+rebind is supported the Coordinator must not treat a mid-detach ref as
+proven absence: it should either keep the old binding joinable for the
+duration of the detach or expose an explicit `detaching` fact that blocks
+ownership transitions (refusal) rather than committing on an unproven exit.
+
 ### `retargetTo(targetDocumentId)`
 
 Normal retarget:

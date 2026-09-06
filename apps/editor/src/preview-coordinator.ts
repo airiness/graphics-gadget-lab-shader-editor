@@ -187,15 +187,24 @@ export class PreviewCoordinator {
         return this.flowSource();
     }
 
-    /** Build / Runtime gate composition. The attached-Runtime facts are
-     * mapped into the build-refusal vocabulary FIRST (exact order:
-     * launch-outcome-unproven, runtime-ownership-conflict, launching,
-     * deployment-mismatch), then the Controller's build gate runs.
-     * `deploymentToolPath` is compared with the current compatible tool
-     * candidate's `toolPath` only — never with a Preview Program
-     * Descriptor identity. With no desktop host the gate is a single
-     * structural refusal: there is no build line to admit anything. */
+    /** Build / Runtime gate composition. The STRUCTURAL refusals come
+     * FIRST, before any host or tool fact:
+     *   1) a transition owns the single-flight slot -> preview-transition-in-flight
+     *   2) no desktop host (no flow)                -> preview-host-unavailable
+     * then the attached-Runtime facts are mapped into the build-refusal
+     * vocabulary (exact order: launch-outcome-unproven, runtime-ownership-
+     * conflict, launching, deployment-mismatch), then the Controller's build
+     * gate runs. `deploymentToolPath` is compared with the current compatible
+     * tool candidate's `toolPath` only — never with a Preview Program
+     * Descriptor identity.
+     *
+     * This gate is the single authoritative admission verdict: `buildPreview`
+     * and `runtimeProjection` both consult it, so a pending transition can
+     * never project as admitted/Ready while a real Build action would refuse. */
     gate(input: PreviewCompositionInput): PreviewBuildGate {
+        if (this.inFlight !== null) {
+            return { admitted: false, reasons: [{ reason: "preview-transition-in-flight" }], request: null, eligibility: null };
+        }
         const flow = this.flow;
         if (flow === null) {
             return { admitted: false, reasons: [{ reason: "preview-host-unavailable" }], request: null, eligibility: null };
@@ -241,36 +250,37 @@ export class PreviewCoordinator {
         return null;
     }
 
-    /** Strict same-session single-flight Preview build under the composed
-     * gate (attached-Runtime facts first, then the build gate). While an
-     * ownership transition is in flight (or no host exists) the build is a
-     * STRUCTURAL refusal — it is not queued and not superseded: transition
-     * lifecycles and build lifecycles are mutually exclusive. */
+    /** Strict same-session single-flight Preview build under the SAME
+     * composed gate that `gate()` and `runtimeProjection()` consult: a
+     * structural refusal (a transition owns the slot, or no host exists)
+     * short-circuits to gate-refused — it is not queued and not superseded,
+     * and no build lifecycle opens. There is no separate in-flight branch
+     * here to drift from the gate. */
     buildPreview(input: PreviewCompositionInput): Promise<PreviewBuildLaunch> {
-        if (this.inFlight !== null) {
-            return Promise.resolve({
-                issued: false,
-                reason: "gate-refused",
-                gate: { admitted: false, reasons: [{ reason: "preview-transition-in-flight" }], request: null, eligibility: null },
-            });
-        }
         const flow = this.flow;
         if (flow === null) {
-            return Promise.resolve({
-                issued: false,
-                reason: "gate-refused",
-                gate: { admitted: false, reasons: [{ reason: "preview-host-unavailable" }], request: null, eligibility: null },
-            });
+            // No host: the composed gate carries the single structural
+            // refusal (preview-transition-in-flight if a transition owns the
+            // slot, otherwise preview-host-unavailable).
+            return Promise.resolve({ issued: false, reason: "gate-refused", gate: this.gate(input) });
         }
+        // The gate (including the transition-in-flight structural refusal)
+        // runs inside flow.buildPreview; a refusal there returns gate-refused
+        // with the exact gate and opens no lifecycle.
         return flow.buildPreview(input, (candidate) => this.gate(candidate));
     }
 
     /** The honest runtime view under the composed gate. Never issues work
      * or advances AttemptSequence. With no host it is the neutral "idle"
-     * projection — never a bypass around the build line. */
+     * projection — never a bypass around the build line.
+     *
+     * While an ownership transition owns the single-flight slot the build
+     * projection is SUSPENDED (the neutral "idle" view): `gate()` refuses with
+     * `preview-transition-in-flight`, so the projection must not project as
+     * Ready/current for a build line we cannot actually admit. */
     runtimeProjection(input: PreviewCompositionInput): PreviewRuntimeProjection {
         const flow = this.flow;
-        if (flow === null) {
+        if (flow === null || this.inFlight !== null) {
             return {
                 freshness: "idle",
                 latestBuildState: null,
