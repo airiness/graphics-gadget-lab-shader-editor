@@ -1,9 +1,10 @@
-//! GGLab Shader Graph Editor — desktop shell + ShaderToolService.
+//! GGLab Shader Graph Editor — desktop shell and bounded native services.
 //!
-//! Two layers in one crate (see the crate-level note in `Cargo.toml`):
-//! the thin shell (the two official plugins — dialog and scoped fs),
-//! and the six tool commands plus compiler-free observation and attached
-//! Runtime lifecycle commands. The thin layer of commands below owns
+//! Three bounded service groups in one crate (see the crate-level note in
+//! `Cargo.toml`): the thin shell and scoped auxiliary-file plugins, the
+//! Workspace/revisioned-document boundary, and the six tool commands plus
+//! compiler-free observation and attached Runtime lifecycle commands. The
+//! thin layer of commands below owns
 //! no logic of its own: it takes the client's values in, hands them to
 //! the service, and returns the service's values back — the service is
 //! the only place where host internals live.
@@ -20,16 +21,192 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod document_io;
 mod shader_tool;
+mod workspace_io;
 
 use std::sync::Arc;
+use tauri_plugin_dialog::DialogExt;
+
+use document_io::{
+    DocumentFileService, DocumentIoError, DocumentSaveOutcome, DocumentSnapshot,
+    ReadDocumentSnapshotRequest, SaveDocumentAsRequest, SaveDocumentRequest,
+};
+use workspace_io::{
+    WorkspaceDiscoveryCancelOutcome, WorkspaceDiscoveryId, WorkspaceDiscoveryRequest,
+    WorkspaceDiscoverySettlement, WorkspaceFileService, WorkspaceIoError, WorkspaceRoot,
+};
 
 struct ServiceShared(Arc<ShaderToolService>);
+struct DocumentFileShared(Arc<DocumentFileService>);
+struct WorkspaceFileShared(Arc<WorkspaceFileService>);
 
 impl ServiceShared {
     fn service(&self) -> &ShaderToolService {
         &self.0
     }
+}
+
+/// Host-owned Open dialog followed by one canonical, revisioned snapshot.
+/// No caller-supplied path crosses this command boundary.
+#[tauri::command(rename = "shader-document-open")]
+async fn shader_document_open(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DocumentFileShared>,
+) -> Result<Option<DocumentSnapshot>, DocumentIoError> {
+    let service = Arc::clone(&state.0);
+    tauri::async_runtime::spawn_blocking(move || {
+        let selected = app
+            .dialog()
+            .file()
+            .set_title("Open shader graph document")
+            .add_filter("Shader graph document", &["shadergraph", "json"])
+            .blocking_pick_file();
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        let path = selected.into_path().map_err(|error| DocumentIoError::InvalidRequest {
+            detail: format!("the selected document is not a local filesystem path: {error}"),
+        })?;
+        service.open_selected_path(path).map(Some)
+    })
+    .await
+    .map_err(|error| DocumentIoError::HostTask {
+        detail: format!("the host task ended: {error}"),
+    })?
+}
+
+/// Re-read a snapshot only through a canonical URI admitted by Open/Save As.
+#[tauri::command(rename = "shader-document-read-snapshot")]
+async fn shader_document_read_snapshot(
+    state: tauri::State<'_, DocumentFileShared>,
+    request: ReadDocumentSnapshotRequest,
+) -> Result<DocumentSnapshot, DocumentIoError> {
+    let service = Arc::clone(&state.0);
+    tauri::async_runtime::spawn_blocking(move || {
+        service.read_snapshot(&request.canonical_document_uri)
+    })
+    .await
+    .map_err(|error| DocumentIoError::HostTask {
+        detail: format!("the host task ended: {error}"),
+    })?
+}
+
+/// Compare the expected revision and atomically replace an authorized file.
+#[tauri::command(rename = "shader-document-save")]
+async fn shader_document_save(
+    state: tauri::State<'_, DocumentFileShared>,
+    request: SaveDocumentRequest,
+) -> Result<DocumentSaveOutcome, DocumentIoError> {
+    let service = Arc::clone(&state.0);
+    tauri::async_runtime::spawn_blocking(move || service.save(&request))
+        .await
+        .map_err(|error| DocumentIoError::HostTask {
+            detail: format!("the host task ended: {error}"),
+        })?
+}
+
+/// Host-owned Save As dialog. A pre-existing target is a conflict value, not
+/// an implicit overwrite; no destination path is accepted from the WebView.
+#[tauri::command(rename = "shader-document-save-as")]
+async fn shader_document_save_as(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DocumentFileShared>,
+    request: SaveDocumentAsRequest,
+) -> Result<DocumentSaveOutcome, DocumentIoError> {
+    let service = Arc::clone(&state.0);
+    tauri::async_runtime::spawn_blocking(move || {
+        let default_name = std::path::Path::new(&request.default_name);
+        if default_name.file_name().and_then(|value| value.to_str())
+            != Some(request.default_name.as_str())
+        {
+            return Err(DocumentIoError::InvalidRequest {
+                detail: "defaultName must be one file name, not a path".to_string(),
+            });
+        }
+        let selected = app
+            .dialog()
+            .file()
+            .set_title("Save shader graph document")
+            .set_file_name(request.default_name)
+            .add_filter("Shader graph document", &["shadergraph", "json"])
+            .blocking_save_file();
+        let Some(selected) = selected else {
+            return Ok(DocumentSaveOutcome::Cancelled);
+        };
+        let path = selected.into_path().map_err(|error| DocumentIoError::InvalidRequest {
+            detail: format!("the selected destination is not a local filesystem path: {error}"),
+        })?;
+        service.save_as_selected_path(path, &request.text)
+    })
+    .await
+    .map_err(|error| DocumentIoError::HostTask {
+        detail: format!("the host task ended: {error}"),
+    })?
+}
+
+/// Host-owned directory selection and canonical Workspace-root admission.
+/// The WebView receives identity/provenance but never supplies a root path.
+#[tauri::command(rename = "shader-workspace-choose-root")]
+async fn shader_workspace_choose_root(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WorkspaceFileShared>,
+) -> Result<Option<WorkspaceRoot>, WorkspaceIoError> {
+    let service = Arc::clone(&state.0);
+    tauri::async_runtime::spawn_blocking(move || {
+        let selected = app
+            .dialog()
+            .file()
+            .set_title("Open Shader Graph Workspace")
+            .blocking_pick_folder();
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        let path = selected
+            .into_path()
+            .map_err(|error| WorkspaceIoError::InvalidRequest {
+                detail: format!("the selected Workspace is not a local directory: {error}"),
+            })?;
+        service.register_selected_root(path).map(Some)
+    })
+    .await
+    .map_err(|error| WorkspaceIoError::HostTask {
+        detail: format!("the host task ended: {error}"),
+    })?
+}
+
+/// Begin bounded recursive discovery for a registered Workspace URI. Results
+/// settle on the channel so the returned attempt identity can be cancelled.
+#[tauri::command(rename = "shader-workspace-discover")]
+fn shader_workspace_discover(
+    state: tauri::State<'_, WorkspaceFileShared>,
+    request: WorkspaceDiscoveryRequest,
+    channel: tauri::ipc::Channel<WorkspaceDiscoverySettlement>,
+) -> Result<WorkspaceDiscoveryId, WorkspaceIoError> {
+    let attempt = state.0.discover(&request)?;
+    let discovery_id = attempt.discovery_id;
+    std::thread::spawn(move || {
+        let settlement = attempt.settle.join().unwrap_or_else(|_| {
+            WorkspaceDiscoverySettlement::Failed {
+                discovery_id,
+                error: WorkspaceIoError::HostTask {
+                    detail: "the Workspace discovery worker panicked".to_string(),
+                },
+            }
+        });
+        let _ = channel.send(settlement);
+    });
+    Ok(discovery_id)
+}
+
+/// Request cancellation of one discovery attempt. Cancellation is an explicit
+/// value and never changes the authority of already-settled snapshots.
+#[tauri::command(rename = "shader-workspace-cancel-discovery")]
+fn shader_workspace_cancel_discovery(
+    state: tauri::State<'_, WorkspaceFileShared>,
+    discovery_id: WorkspaceDiscoveryId,
+) -> WorkspaceDiscoveryCancelOutcome {
+    state.0.cancel_discovery(discovery_id)
 }
 
 /// `discover(config)` → candidate facts and the per-rule failure record.
@@ -226,17 +403,30 @@ pub use shader_tool::types::{
     PreviewRuntimeAvailabilityObservation, PreviewRuntimeExit, PreviewRuntimeExitKind,
     PreviewRuntimeId, PreviewRuntimeLaunchResult, PreviewRuntimeStopOutcome, ToolCandidate,
 };
+pub use document_io::{DocumentFileService as NativeDocumentFileService};
+pub use workspace_io::{WorkspaceFileService as NativeWorkspaceFileService};
 
-/// The production entry: the two official plugins (the access model)
-/// plus the six tool commands and the compiler-free Preview observation /
-/// attached-process lifecycle commands, and nothing else in the web-facing
-/// surface.
+/// The production entry: bounded Workspace/document capabilities, the two
+/// official plugins for scoped auxiliary reads, the six tool commands, and
+/// the compiler-free Preview observation / attached-process lifecycle
+/// commands.
 pub fn run() {
+    let document_files = Arc::new(DocumentFileService::new());
+    let workspace_files = Arc::new(WorkspaceFileService::new(Arc::clone(&document_files)));
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(ServiceShared(Arc::new(ShaderToolService::production())))
+        .manage(DocumentFileShared(document_files))
+        .manage(WorkspaceFileShared(workspace_files))
         .invoke_handler(tauri::generate_handler![
+            shader_document_open,
+            shader_document_read_snapshot,
+            shader_document_save,
+            shader_document_save_as,
+            shader_workspace_choose_root,
+            shader_workspace_discover,
+            shader_workspace_cancel_discovery,
             shader_tool_discover,
             shader_tool_handshake,
             shader_tool_preview_handshake,

@@ -7,7 +7,7 @@
  * defined here: validation, port-level types, conformance, compatibility,
  * and emission all come from @gglab/shader-graph-core.
  */
-import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from "react";
 import {
     addConnection,
     removeConnection,
@@ -16,10 +16,6 @@ import {
     setConstantValue,
     reconnectConnection,
     isEditingTextTarget,
-    createHistory,
-    recordHistory,
-    undoHistory,
-    redoHistory,
     canUndoHistory,
     canRedoHistory,
     UndoIcon,
@@ -66,19 +62,72 @@ import {
     type ShaderGraphDiagnostic,
     type SurfaceProfileDescriptor,
 } from "@gglab/shader-graph-core";
-import { DEFAULT_BUILD_TARGET } from "./build-target-config.js";
+import { buildTargetOptions, DEFAULT_BUILD_TARGET } from "./build-target-config.js";
 import type { BuildInspectorRow } from "./build-inspector.js";
-import { createDesktopFileChannel, isDesktopHost, type FileChannel } from "./host-io.js";
+import {
+    createDesktopFileChannel,
+    isDesktopHost,
+    type DocumentSnapshot,
+    type DocumentSaveOutcome,
+    type FileChannel,
+    type WorkspaceDocumentEntry,
+    type WorkspaceDiscoveryId,
+} from "./host-io.js";
 import { useNativeBuild } from "./useNativeBuild.js";
 import { useShaderPreview } from "./useShaderPreview.js";
+import { describeTransitionRefusal, resolvePreviewTarget } from "./preview-coordinator.js";
 import type { NativeBuildReadiness } from "./native-build-readiness.js";
-import { basenameOf, closeAction, createSession, isDirty, provenanceFromImport, provenanceFromFile, saveTarget, sessionSaved, sessionTitle, type CloseChoice, type DocumentProvenance, type DocumentSession } from "./document-session.js";
+import {
+    basenameOf,
+    closeAction,
+    createSession,
+    documentRevision,
+    isDirty,
+    provenanceFromImport,
+    provenanceFromFile,
+    recordDocumentChange,
+    redoDocumentChange,
+    saveTarget,
+    sessionReloaded,
+    sessionSaved,
+    sessionTitle,
+    undoDocumentChange,
+    type CanvasViewport,
+    type CloseChoice,
+    type DocumentProvenance,
+    type DocumentSession,
+    type DocumentSessionPresentation,
+} from "./document-session.js";
+import {
+    documentSaveConflictActions,
+    type DocumentSaveConflictAction,
+    type DocumentSaveConflictOrigin,
+    type PendingDocumentSaveConflict,
+} from "./document-save-conflict.js";
+import {
+    activeWorkspaceDocument,
+    activateWorkspaceDocument,
+    closeWorkspaceDocument,
+    createDocumentSessionId,
+    createWorkspaceSession,
+    openWorkspaceDocument,
+    setWorkspaceRoot,
+    updateWorkspaceDocument,
+    type DocumentSessionId,
+    type WorkspaceRootHandle,
+    type WorkspaceSession,
+} from "./workspace-session.js";
+import {
+    WorkspaceStore,
+    descriptorCommit,
+    type WorkspaceAuthoringState,
+} from "./workspace-store.js";
 import { saveShortcutOf } from "./shortcuts.js";
 import { INSPECTOR_ZONES, INSPECTOR_ZONE_LABELS, inspectorZoneBadge, type InspectorZone, type InspectorZoneFacts } from "./inspector-tabs.js";
 // Type-only (erased at compile time): the official dialog option shapes,
 // used for the single documented boundary cast below. Runtime functions
 // are dynamically imported inside the desktop effect only.
-import type { OpenDialogOptions, SaveDialogOptions } from "@tauri-apps/plugin-dialog";
+import type { OpenDialogOptions } from "@tauri-apps/plugin-dialog";
 import "./app.css";
 
 /** The editor's default workspace document (a valid gglab.surface v1 graph). */
@@ -117,24 +166,102 @@ interface DiagnosticSet {
     readonly passedText: string;
 }
 
+function requireActiveDocumentSession(
+    workspace: WorkspaceSession<DocumentSession>,
+): DocumentSession {
+    const active = activeWorkspaceDocument(workspace);
+    if (active === null) {
+        throw new Error("The editor Workspace must have an active DocumentSession.");
+    }
+    return active;
+}
+
 export function App() {
     // The seeded startup document and its initial session share ONE
     // instance so the baseline is exactly that document's canonical
     // bytes.
-    const [seed] = useState(() => seedDocument());
-    // The document lives INSIDE the history (present), so undo/redo and
-    // the "authoring result" path are the SAME state transition — no
-    // second source of truth to drift. Provenance changes (open / import)
-    // do not append: they RESET the history around the new document.
-    const [history, setHistory] = useState(() => createHistory(seed));
+    // One local allocator is sufficient for ephemeral identities inside this
+    // Workspace lifetime. Persisted graphId and file paths are deliberately
+    // not substituted for this identity.
+    const documentSessionSequence = useRef(0);
+    const allocateDocumentSessionId = () => {
+        documentSessionSequence.current += 1;
+        return createDocumentSessionId(`document-session-${documentSessionSequence.current}`);
+    };
+    // The Workspace authoring state is the app's ONE synchronous external
+    // STORE AUTHORITY (the Workspace commit authority): the store owns the
+    // open-document records, the active identity, and the single current
+    // profile descriptor fact. React is a projection of that store through
+    // useSyncExternalStore; there is NO React-state mirror that may later
+    // overwrite the store, and no functional updater smuggles results out of
+    // a setState — commit-time code reads CURRENT, reduces, and receives the
+    // structured result synchronously.
+    const [authoringStore] = useState(() => {
+        const seed = seedDocument();
+        const initial = createSession(allocateDocumentSessionId(), provenanceFromImport(), seed);
+        const opened = openWorkspaceDocument(createWorkspaceSession<DocumentSession>(), initial);
+        if (opened.accepted === false) {
+            throw new Error(`The initial DocumentSession was refused: ${opened.refusal.reason}.`);
+        }
+        return new WorkspaceStore<WorkspaceAuthoringState>({
+            session: opened.workspace,
+            profileDescriptor: null,
+        });
+    });
+    const authoring = useSyncExternalStore(
+        authoringStore.subscribe,
+        authoringStore.getSnapshot,
+        authoringStore.getSnapshot,
+    );
+    const workspace = authoring.session;
+    const session = requireActiveDocumentSession(workspace);
+    // Project one WorkspaceSession reducer transition through the store
+    // authority (read CURRENT -> reduce(CURRENT) -> publish). A reducer that
+    // returns the SAME session object leaves the snapshot identity
+    // untouched: no new snapshot, no notification.
+    const applyWorkspaceTransition = <TResult,>(
+        reduce: (
+            current: WorkspaceSession<DocumentSession>,
+        ) => { readonly workspace: WorkspaceSession<DocumentSession> } & TResult,
+    ): TResult =>
+        authoringStore.apply((state) => {
+            const result = reduce(state.session);
+            return {
+                next: result.workspace === state.session ? state : { ...state, session: result.workspace },
+                result,
+            };
+        });
+    // The Workspace store is the ONE authority for the current active
+    // document (and every other Workspace fact). Async host completions
+    // re-read this LIVE at decision time — a shadow ref (updated by effect
+    // or written at intent time) can observe a store snapshot from before a
+    // committed transition, or miss a deduped open that activated an
+    // EXISTING session — and would then misfire its stale-completion guard.
+    // A request that must be bound to its origin captures that identity at
+    // intent time instead (e.g. `savedSessionId`, `conflict.sessionId`).
+    const activeSessionIs = (documentSessionId: DocumentSession["sessionId"]): boolean => {
+        const active = activeWorkspaceDocument(authoringStore.getSnapshot().session);
+        return active !== null && active.sessionId === documentSessionId;
+    };
+    const history = session.history;
     const document = history.present;
-    const [operationNotes, setOperationNotes] = useState<readonly string[]>([]);
+    function updateDocumentSession(
+        documentSessionId: DocumentSession["sessionId"],
+        update: (current: DocumentSession) => DocumentSession,
+        missingDocument: "reject" | "ignore" = "reject",
+    ): void {
+        const result = applyWorkspaceTransition((current) => updateWorkspaceDocument(current, documentSessionId, update));
+        if (!result.accepted) {
+            if (missingDocument === "ignore" && result.refusal.reason === "document-not-open") {
+                return;
+            }
+            throw new Error(`DocumentSession update was refused: ${result.refusal.reason}.`);
+        }
+    }
+    // Application-level (shared) UI state — owned by the shell, not by any
+    // one open document:
     const [descriptorState, setDescriptorState] = useState<DescriptorPanelState>({ kind: "empty" });
-    const [savedText, setSavedText] = useState(() => SEED_DOCUMENT_TEXT);
     const [loadResult, setLoadResult] = useState<DiagnosticSet | null>(null);
-    const [emission, setEmission] = useState<HlslEmission | null>(null);
-    // Which diagnostic's target the canvas is highlighting (null = none).
-    const [focus, setFocus] = useState<CanvasFocus | null>(null);
     // Library search — a presentation filter over display names (no semantics).
     const [libraryQuery, setLibraryQuery] = useState("");
     // Whole-library collapse — UI session state (layout), never document data.
@@ -146,39 +273,119 @@ export function App() {
      *  the zoned-out zones keep their state on their TAB (a projection of
      *  existing facts; the switch itself owns no state). */
     const [inspectorZone, setInspectorZone] = useState<InspectorZone>("contract");
-    // Connection selection — SESSION state (canvas interaction), never
-    // document data: selecting or deselecting an edge must not dirty the
-    // document. The projection (documentToFlow) receives it and renders
-    // emphasis only; the core stays untouched by a selection.
-    const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
-    // The edge context menu position (cursor point), null = closed.
-    const [edgeMenu, setEdgeMenu] = useState<{ x: number; y: number } | null>(null);
-    // The advanced "reconnect" armed state: Ctrl+click on a connection
-    // selects it AND starts the pending end-point move. Nothing is
-    // mutated until a port click confirms — Esc / blank click cancels and
-    // the original connection is provably untouched (revert by
-    // construction, not by a compensating operation).
-    const [reconnectArmed, setReconnectArmed] = useState<string | null>(null);
-    // Single-node selection — SESSION state, the counterpart of the edge
-    // selection, exclusive with it (one selection fact at a time). It is
-    // the TARGET of the Delete key's node removal and the menu opens with
-    // that node selected. Emphasis only; the core is never touched.
-    const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-    // The node action menu (target node + anchor point), null = closed.
-    const [nodeMenu, setNodeMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
+    // The tab the user asked to close while it is dirty (a confirm guard).
+    // `null` = no pending close. Closing discards only if the user
+    // explicitly confirms; otherwise the document stays open.
+    const [dirtyClose, setDirtyClose] = useState<DocumentSessionId | null>(null);
+    // ---- Primary sidebar (activity bar). The active panel is app-level
+    // UI state; "nodes" is the default so the existing library UX is
+    // unchanged, and "explorer" is the Workspace file browser.
+    const [sidebarPanel, setSidebarPanel] = useState<"explorer" | "nodes">("nodes");
+    // Workspace Explorer (volatile host observation, not a graph authority).
+    const [explorerEntries, setExplorerEntries] = useState<readonly WorkspaceDocumentEntry[] | null>(null);
+    const [explorerBusy, setExplorerBusy] = useState(false);
+    const [explorerError, setExplorerError] = useState<string | null>(null);
+    const [explorerStatus, setExplorerStatus] = useState<string | null>(null);
+    // The discovery the UI is CURRENTLY watching, bound to BOTH the canonical
+    // workspace root it was launched against and its host-issued discovery id.
+    // A settlement is only applied if it still matches this binding — a
+    // superseded discovery (the root was switched) is dropped, so its stale
+    // entries can never overwrite the new root's Explorer.
+    const discoveryRef = useRef<{ readonly uri: string; readonly discoveryId: WorkspaceDiscoveryId } | null>(null);
+    // Best-effort: cancel any in-flight workspace discovery on unmount so it
+    // does not outlive the app and settle against a dead channel.
+    useEffect(() => {
+        return () => {
+            const channel = fileChannelRef.current;
+            const id = discoveryRef.current?.discoveryId ?? null;
+            if (channel !== null && id !== null) {
+                void channel.cancelWorkspaceDiscovery(id).catch(() => {
+                    /* unmount teardown — the host is going away anyway */
+                });
+            }
+        };
+    }, []);
+
+    // ---- Per-document presentation (owned by the active DocumentSession).
+    // Selection, the diagnostic focus, the emission snapshot, the .shadergraph
+    // text pane, and the authoring notes all belong to the OPEN DOCUMENT, not
+    // to the app (guidance §4.4). A tab switch swaps between these per-session
+    // records; it must never leave one document's selection, focus, emission,
+    // or notes presented as another document's. The session below is the active
+    // document, so these are literally that document's fields. */
+    const presentation = session.presentation;
+    const selectedNodeId = presentation.selectedNodeId;
+    const selectedConnectionId = presentation.selectedConnectionId;
+    const reconnectArmed = presentation.reconnectArmed;
+    const edgeMenu = presentation.edgeMenu;
+    const nodeMenu = presentation.nodeMenu;
+    const focus = presentation.focus;
+    const emission = presentation.emission;
+    const operationNotes = presentation.notes;
+    const savedText = presentation.savedText;
+    const viewport = presentation.viewport;
+    /** One patch to this document's presentation (one intent = one patch). */
+    function patchPresentation(patch: Partial<DocumentSessionPresentation>): void {
+        updateDocumentSession(session.sessionId, (prev) => ({
+            ...prev,
+            presentation: { ...prev.presentation, ...patch },
+        }));
+    }
+    const setSelectedNodeId = (nodeId: string | null): void =>
+        patchPresentation({ selectedNodeId: nodeId, selectedConnectionId: null, edgeMenu: null, nodeMenu: null, reconnectArmed: null });
+    const setSelectedConnectionId = (connectionId: string | null): void =>
+        patchPresentation({ selectedConnectionId: connectionId, selectedNodeId: null, edgeMenu: null, nodeMenu: null, reconnectArmed: null });
+    const setEdgeMenu = (menu: { x: number; y: number } | null): void => patchPresentation({ edgeMenu: menu });
+    const setNodeMenu = (menu: { nodeId: string; x: number; y: number } | null): void => patchPresentation({ nodeMenu: menu });
+    const setReconnectArmed = (id: string | null): void => patchPresentation({ reconnectArmed: id });
+    const setFocus = (value: CanvasFocus | null): void => patchPresentation({ focus: value });
+    const setEmission = (value: HlslEmission | null): void => patchPresentation({ emission: value });
+    const setSavedText = (text: string): void => patchPresentation({ savedText: text });
+    /** Persist the active document's own canvas view (pan/zoom). The viewport
+     * is a per-document presentation fact: it goes to the ACTIVE document's
+     * presentation and is restored when that document becomes active again. */
+    const setViewport = (value: CanvasViewport): void => patchPresentation({ viewport: value });
+    const setOperationNotes = (
+        update: ((previous: readonly string[]) => readonly string[]) | readonly string[],
+    ): void => {
+        updateDocumentSession(session.sessionId, (prev) => {
+            const next = typeof update === "function" ? update(prev.presentation.notes) : update;
+            return { ...prev, presentation: { ...prev.presentation, notes: next } };
+        });
+    };
     // Viewport fit trigger (registered by the flow adapter via onInit).
     const fitRef = useRef<(() => void) | null>(null);
-    // Desktop slice 1: native document I/O channel (absent in the browser
+    // Desktop native document I/O channel (absent in the browser
     // — the web build keeps the text save/load surface only).
     const [fileChannel, setFileChannel] = useState<FileChannel | null>(null);
-    // The full document session: provenance (where the current document
-    // came from) + the canonical bytes of its last saved state. The
-    // Save target is derived from the provenance — never from leftover
-    // state of a previous document.
-    const [session, setSession] = useState<DocumentSession>(() => createSession(provenanceFromImport(), seed));
+    // A stable reference to the current channel for async cleanups (e.g.
+    // cancelling an in-flight workspace discovery on unmount) that must not
+    // capture a stale channel closure.
+    const fileChannelRef = useRef<FileChannel | null>(null);
+    useEffect(() => {
+        fileChannelRef.current = fileChannel;
+    }, [fileChannel]);
+    // A CAS failure retains the exact local bytes and originating session
+    // until the user makes an explicit decision. The ref closes the small
+    // gap before React commits state, so a repeated shortcut cannot replace
+    // an unanswered conflict with a second save attempt.
+    const [saveConflict, setSaveConflict] = useState<PendingDocumentSaveConflict | null>(null);
+    const saveConflictRef = useRef<PendingDocumentSaveConflict | null>(null);
+    const [conflictResolutionInFlight, setConflictResolutionInFlight] = useState(false);
+    const conflictResolutionInFlightRef = useRef(false);
+    const installSaveConflict = (next: PendingDocumentSaveConflict): void => {
+        saveConflictRef.current = next;
+        setSaveConflict(next);
+    };
+    const dismissSaveConflict = (): void => {
+        saveConflictRef.current = null;
+        setSaveConflict(null);
+        conflictResolutionInFlightRef.current = false;
+        setConflictResolutionInFlight(false);
+    };
     // Dirty = current canonical bytes ≠ baseline (core determinism makes
     // the byte comparison a structural one).
-    const dirty = useMemo(() => isDirty(document, session), [document, session]);
+    const dirty = useMemo(() => isDirty(session), [session]);
     useEffect(() => {
         let cancelled = false;
         void (async () => {
@@ -187,25 +394,30 @@ export function App() {
             }
             // Desktop-only code path: the official plugin JS APIs are
             // code-split out of the web bundle and loaded only inside the
-            // desktop webview. The native side stays thin and scoped:
-            // dialog.open / dialog.save choose a path (and the dialog
-            // plugin adds THAT path to the filesystem scope), then
-            // fs.readTextFile / fs.writeTextFile move scoped UTF-8 bytes.
-            // No arbitrary-path command exists in the host.
-            const [dialog, fs] = await Promise.all([import("@tauri-apps/plugin-dialog"), import("@tauri-apps/plugin-fs")]);
+            // desktop webview. Document Open/Save As and all document bytes
+            // go through bounded host commands. The official dialog/fs APIs
+            // remain only for user-selected auxiliary descriptor/config
+            // reads. No arbitrary document path crosses the WebView command
+            // boundary.
+            const [core, dialog, fs] = await Promise.all([
+                import("@tauri-apps/api/core"),
+                import("@tauri-apps/plugin-dialog"),
+                import("@tauri-apps/plugin-fs"),
+            ]);
             if (cancelled) {
                 return;
             }
             setFileChannel(
                 createDesktopFileChannel({
+                    invoke: (command, args) => core.invoke(command, args),
+                    createChannel: (onMessage) =>
+                        new core.Channel<unknown>((message) => onMessage(message)),
                     // The host-io slots are intentionally generic
                     // (Record<string, unknown> options); the official API
                     // types live here, at the composition root — the single
                     // place cast/verification is allowed.
                     openDialog: (options) => dialog.open(options as unknown as OpenDialogOptions),
-                    saveDialog: (options) => dialog.save(options as unknown as SaveDialogOptions),
                     readTextFile: (path) => fs.readTextFile(path),
-                    writeTextFile: (path, contents) => fs.writeTextFile(path, contents),
                 }),
             );
         })();
@@ -258,38 +470,364 @@ export function App() {
         setEmission(null);
     }
 
-    const replaceDocumentSession = (next: ShaderGraphDocument, source: DocumentProvenance): void => {
-        // A new document is a NEW history line, not an undoable step —
-        // and every canvas state bound to the old document is stale.
-        setHistory(createHistory(next));
-        clearCanvasInteractionState();
-        invalidateRevisionDerivedState();
-        // A new document becomes the new baseline — the session is not
-        // dirty merely because its text was imported or a file was
-        // opened.
-        setSession(createSession(source, next));
-        setOperationNotes([]);
-        setSavedText(serializeShaderGraphDocument(next));
+    /** Open a document as a CO-EXISTING editing context (tab).
+     *
+     * This never discards the currently active document: it adds a new
+     * DocumentSession (a fresh identity and a fresh history line) and
+     * activates it, leaving the previously open document(s) in place with
+     * their own history, baseline, and presentation (guidance #4, #5). The
+     * open-document session's presentation is fresh (empty) by construction,
+     * so this clears nothing on the prior document. The reducer itself
+     * dedupes by the host canonical URI (it activates the same session and
+     * refuses a second session for the same URI), and the caller activates
+     * an already-open file's existing tab instead of opening it again. */
+    const openDocumentSession = (
+        next: ShaderGraphDocument,
+        source: DocumentProvenance,
+        canonicalUri: DocumentSession["canonicalUri"] = null,
+        fileRevisionToken: DocumentSession["fileRevisionToken"] = null,
+    ): void => {
+        const replacement = createSession(
+            allocateDocumentSessionId(),
+            source,
+            next,
+            canonicalUri,
+            fileRevisionToken,
+        );
+        // Open co-existing: never close the active document. The reducer
+        // activates the new tab (or the same one) and keeps the rest — the
+        // activation ITSELF is the active-identity commit (no shadow write).
+        applyWorkspaceTransition((current) => openWorkspaceDocument(current, replacement));
+        setInspectorOpen(true);
+        setInspectorZone("contract");
     };
 
-    /** Open a `.shadergraph` through the host (path → scoped UTF-8 → core reader). */
+    /** Display label for one open document's tab (presentation only; the
+     * host path is provenance, not a WebView filesystem authority). */
+    const tabNameFor = (documentSession: DocumentSession): string =>
+        documentSession.provenance.kind === "file" ? basenameOf(documentSession.provenance.path) : "Untitled";
+
+    /** Switch the active editing tab. This changes ONLY the active
+     * document; it never re-targets the Runtime Preview — the Preview target
+     * is a separate explicit axis, owned by the Workspace (guidance §12.1),
+     * so `commitWorkspacePreviewTarget` is the only path that moves it. The
+     * switched-away tab keeps its own history, baseline, and presentation
+     * (selection/focus/emission/notes) in its DocumentSession record. */
+    const onActivateTab = (documentSessionId: DocumentSessionId): void => {
+        applyWorkspaceTransition((current) => activateWorkspaceDocument(current, documentSessionId));
+        requestAnimationFrame(() => fitRef.current?.());
+    };
+
+    /** Close one tab. A dirty tab requires explicit confirmation (never a
+     * silent discard); a clean tab closes directly. The last remaining tab
+     * cannot be closed: the Workspace keeps at least one open document
+     * (the application requires a live active document). The empty-Workspace
+     * presentation is a deliberate, separate shell concern. */
+    const onCloseTab = async (documentSessionId: DocumentSessionId): Promise<void> => {
+        const doc = workspace.documents.find((candidate) => candidate.sessionId === documentSessionId);
+        if (doc === undefined) {
+            return;
+        }
+        if (workspace.documents.length === 1) {
+            setOperationNotes((previous) => [
+                ...previous,
+                "Cannot close the last open tab — at least one document must stay open.",
+            ]);
+            return;
+        }
+        if (isDirty(doc)) {
+            setDirtyClose(documentSessionId);
+            return;
+        }
+        await closeOneTab(documentSessionId);
+    };
+
+    /** Apply one accepted tab close. If the tab being closed IS the Preview
+     * target, the PreviewCoordinator owns the transition: the strict
+     * teardown (last await; skipped only in the proven-no-Runtime / no-host
+     * case) then one synchronous commit where the close + the Preview-target
+     * re-seed land together.
+     *
+     * Revision binding (data-loss guard): the app captures the EXACT
+     * document revision the user just confirmed discarding and binds the
+     * close to it. If a NEWER revision appears while the teardown is
+     * pending, the coordinator revalidates at commit time and REFUSES
+     * (`document-changed-during-close`) — the newer work is never silently
+     * discarded. A refusal leaves the tab open and the snapshot untouched.
+     * A NON-target tab close is a plain Workspace reducer operation — it
+     * never touches the Preview machinery.
+     *
+     * The coordinator is always present: with no desktop host it still
+     * commits the pure Workspace close (proven no Runtime); it only blocks
+     * when a host's old-Runtime teardown / ownership is unresolved. */
+    async function closeOneTab(documentSessionId: DocumentSessionId): Promise<void> {
+        if (authoringStore.getSnapshot().session.preview.targetDocumentId === documentSessionId) {
+            const doc = authoringStore.getSnapshot().session.documents.find((candidate) => candidate.sessionId === documentSessionId);
+            const expectedRevision = doc !== undefined ? documentRevision(doc) : "";
+            const result = await preview.coordinator.closeTarget(documentSessionId, expectedRevision);
+            if (result.ok === false) {
+                setOperationNotes((previous) => [
+                    ...previous,
+                    `Cannot close this tab yet: ${describeTransitionRefusal(result.refusal)}.`,
+                ]);
+                return;
+            }
+            return;
+        }
+        applyWorkspaceTransition((current) => closeWorkspaceDocument(current, documentSessionId));
+    }
+
+    /** The user confirmed discarding one dirty tab's unsaved changes. */
+    const confirmDirtyClose = async (): Promise<void> => {
+        const target = dirtyClose;
+        setDirtyClose(null);
+        if (target !== null) {
+            await closeOneTab(target);
+        }
+    };
+
+    /** Explicit user intent: make the active document the attached Runtime's
+     * Preview target. This is the only path that moves the Preview-target
+     * axis (guidance §12.1) — switching tabs or editing never re-targets the
+     * Runtime implicitly; only this deliberate action does.
+     *
+     * The PreviewCoordinator executes the transition: strict teardown is
+     * its LAST await (skipped for the same-target fast path), and the
+     * commit revalidates the intent, refreshes the TARGET's own emission
+     * against the CURRENT descriptor, and moves the target in ONE
+     * synchronous store transaction. A refusal leaves the snapshot
+     * untouched. */
+    const onPreviewThisGraph = async (): Promise<void> => {
+        const target = session;
+        const name = tabNameFor(target);
+        // The coordinator is always present for a mounted editor: with no
+        // desktop host the retarget is a pure Workspace commit (proven no
+        // Runtime); it blocks only when a host's old-Runtime teardown /
+        // ownership is unresolved. No null check — that would re-introduce
+        // the "host unavailable blocks Workspace transition" coupling.
+        const result = await preview.coordinator.retargetTo(target.sessionId);
+        if (result.ok === false) {
+            setOperationNotes((previous) => [
+                ...previous,
+                `Cannot retarget the Preview yet: ${describeTransitionRefusal(result.refusal)}.`,
+            ]);
+            return;
+        }
+        setOperationNotes((previous) => [
+            ...previous,
+            result.targetChanged
+                ? `Preview target set to "${name}" — switching tabs keeps it until you choose another.`
+                : `Preview target remains "${name}" — its emission was refreshed against the current descriptor.`,
+        ]);
+    };
+
+    // ---- Workspace Explorer. The host owns the root dialog, discovery,
+    // and the exact snapshot read; the WebView only observes host-issued
+    // canonical URIs (never an arbitrary path) and opens them as co-existing
+    // tabs. Discovery is bounded/cancellable.
+    const onChooseWorkspaceRoot = async (): Promise<void> => {
+        const channel = fileChannel;
+        if (channel === null) {
+            return;
+        }
+        setExplorerError(null);
+        setExplorerStatus(null);
+        try {
+            const root = await channel.chooseWorkspaceRoot();
+            if (root === null) {
+                return; // user cancelled the directory dialog
+            }
+            // The new root supersedes any in-flight discovery. Invalidate the
+            // binding FIRST, so a late settlement from the OLD root is dropped
+            // by the still-current guard even if it settles before the cancel
+            // is acknowledged; then cancel it best-effort.
+            const superseded = discoveryRef.current;
+            discoveryRef.current = null;
+            if (superseded !== null) {
+                try {
+                    await channel.cancelWorkspaceDiscovery(superseded.discoveryId);
+                } catch {
+                    // Best-effort: the settlement guard already drops the
+                    // result, so a failed cancel never leaks stale entries.
+                }
+            }
+            authoringStore.apply((state) => {
+                const nextSession = setWorkspaceRoot(state.session, root);
+                return {
+                    next: nextSession === state.session ? state : { ...state, session: nextSession },
+                    result: null,
+                };
+            });
+            setExplorerEntries(null);
+            setSidebarPanel("explorer");
+            // Discover with the just-chosen root (the state read is still the
+            // pre-update closure, so pass the authority explicitly).
+            await onDiscoverWorkspace(root);
+        } catch (error) {
+            setExplorerError(error instanceof Error ? error.message : "Choosing the workspace root failed.");
+        }
+    };
+
+    const onDiscoverWorkspace = async (rootOverride: WorkspaceRootHandle | null = null): Promise<void> => {
+        const channel = fileChannel;
+        const root = rootOverride !== null ? rootOverride : workspace.workspaceRoot;
+        if (channel === null || root === null) {
+            setExplorerStatus("Choose a workspace root first (desktop host only).");
+            return;
+        }
+        const expectedUri = root.canonicalWorkspaceUri;
+        setExplorerBusy(true);
+        setExplorerError(null);
+        setExplorerStatus("Discovering workspace documents…");
+        try {
+            const attempt = await channel.discoverWorkspace(expectedUri);
+            // Bind the discovery the UI now watches to BOTH its id and the
+            // canonical root it ran against. A later root switch supersedes it.
+            discoveryRef.current = { uri: expectedUri, discoveryId: attempt.discoveryId };
+            const settlement = await attempt.result;
+            // A settlement is only ADDED if it is still the current one: same
+            // discoveryId the UI is watching AND the same canonical root. A
+            // superseded discovery (root switched) is dropped — its stale
+            // entries must not overwrite the new root's Explorer.
+            const watching = discoveryRef.current;
+            const stillCurrent =
+                watching !== null &&
+                watching.discoveryId === settlement.discoveryId &&
+                watching.uri === expectedUri;
+            const settlementUri =
+                settlement.kind === "changed"
+                    ? settlement.snapshot.root.canonicalWorkspaceUri
+                    : settlement.kind === "unchanged"
+                      ? settlement.canonicalWorkspaceUri
+                      : expectedUri;
+            if (stillCurrent && settlementUri === expectedUri) {
+                if (settlement.kind === "changed") {
+                    setExplorerEntries(settlement.snapshot.documents);
+                    setExplorerStatus(
+                        settlement.snapshot.documents.length === 0
+                            ? "No .shadergraph documents found in this workspace."
+                            : `Found ${settlement.snapshot.documents.length} document${settlement.snapshot.documents.length === 1 ? "" : "s"}.`,
+                    );
+                } else if (settlement.kind === "unchanged") {
+                    setExplorerStatus("Workspace unchanged since the last discovery.");
+                } else if (settlement.kind === "cancelled") {
+                    setExplorerStatus("Discovery was cancelled.");
+                } else {
+                    setExplorerError("Workspace discovery failed on the host.");
+                }
+            }
+            // Clear the binding only if it still points at THIS discovery — a
+            // newer discovery may already own it.
+            if (discoveryRef.current !== null && discoveryRef.current.discoveryId === settlement.discoveryId) {
+                discoveryRef.current = null;
+            }
+        } catch (error) {
+            const watchingId = discoveryRef.current?.discoveryId;
+            if (watchingId !== undefined) {
+                // Best-effort: do not clobber a newer discovery's binding.
+                if (discoveryRef.current !== null && discoveryRef.current.uri === expectedUri) {
+                    discoveryRef.current = null;
+                }
+            }
+            setExplorerError(error instanceof Error ? error.message : "Workspace discovery failed.");
+        } finally {
+            // Only claim the idle flag if this discovery is still the one the
+            // UI watches (a newer discovery owns the busy flag otherwise).
+            if (discoveryRef.current === null || discoveryRef.current.uri === expectedUri) {
+                setExplorerBusy(false);
+            }
+        }
+    };
+
+    const onStopDiscovery = async (): Promise<void> => {
+        const channel = fileChannel;
+        const id = discoveryRef.current?.discoveryId ?? null;
+        if (channel === null || id === null) {
+            return;
+        }
+        try {
+            await channel.cancelWorkspaceDiscovery(id);
+            setExplorerStatus("Cancellation requested — the host will settle it.");
+        } catch {
+            // The host's cancel is best-effort; the settlement promise will
+            // still resolve and (if superseded) be dropped by the guard above.
+        }
+    };
+
+    /** Open one discovered Workspace document as a co-existing tab (or
+     * activate its existing tab if it is already open). */
+    const onOpenEntry = async (entry: WorkspaceDocumentEntry): Promise<void> => {
+        const channel = fileChannel;
+        if (channel === null) {
+            return;
+        }
+        const existing = workspace.documents.find((c) => c.canonicalUri === entry.canonicalDocumentUri);
+        if (existing !== undefined) {
+            onActivateTab(existing.sessionId);
+            return;
+        }
+        setExplorerStatus(`Opening ${entry.relativePath}…`);
+        try {
+            const snapshot = await channel.readDocumentSnapshot(entry.canonicalDocumentUri);
+            const parsed = parseShaderGraphDocument(snapshot.text);
+            if (parsed.ok && parsed.value !== null) {
+                openDocumentSession(
+                    parsed.value,
+                    provenanceFromFile(snapshot.displayPath),
+                    snapshot.canonicalDocumentUri,
+                    snapshot.fileRevisionToken,
+                );
+                setExplorerStatus(null);
+                requestAnimationFrame(() => fitRef.current?.());
+                return;
+            }
+            setLoadResult({ title: "Workspace open", ok: false, diagnostics: parsed.diagnostics, passedText: `Could not open ${entry.relativePath} through the core reader.` });
+            setExplorerStatus(null);
+        } catch (error) {
+            setOperationNotes((previous) => [
+                ...previous,
+                `Workspace open failed (${error instanceof Error ? error.message : String(error)}).`,
+            ]);
+            setExplorerStatus(null);
+        }
+    };
+
+    /** Open a host-owned exact `.shadergraph` snapshot through the core reader. */
     const openDocument = async (): Promise<void> => {
         const channel = fileChannel;
         if (channel === null) {
             return;
         }
         try {
-            const path = await channel.pickDocumentPath();
-            if (path === null) {
+            const snapshot = await channel.openDocument();
+            if (snapshot === null) {
                 return; // user cancelled
             }
-            const text = await channel.readText(path);
-            const parsed = parseShaderGraphDocument(text);
+            const parsed = parseShaderGraphDocument(snapshot.text);
             if (parsed.ok && parsed.value !== null) {
-                // A file-opened document OWNS that path — from now on a
-                // plain Save targets exactly it.
-                replaceDocumentSession(parsed.value, provenanceFromFile(path));
-                setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: `Opened ${path}; the session state was restored.` });
+                const value = parsed.value;
+                // If this exact host file is already an open tab, switch to
+                // it (dedupe by the host canonical URI) instead of opening a
+                // second tab. Otherwise open a co-existing new tab.
+                applyWorkspaceTransition((current) => {
+                    const existing = current.documents.find(
+                        (candidate) => candidate.canonicalUri === snapshot.canonicalDocumentUri,
+                    );
+                    if (existing !== undefined) {
+                        return activateWorkspaceDocument(current, existing.sessionId);
+                    }
+                    const replacement = createSession(
+                        allocateDocumentSessionId(),
+                        provenanceFromFile(snapshot.displayPath),
+                        value,
+                        snapshot.canonicalDocumentUri,
+                        snapshot.fileRevisionToken,
+                    );
+                    return openWorkspaceDocument(current, replacement);
+                });
+                setInspectorOpen(true);
+                setInspectorZone("contract");
+                setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: `Opened ${snapshot.displayPath}; the tab is now active.` });
                 requestAnimationFrame(() => fitRef.current?.());
                 return;
             }
@@ -306,39 +844,237 @@ export function App() {
 
     /**
      * Save via the host: the BYTES are the core's canonical .shadergraph
-     * serialization (the disk format authority); the host only writes
-     * scoped UTF-8 bytes to a user-chosen path. The TARGET comes from
-     * the current document's provenance — Save reuses the owned path
-     * when one exists, otherwise (and always for Save As) the dialog
-     * asks. An imported document can therefore never overwrite a file
-     * from a previous session of a different document.
+     * serialization (the disk format authority). Plain Save presents the
+     * session's host-issued canonical URI plus the exact revision token on
+     * which local edits are based; the host performs compare-and-swap and
+     * atomic replacement. Save As has a host-owned dialog and never silently
+     * overwrites an existing destination.
      */
-    /** Save to the session's target; resolve with success. Saving
-     * establishes the new baseline (the saved bytes) — the document is
-     * clean from that moment. */
+    const defaultSaveName = (documentSession: DocumentSession): string =>
+        documentSession.provenance.kind === "file"
+            ? basenameOf(documentSession.provenance.path)
+            : "Untitled.shadergraph";
+
+    const pendingConflict = (
+        savedSessionId: DocumentSession["sessionId"],
+        origin: DocumentSaveConflictOrigin,
+        localText: string,
+        defaultName: string,
+        outcome: Extract<DocumentSaveOutcome, { readonly kind: "conflict" }>,
+    ): PendingDocumentSaveConflict => ({
+        sessionId: savedSessionId,
+        origin,
+        canonicalDocumentUri: outcome.canonicalDocumentUri,
+        observedFileRevisionToken: outcome.observedFileRevisionToken,
+        destinationOwnerSessionId:
+            authoringStore
+                .getSnapshot()
+                .session.documents.find(
+                    (candidate) =>
+                        candidate.canonicalUri === outcome.canonicalDocumentUri &&
+                        candidate.sessionId !== savedSessionId,
+                )?.sessionId ?? null,
+        localText,
+        defaultName,
+    });
+
+    const finishSuccessfulSave = (
+        savedSessionId: DocumentSession["sessionId"],
+        snapshot: DocumentSnapshot,
+    ): boolean => {
+        updateDocumentSession(
+            savedSessionId,
+            (current) => sessionSaved(current, savedSessionId, snapshot),
+            "ignore",
+        );
+        if (!activeSessionIs(savedSessionId)) {
+            if (saveConflictRef.current?.sessionId === savedSessionId) {
+                dismissSaveConflict();
+            }
+            return false;
+        }
+        dismissSaveConflict();
+        setSavedText(snapshot.text);
+        setOperationNotes((previous) => [
+            ...previous,
+            `Saved ${snapshot.displayPath} as the core's canonical .shadergraph bytes.`,
+        ]);
+        return true;
+    };
+
+    const showSaveConflict = (conflict: PendingDocumentSaveConflict): void => {
+        installSaveConflict(conflict);
+        const ownerMessage =
+            conflict.destinationOwnerSessionId === null
+                ? ""
+                : " The destination is already owned by another open document, so it cannot be overwritten from this session.";
+        setOperationNotes((previous) => [
+            ...previous,
+            `Save conflict: the destination changed on disk; the local document was retained (${conflict.canonicalDocumentUri}).${ownerMessage}`,
+        ]);
+    };
+
+    /** Save to the session's target and resolve with success. A conflict is
+     * not a failed-write footnote: it becomes an explicit user decision. */
     const saveDocument = async (as: boolean): Promise<boolean> => {
         const channel = fileChannel;
-        if (channel === null) {
+        if (channel === null || saveConflictRef.current !== null) {
             return false;
         }
         try {
+            const savedSessionId = session.sessionId;
             const text = serializeShaderGraphDocument(document);
-            let path = saveTarget(session, as);
-            if (path === null) {
-                const defaultName = session.provenance.kind === "file" ? basenameOf(session.provenance.path) : "Untitled.shadergraph";
-                path = await channel.pickSavePath(defaultName);
-                if (path === null) {
-                    return false; // user cancelled
-                }
+            const name = defaultSaveName(session);
+            const target = saveTarget(session, as);
+            const origin: DocumentSaveConflictOrigin = target === null ? "save-as" : "save";
+            const outcome =
+                target === null
+                    ? await channel.saveDocumentAs(name, text)
+                    : await channel.saveDocument({ ...target, text });
+            if (outcome.kind === "cancelled") {
+                return false;
             }
-            await channel.writeText(path, text);
-            setSession(sessionSaved(path, text));
-            setSavedText(text);
-            setOperationNotes((previous) => [...previous, `Saved ${path} as the core's canonical .shadergraph bytes.`]);
-            return true;
+            if (outcome.kind === "conflict") {
+                // The initiating document may have been replaced while a
+                // native dialog/write was pending. Never put its conflict in
+                // front of a different active document (LIVE store read — a
+                // deduped open that activated THIS session is NOT stale).
+                if (!activeSessionIs(savedSessionId)) {
+                    return false;
+                }
+                showSaveConflict(pendingConflict(savedSessionId, origin, text, name, outcome));
+                return false;
+            }
+            return finishSuccessfulSave(savedSessionId, outcome.snapshot);
         } catch (error) {
             setOperationNotes((previous) => [...previous, `Save failed (${error instanceof Error ? error.message : String(error)}).`]);
             return false;
+        }
+    };
+
+    /** Resolve an explicit save-conflict choice against the exact local bytes
+     * and session that produced it. Overwrite is a new CAS attempt against
+     * the host-observed revision — external changes can still win and cause
+     * the prompt to remain with a newer observed revision. */
+    const resolveSaveConflict = async (action: DocumentSaveConflictAction): Promise<void> => {
+        const channel = fileChannel;
+        const conflict = saveConflictRef.current;
+        if (
+            channel === null ||
+            conflict === null ||
+            conflictResolutionInFlightRef.current ||
+            !documentSaveConflictActions(conflict).includes(action)
+        ) {
+            return;
+        }
+        if (action === "cancel") {
+            dismissSaveConflict();
+            setOperationNotes((previous) => [...previous, "Save conflict cancelled; the local document remains unchanged."]);
+            return;
+        }
+        if (!activeSessionIs(conflict.sessionId)) {
+            dismissSaveConflict();
+            return;
+        }
+
+        conflictResolutionInFlightRef.current = true;
+        setConflictResolutionInFlight(true);
+        try {
+            if (action === "reload") {
+                const snapshot = await channel.readDocumentSnapshot(conflict.canonicalDocumentUri);
+                if (!activeSessionIs(conflict.sessionId)) {
+                    dismissSaveConflict();
+                    return;
+                }
+                if (snapshot.canonicalDocumentUri !== conflict.canonicalDocumentUri) {
+                    throw new Error("the host returned a different canonical URI for reload");
+                }
+                const parsed = parseShaderGraphDocument(snapshot.text);
+                if (parsed.ok === false || parsed.value === null) {
+                    setLoadResult({
+                        title: "Reload result",
+                        ok: false,
+                        diagnostics: parsed.diagnostics,
+                        passedText: "",
+                    });
+                    setOperationNotes((previous) => [
+                        ...previous,
+                        "Reload refused: the external file is not a valid ShaderGraph document; local changes were retained.",
+                    ]);
+                    return;
+                }
+                const reloadedDocument = parsed.value;
+                clearCanvasInteractionState();
+                invalidateRevisionDerivedState();
+                updateDocumentSession(
+                    conflict.sessionId,
+                    (current) =>
+                        sessionReloaded(
+                            current,
+                            conflict.sessionId,
+                            snapshot,
+                            reloadedDocument,
+                        ),
+                    "ignore",
+                );
+                dismissSaveConflict();
+                setSavedText(serializeShaderGraphDocument(reloadedDocument));
+                setLoadResult({
+                    title: "Reload result",
+                    ok: true,
+                    diagnostics: parsed.diagnostics,
+                    passedText: `Reloaded ${snapshot.displayPath}; local changes and their undo history were discarded as chosen.`,
+                });
+                setOperationNotes((previous) => [
+                    ...previous,
+                    `Reloaded ${snapshot.displayPath} from disk.`,
+                ]);
+                requestAnimationFrame(() => fitRef.current?.());
+                return;
+            }
+
+            let outcome: DocumentSaveOutcome;
+            if (action === "overwrite") {
+                const observedRevision = conflict.observedFileRevisionToken;
+                if (observedRevision === null) {
+                    throw new Error("overwrite requires an observed file revision");
+                }
+                outcome = await channel.saveDocument({
+                    canonicalDocumentUri: conflict.canonicalDocumentUri,
+                    expectedFileRevisionToken: observedRevision,
+                    text: conflict.localText,
+                });
+            } else {
+                outcome = await channel.saveDocumentAs(conflict.defaultName, conflict.localText);
+            }
+            if (outcome.kind === "cancelled") {
+                return; // the conflict prompt stays; no choice was completed
+            }
+            if (outcome.kind === "conflict") {
+                if (!activeSessionIs(conflict.sessionId)) {
+                    dismissSaveConflict();
+                    return;
+                }
+                showSaveConflict(
+                    pendingConflict(
+                        conflict.sessionId,
+                        action === "save-as" ? "save-as" : conflict.origin,
+                        conflict.localText,
+                        conflict.defaultName,
+                        outcome,
+                    ),
+                );
+                return;
+            }
+            finishSuccessfulSave(conflict.sessionId, outcome.snapshot);
+        } catch (error) {
+            setOperationNotes((previous) => [
+                ...previous,
+                `Conflict resolution failed; the local document was retained (${error instanceof Error ? error.message : String(error)}).`,
+            ]);
+        } finally {
+            conflictResolutionInFlightRef.current = false;
+            setConflictResolutionInFlight(false);
         }
     };
 
@@ -438,6 +1174,13 @@ export function App() {
                 return;
             }
             unlisten = await getCurrentWindow().onCloseRequested(async (event) => {
+                if (saveConflictRef.current !== null) {
+                    // Conflict resolution already owns the foreground
+                    // decision. Do not stack an unsaved-close question over
+                    // it or let a second Save race the retained local bytes.
+                    event.preventDefault();
+                    return;
+                }
                 if (!dirtyRef.current) {
                     setOperationNotes((previous) => [...previous, "Close guard: clean session — closing."]);
                     return; // not prevented → the api wrapper destroys the window
@@ -503,7 +1246,9 @@ export function App() {
         return () => window.removeEventListener("keydown", handler);
     }, [fileChannel]);
 
-    const descriptor: SurfaceProfileDescriptor | null = descriptorState.kind === "ready" ? descriptorState.descriptor : null;
+    // The single current descriptor authority: the store's committed fact
+    // (never a capture from a render that could stale across an await).
+    const descriptor: SurfaceProfileDescriptor | null = authoring.profileDescriptor;
 
     const flow = useMemo(() => documentToFlow(document, focus, selectedConnectionId, selectedNodeId), [document, focus, selectedConnectionId, selectedNodeId]);
     const selectedNode = useMemo(
@@ -571,7 +1316,9 @@ export function App() {
             if (!Object.is(result.document, document)) {
                 // One user intent = one history step (the label names it);
                 // the before/after pair is exactly what undo/redo restore.
-                setHistory((previous) => recordHistory(previous, result.document, label));
+                updateDocumentSession(session.sessionId, (previous) =>
+                    recordDocumentChange(previous, result.document, label),
+                );
                 // The revision moved: the derivative state (focus and
                 // emission preview) described the former revision and is
                 // now stale — the preview must never outlive its revision.
@@ -696,7 +1443,7 @@ export function App() {
         if (canUndoHistory(history) === false) {
             return;
         }
-        setHistory((previous) => undoHistory(previous));
+        updateDocumentSession(session.sessionId, (previous) => undoDocumentChange(previous));
         clearCanvasInteractionState();
         invalidateRevisionDerivedState();
     };
@@ -704,7 +1451,7 @@ export function App() {
         if (canRedoHistory(history) === false) {
             return;
         }
-        setHistory((previous) => redoHistory(previous));
+        updateDocumentSession(session.sessionId, (previous) => redoDocumentChange(previous));
         clearCanvasInteractionState();
         invalidateRevisionDerivedState();
     };
@@ -828,7 +1575,13 @@ export function App() {
         // updates ONLY the position, preserving the node's existing
         // editor-state metadata (unknownFields, future presentation
         // fields). One drag stop = one intent = one history step.
-        setHistory((previous) => recordHistory(previous, withNodePosition(previous.present, nodeId, position), `placed ${nodeId}`));
+        updateDocumentSession(session.sessionId, (previous) =>
+            recordDocumentChange(
+                previous,
+                withNodePosition(previous.history.present, nodeId, position),
+                `placed ${nodeId}`,
+            ),
+        );
     };
 
     const onAutoLayout = (): void => {
@@ -838,16 +1591,16 @@ export function App() {
         // own. The core services are re-asked as usual; placement never
         // changes emitted HLSL. ONE layout pass = ONE intent = ONE history
         // step (undo reverts the whole pass, not node by node).
-        setHistory((previous) => {
-            const layout = autoLayout(previous.present);
+        updateDocumentSession(session.sessionId, (previous) => {
+            const layout = autoLayout(previous.history.present);
             if (layout.nodeCount === 0) {
                 return previous;
             }
-            let placed = previous.present;
+            let placed = previous.history.present;
             for (const [id, position] of Object.entries(layout.positions)) {
                 placed = withNodePosition(placed, id, position);
             }
-            return recordHistory(previous, placed, "automatic layout");
+            return recordDocumentChange(previous, placed, "automatic layout");
         });
         // Fit once the projection has picked up the new positions.
         requestAnimationFrame(() => fitRef.current?.());
@@ -883,9 +1636,10 @@ export function App() {
         if (parsed.ok && parsed.value !== null) {
             // An imported (text) document owns NO file path — a later
             // Save must ask for a destination instead of touching a file
-            // path left over from any earlier document.
-            replaceDocumentSession(parsed.value, provenanceFromImport());
-            setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: "The saved document loaded; the session state was restored." });
+            // path left over from any earlier document. It opens a fresh
+            // co-existing tab, leaving the active document in place.
+            openDocumentSession(parsed.value, provenanceFromImport());
+            setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: "The saved document opened in a new tab." });
             requestAnimationFrame(() => fitRef.current?.());
             return;
         }
@@ -893,13 +1647,24 @@ export function App() {
     };
 
     const onDescriptorStateChange = (next: DescriptorPanelState): void => {
-        // Emission = f(document, descriptor): the descriptor is the
-        // preview's OTHER authority input, so a descriptor change
-        // invalidates the revision-derived state exactly as a document
-        // change does. The identity check keeps a pure re-set (the very
-        // same state object) an honest no-op.
+        // The descriptor is a WORKSPACE-scoped authority: every open
+        // document's emission snapshot is f(document, D-old) and must never
+        // survive the commit as "current" when the descriptor moves. One
+        // SYNCHRONOUS Workspace transaction therefore commits the new fact
+        // AND invalidates ALL open-document `presentation.emission` snapshots
+        // — workspace-global invalidation in the store, never the
+        // active-document helper (which would leave another tab's old-
+        // descriptor emission behind). The identity check keeps a pure re-set
+        // (the very same state object) an honest no-op.
         if (!Object.is(next, descriptorState)) {
-            invalidateRevisionDerivedState();
+            // One synchronous Workspace transaction: commit the new
+            // descriptor fact AND invalidate every open document's emission
+            // snapshot (descriptorCommit — workspace-global, never the
+            // active-document helper).
+            authoringStore.apply((state) => ({
+                next: descriptorCommit(state, next.kind === "ready" ? next.descriptor : null),
+                result: null,
+            }));
         }
         setDescriptorState(next);
     };
@@ -919,7 +1684,7 @@ export function App() {
     const contractProblemCount = contractSets.reduce((sum, set) => sum + set.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length, 0);
     const emissionIdentity = emission !== null && emission.ok && emission.sourceMap?.generatedSourceIdentity !== undefined ? emission.sourceMap.generatedSourceIdentity.slice(0, 12) + "…" : undefined;
 
-    // ---- native build (Step 4 surface) — the composition and gate ----
+    // ---- native build — the composition and gate ----
     // Every RULE lives in the client (verdicts, the state machine, the
     // build-line) and the pure editor modules (readiness composition,
     // the session store, the inspector projection); the app owns only
@@ -930,19 +1695,32 @@ export function App() {
         descriptorDetail,
         emission,
     });
+    // PreviewCoordinator ownership (guidance §12.1): the Runtime Preview
+    // composes from the EXPLICIT Preview target — a distinct Workspace axis —
+    // not the active (editing) document. Switching the active tab therefore
+    // cannot silently retarget the Runtime; only an explicit "Preview this
+    // graph" moves the target. Before the user has ever chosen a target, the
+    // active (single seeded) document is the bootstrap default.
+    const previewTargetSession = resolvePreviewTarget(workspace) ?? session;
+    const previewDocument = previewTargetSession.history.present;
+    const previewEmission = previewTargetSession.presentation.emission;
     const preview = useShaderPreview({
-        document,
+        document: previewDocument,
         descriptor,
         descriptorCompatible: profileCompatibility !== null && profileCompatibility.verdict.ok,
-        emission,
+        emission: previewEmission,
         configuredTarget: native.target.target,
         nativeFlow: native.flow,
+        workspaceStore: authoringStore,
     });
 
-    const nativeTargetOptions = useMemo(() => {
-        const supported = native.flow?.supportedTargets ?? null;
-        return Array.from(new Set<string>([native.target.target, DEFAULT_BUILD_TARGET, ...(supported ?? [])]));
-    }, [native.flow, native.target.target]);
+    // The flow object is stable while handshake facts change inside it. Read
+    // supportedTargets on every render so a completed handshake immediately
+    // adds newly proven choices such as gglab-vulkan13.
+    const nativeTargetOptions = buildTargetOptions(
+        native.target,
+        native.flow?.supportedTargets ?? null,
+    );
 
     // Discovery-config picks (design section 5, rules 1 and 2): the
     // native dialog seam belongs to the file channel (desktop host only —
@@ -998,6 +1776,8 @@ export function App() {
         },
         build: { ready: native.ready },
     };
+    const saveConflictActions =
+        saveConflict === null ? [] : documentSaveConflictActions(saveConflict);
 
     return (
         <div className="gglab-app">
@@ -1016,9 +1796,131 @@ export function App() {
                     </Badge>
                 </div>
             </header>
+            <div className="gglab-tabs" role="tablist" aria-label="Open documents">
+                <div className="gglab-tabs-list">
+                    {workspace.documents.map((doc) => {
+                        const isActive = doc.sessionId === workspace.activeDocumentId;
+                        const isPreviewTarget = doc.sessionId === workspace.preview.targetDocumentId;
+                        const onlyTab = workspace.documents.length === 1;
+                        return (
+                            <div key={doc.sessionId} className={`gglab-tab${isActive ? " gglab-tab-active" : ""}`} role="tab" aria-selected={isActive}>
+                                <button
+                                    type="button"
+                                    className="gglab-tab-label"
+                                    onClick={() => onActivateTab(doc.sessionId)}
+                                    title={doc.provenance.kind === "file" ? doc.provenance.path : "Untitled document"}
+                                >
+                                    {isPreviewTarget && (
+                                        <span className="gglab-tab-preview" title="Attached Runtime Preview target" aria-label="Preview target">
+                                            ▶
+                                        </span>
+                                    )}
+                                    {isDirty(doc) && <span className="gglab-tab-modified" title="Unsaved changes" aria-label="Unsaved changes">●</span>}
+                                    {tabNameFor(doc)}
+                                </button>
+                                <button
+                                    type="button"
+                                    className="gglab-tab-close"
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        void onCloseTab(doc.sessionId);
+                                    }}
+                                    disabled={onlyTab}
+                                    title={
+                                        onlyTab
+                                            ? "The only open tab — at least one document must stay open"
+                                            : `Close ${tabNameFor(doc)}`
+                                    }
+                                    aria-label={`Close ${tabNameFor(doc)}`}
+                                >
+                                    ×
+                                </button>
+                            </div>
+                        );
+                    })}
+                </div>
+                <div className="gglab-tabs-actions">
+                    <Button
+                        variant="toolbar"
+                        onClick={() => void onPreviewThisGraph()}
+                        title="Attach the active document to the Runtime Preview. Explicit intent: switching tabs keeps the target."
+                    >
+                        ▶ Preview this graph
+                    </Button>
+                </div>
+            </div>
             <div className={`gglab-body${libraryOpen ? "" : " gglab-body-library-collapsed"}${inspectorOpen ? "" : " gglab-body-inspector-collapsed"}`}>
-                <aside className="gglab-side gglab-side-left">
-                    {libraryOpen ? (
+                <aside className="gglab-side gglab-side-left gglab-primary-sidebar">
+                    {/* Activity bar — switches the primary sidebar panel.
+                        "Nodes" is the default (the existing library), and
+                        "Explorer" is the Workspace file browser. */}
+                    <div className="gglab-activitybar" role="tablist" aria-label="Workspace panels">
+                        <button
+                            type="button"
+                            role="tab"
+                            aria-selected={sidebarPanel === "explorer"}
+                            className={`gglab-activitybar-btn${sidebarPanel === "explorer" ? " gglab-activitybar-active" : ""}`}
+                            onClick={() => setSidebarPanel("explorer")}
+                        >
+                            Explorer
+                        </button>
+                        <button
+                            type="button"
+                            role="tab"
+                            aria-selected={sidebarPanel === "nodes"}
+                            className={`gglab-activitybar-btn${sidebarPanel === "nodes" ? " gglab-activitybar-active" : ""}`}
+                            onClick={() => setSidebarPanel("nodes")}
+                        >
+                            Nodes
+                        </button>
+                    </div>
+                    {sidebarPanel === "explorer" ? (
+                        <section className="gglab-explorer">
+                            <div
+                                className="gglab-explorer-root"
+                                title={workspace.workspaceRoot !== null ? workspace.workspaceRoot.displayPath : undefined}
+                            >
+                                {workspace.workspaceRoot !== null ? workspace.workspaceRoot.displayPath : "No workspace"}
+                            </div>
+                            <div className="gglab-explorer-actions">
+                                {fileChannel !== null && (
+                                    <Button variant="secondary" onClick={() => void onChooseWorkspaceRoot()}>
+                                        Choose…
+                                    </Button>
+                                )}
+                                <Button variant="primary" onClick={() => void onDiscoverWorkspace()} disabled={explorerBusy}>
+                                    {explorerBusy ? "Discovering…" : "Discover"}
+                                </Button>
+                                {explorerBusy && (
+                                    <Button variant="ghost" onClick={() => void onStopDiscovery()}>
+                                        Stop
+                                    </Button>
+                                )}
+                            </div>
+                            {explorerStatus !== null && <p className="gglab-explorer-status">{explorerStatus}</p>}
+                            {explorerError !== null && <p className="gglab-explorer-error">{explorerError}</p>}
+                            {explorerEntries !== null && explorerEntries.length > 0 && (
+                                <ul className="gglab-explorer-list">
+                                    {explorerEntries.map((entry) => {
+                                        const alreadyOpen = workspace.documents.some((c) => c.canonicalUri === entry.canonicalDocumentUri);
+                                        return (
+                                            <li key={entry.canonicalDocumentUri} className="gglab-explorer-entry">
+                                                <button
+                                                    type="button"
+                                                    className="gglab-explorer-entry-btn"
+                                                    onClick={() => void onOpenEntry(entry)}
+                                                    title={entry.relativePath}
+                                                >
+                                                    {entry.relativePath}
+                                                    {alreadyOpen && <span className="gglab-explorer-open" title="Already open in a tab"> ·</span>}
+                                                </button>
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                            )}
+                        </section>
+                    ) : libraryOpen ? (
                         <>
                             <div className="gglab-library-search">
                                 <Input
@@ -1090,6 +1992,9 @@ export function App() {
                         onPortActivate={onPortActivate}
                         onNodeSelect={onNodeSelect}
                         onNodeMenu={onNodeMenu}
+                        onUserPanZoom={setViewport}
+                        requestedViewport={viewport}
+                        requestedViewportToken={session.sessionId}
                         onFlowReady={(fitView) => {
                             fitRef.current = fitView;
                         }}
@@ -1210,14 +2115,15 @@ export function App() {
                         )}
                         {inspectorZone === "document" && (
                             <>
-                    {/* Desktop slice 1: native document I/O. The host owns
-                        path + UTF-8 bytes only; the core owns parse/
-                        serialize; this app owns which text moves where. */}
+                    {/* Native document I/O. The host owns canonical URI
+                        capabilities, revision tokens, and exact UTF-8 bytes;
+                        the core owns parse/serialize, and this app owns which
+                        snapshot belongs to each document session. */}
                     {fileChannel !== null && (
                         <section className="gglab-panel gglab-document-native">
                             <h2 className="gglab-panel-title">Document</h2>
                             <p className="gglab-panel-hint">
-                                Native open, save, save-as (the host moves path + UTF-8 bytes; bytes are the core's canonical .shadergraph serialization).
+                                Native open, revision-checked save, and save-as (the host owns file identity; bytes are the core&apos;s canonical .shadergraph serialization).
                             </p>
                             <ButtonGroup role="toolbar" aria-label="Document I/O">
                                 <Button variant="secondary" onClick={() => void openDocument()}>
@@ -1446,11 +2352,16 @@ export function App() {
                                 <dd className="mono">
                                     {preview.runtime.kind}
                                     {"runtimeId" in preview.runtime
-                                        ? ` · #${preview.runtime.runtimeId.sequence}`
-                                        : preview.runtime.kind === "exited"
-                                          ? ` · ${preview.runtime.exit.kind}`
-                                          : preview.runtime.kind === "launch-refused"
-                                            ? ` · ${preview.runtime.result.kind}`
+                                        ? ` · #${preview.runtime.runtimeId.sequence}` +
+                                          (preview.runtime.kind === "exit-unproven"
+                                              ? ` · ${preview.runtime.exit.kind}`
+                                              : preview.runtime.kind === "runtime-ownership-conflict"
+                                                ? " · ownership-conflict"
+                                                : "")
+                                        : preview.runtime.kind === "launch-refused"
+                                          ? ` · ${preview.runtime.result.kind}`
+                                          : preview.runtime.kind === "launch-outcome-unproven"
+                                            ? " · launch-outcome-unproven"
                                             : ""}
                                 </dd>
                             </div>
@@ -1513,8 +2424,7 @@ export function App() {
                                     preview.flow === null ||
                                     preview.launchInFlight ||
                                     !preview.initialPublicationAvailable ||
-                                    preview.runtime.kind === "running" ||
-                                    preview.runtime.kind === "stopping"
+                                    (preview.runtime.kind !== "idle" && preview.runtime.kind !== "launch-refused")
                                 }
                             >
                                 {preview.launchInFlight ? "Launching…" : "Launch attached Lab"}
@@ -1522,7 +2432,22 @@ export function App() {
                             <Button
                                 variant="ghost"
                                 onClick={() => void preview.stopPreview()}
-                                disabled={preview.runtime.kind !== "running" && preview.runtime.kind !== "stopping"}
+                                disabled={
+                                    // Stop is enabled ONLY where the manager
+                                    // holds a lease and can act:
+                                    // `running` / `terminating` /
+                                    // `exit-unproven`. Every other state —
+                                    // `idle`, `launching`, `launch-refused`,
+                                    // `runtime-ownership-conflict`,
+                                    // `launch-outcome-unproven` — has no
+                                    // lease; offering Stop there and seeing
+                                    // "No attached Runtime" would contradict
+                                    // the host's ownership fact / the unknown
+                                    // launch outcome.
+                                    preview.runtime.kind !== "running" &&
+                                    preview.runtime.kind !== "terminating" &&
+                                    preview.runtime.kind !== "exit-unproven"
+                                }
                             >
                                 Stop attached Lab
                             </Button>
@@ -1542,6 +2467,69 @@ export function App() {
                     )}
                 </aside>
             </div>
+            {saveConflict !== null && (
+                <div
+                    className="gglab-close-prompt"
+                    role="alertdialog"
+                    aria-modal="true"
+                    aria-label="Save conflict"
+                >
+                    <div className="gglab-close-prompt-card gglab-save-conflict-card">
+                        <h2 className="gglab-close-prompt-title">
+                            {saveConflict.origin === "save"
+                                ? "File changed on disk"
+                                : "Destination already exists"}
+                        </h2>
+                        <p className="gglab-close-prompt-text">
+                            {saveConflict.destinationOwnerSessionId !== null
+                                ? "Another open document already owns this destination. Choose another file or cancel; the two editing contexts will not be merged."
+                                : saveConflict.observedFileRevisionToken === null
+                                  ? "The destination is missing or its identity changed. An unguarded overwrite is unavailable; reload, choose another file, or cancel."
+                                  : saveConflict.origin === "save"
+                                    ? "The on-disk file changed after this document was opened. Reload discards local changes; overwrite deliberately replaces the observed disk revision; Save As keeps both versions."
+                                    : "The selected destination already exists. Overwrite deliberately replaces its observed revision; Choose Another keeps the existing file."}
+                        </p>
+                        <ButtonGroup className="flex flex-wrap justify-end">
+                            {saveConflictActions.includes("reload") && (
+                                <Button
+                                    variant="primary"
+                                    onClick={() => void resolveSaveConflict("reload")}
+                                    disabled={conflictResolutionInFlight}
+                                >
+                                    Reload from Disk
+                                </Button>
+                            )}
+                            {saveConflictActions.includes("overwrite") && (
+                                <Button
+                                    variant="destructive"
+                                    onClick={() => void resolveSaveConflict("overwrite")}
+                                    disabled={conflictResolutionInFlight}
+                                >
+                                    {saveConflict.origin === "save"
+                                        ? "Overwrite Disk File"
+                                        : "Overwrite Existing"}
+                                </Button>
+                            )}
+                            {saveConflictActions.includes("save-as") && (
+                                <Button
+                                    variant={saveConflict.origin === "save-as" ? "primary" : "secondary"}
+                                    onClick={() => void resolveSaveConflict("save-as")}
+                                    disabled={conflictResolutionInFlight}
+                                >
+                                    {saveConflict.origin === "save" ? "Save As…" : "Choose Another…"}
+                                </Button>
+                            )}
+                            <Button
+                                variant="ghost"
+                                onClick={() => void resolveSaveConflict("cancel")}
+                                disabled={conflictResolutionInFlight}
+                            >
+                                Cancel
+                            </Button>
+                        </ButtonGroup>
+                    </div>
+                </div>
+            )}
             {closePrompt && (
                 <div className="gglab-close-prompt" role="alertdialog" aria-label="Unsaved changes">
                     <div className="gglab-close-prompt-card">
@@ -1555,6 +2543,24 @@ export function App() {
                                 Don't Save
                             </Button>
                             <Button variant="ghost" onClick={() => chooseCloseChoice("cancel")}>
+                                Cancel
+                            </Button>
+                        </ButtonGroup>
+                    </div>
+                </div>
+            )}
+            {dirtyClose !== null && (
+                <div className="gglab-close-prompt" role="alertdialog" aria-modal="true" aria-label="Close document">
+                    <div className="gglab-close-prompt-card">
+                        <h2 className="gglab-close-prompt-title">Close without saving?</h2>
+                        <p className="gglab-close-prompt-text">
+                            This tab has unsaved changes; closing it discards them. Keep them by saving first (Save / Save As), or close to discard.
+                        </p>
+                        <ButtonGroup className="flex justify-end">
+                            <Button variant="destructive" onClick={() => void confirmDirtyClose()}>
+                                Close anyway
+                            </Button>
+                            <Button variant="ghost" onClick={() => setDirtyClose(null)}>
                                 Cancel
                             </Button>
                         </ButtonGroup>

@@ -13,8 +13,10 @@
  * - candidate/session-scoped Runtime observations are read single-flight,
  *   strictly decoded, cross-linked, and monotonically accepted before they
  *   can project Current/LastGood/Stale/Rejected;
- * - attached Runtime startup is success-first, candidate/session-bound, and
- *   single-flight, with host-issued process identity and explicit teardown.
+ * - attached Runtime LIFETIME (launch admission, ownership binding, state
+ *   machine, terminate-and-join proof) belongs to the Runtime manager; this
+ *   flow reads its facts and provides the build-line candidate a launch
+ *   would use.
  */
 import {
     admitPreviewBuild,
@@ -43,11 +45,6 @@ import {
     type PreviewObservationOrderingRejection,
     type PreviewObservationReadRejection,
     type PreviewRuntimeProjection,
-    type PreviewRuntimeBoundary,
-    type PreviewRuntimeExit,
-    type PreviewRuntimeId,
-    type PreviewRuntimeLaunchResult,
-    type PreviewRuntimeStopOutcome,
     type PreviewRequestWellFormed,
     type ToolCandidate,
     type ToolCompatibilityState,
@@ -70,6 +67,7 @@ import {
     type PreviewInputContractMismatch,
     type PreviewInputContractSelection,
 } from "./preview-input-contract.js";
+import { AttachedPreviewRuntimeManager } from "./preview-runtime-manager.js";
 
 type CandidateInvalidatedResult = Extract<BoundaryResult, { readonly kind: "candidate-invalidated" }>;
 
@@ -149,10 +147,17 @@ export type PreviewBuildGateReason =
     | PreviewCompositionRefusal
     | { readonly reason: "ordinary-tool-not-compatible"; readonly toolStatus: ToolCompatibilityState["status"] }
     | { readonly reason: "attached-runtime-launching" }
+    | { readonly reason: "attached-runtime-ownership-conflict" }
+    | { readonly reason: "attached-runtime-launch-outcome-unproven" }
     | { readonly reason: "attached-runtime-deployment-mismatch" }
     | { readonly reason: "preview-proof-missing" }
     | { readonly reason: "preview-ineligible"; readonly eligibility: PreviewEligibility }
-    | { readonly reason: "request-not-well-formed"; readonly verdict: Exclude<PreviewRequestWellFormed, { ok: true }> };
+    | { readonly reason: "request-not-well-formed"; readonly verdict: Exclude<PreviewRequestWellFormed, { ok: true }> }
+    /** The PreviewCoordinator composes these two structural refusals BEFORE
+     *  any of the facts above: a transition owns the slot, or the desktop
+     *  host (and with it this very flow) does not exist for this mount. */
+    | { readonly reason: "preview-transition-in-flight" }
+    | { readonly reason: "preview-host-unavailable" };
 
 export interface PreviewBuildGate {
     readonly admitted: boolean;
@@ -190,44 +195,6 @@ export type PreviewObservationRefresh =
       }
     | { readonly kind: "ordering-rejected"; readonly rejection: PreviewObservationOrderingRejection }
     | { readonly kind: "accepted"; readonly changed: boolean; readonly observation: PreviewObservation };
-
-export type AttachedPreviewRuntimeState =
-    | { readonly kind: "idle" }
-    | { readonly kind: "launching" }
-    | {
-          readonly kind: "running";
-          readonly runtimeId: PreviewRuntimeId;
-          readonly runtimeIdentity: string;
-      }
-    | {
-          readonly kind: "stopping";
-          readonly runtimeId: PreviewRuntimeId;
-          readonly runtimeIdentity: string;
-      }
-    | {
-          readonly kind: "exited";
-          readonly runtimeIdentity: string;
-          readonly exit: PreviewRuntimeExit;
-      }
-    | {
-          readonly kind: "launch-refused";
-          readonly result: Exclude<PreviewRuntimeLaunchResult, { readonly kind: "launched" }>;
-      };
-
-export type AttachedPreviewLaunch =
-    | { readonly launched: false; readonly reason: "initial-publication-unavailable" }
-    | { readonly launched: false; readonly reason: "already-running"; readonly runtimeId: PreviewRuntimeId }
-    | {
-          readonly launched: false;
-          readonly reason: "host-refused";
-          readonly result: Exclude<PreviewRuntimeLaunchResult, { readonly kind: "launched" }>;
-      }
-    | {
-          readonly launched: true;
-          readonly runtimeId: PreviewRuntimeId;
-          readonly runtimeIdentity: string;
-          readonly exited: Promise<PreviewRuntimeExit>;
-      };
 
 function requirementsEqual(left: PreviewEligibilityRequirement, right: PreviewEligibilityRequirement): boolean {
     return (
@@ -287,7 +254,7 @@ function lineForDeployment(line: PreviewBuildLine, candidate: ToolCandidate): Pr
     };
 }
 
-export class PreviewBuildFlow {
+export class PreviewBuildController {
     private sessionState: PreviewBuildSession;
     private lastHandshakeState: PreviewHandshakeAttemptRecord | null = null;
     private currentHandshakeLane: {
@@ -298,6 +265,10 @@ export class PreviewBuildFlow {
     private handshakeInFlightCount = 0;
     private buildQueue: Promise<void> = Promise.resolve();
     private latestBuildRequestOrdinal = 0;
+    /** Admitted Preview build lifecycles still open (admission -> terminal
+     * attempt outcome). One side of the Coordinator's mutual exclusion:
+     * while nonzero, no ownership transition may commit. */
+    private openBuilds = 0;
     private activeBuild: { readonly buildId: BuildId; cancelRequested: boolean } | null = null;
     private acceptedObservationState: {
         readonly candidate: ToolCandidate;
@@ -308,16 +279,13 @@ export class PreviewBuildFlow {
         readonly refresh: PreviewObservationRefresh;
     } | null = null;
     private observationLane: Promise<PreviewObservationRefresh> | null = null;
-    private runtimeStateValue: AttachedPreviewRuntimeState = { kind: "idle" };
-    private runtimeLaunchLane: Promise<AttachedPreviewLaunch> | null = null;
-    private runtimeCandidateValue: ToolCandidate | null = null;
 
     constructor(
         private readonly boundary: HostToolBoundary,
         private readonly toolPort: PreviewToolStatePort,
         sessionId: string,
         private readonly observationBoundary: PreviewObservationBoundary,
-        private readonly runtimeBoundary: PreviewRuntimeBoundary,
+        readonly manager: AttachedPreviewRuntimeManager,
     ) {
         this.sessionState = createPreviewBuildSession(sessionId);
     }
@@ -332,6 +300,15 @@ export class PreviewBuildFlow {
 
     get previewHandshakeInFlight(): boolean {
         return this.handshakeInFlightCount > 0;
+    }
+
+    /** True while at least one Preview build lifecycle is open — from its
+     * admission through issue to its terminal attempt outcome. This is the
+     * build-side fact of the Coordinator's transition/build mutual
+     * exclusion: ownership transitions and build lifecycles never overlap.
+     * Reads a count; it never advances the build line or issues work. */
+    get buildInFlight(): boolean {
+        return this.openBuilds > 0;
     }
 
     get activeBuildId(): BuildId | null {
@@ -355,10 +332,6 @@ export class PreviewBuildFlow {
             (candidate !== null && candidatesShareDeployment(this.lastObservationRefreshState.candidate, candidate))
             ? this.lastObservationRefreshState.refresh
             : null;
-    }
-
-    get runtimeState(): AttachedPreviewRuntimeState {
-        return this.runtimeStateValue;
     }
 
     get initialPublicationAvailable(): boolean {
@@ -516,25 +489,11 @@ export class PreviewBuildFlow {
                 eligibility: null,
             };
         }
-        if (this.runtimeStateValue.kind === "launching") {
-            return {
-                admitted: false,
-                reasons: [{ reason: "attached-runtime-launching" }],
-                request: null,
-                eligibility: null,
-            };
-        }
-        if (
-            this.runtimeCandidateValue !== null &&
-            !candidatesShareDeployment(this.runtimeCandidateValue, tool.candidate)
-        ) {
-            return {
-                admitted: false,
-                reasons: [{ reason: "attached-runtime-deployment-mismatch" }],
-                request: null,
-                eligibility: null,
-            };
-        }
+        // The attached-Runtime refusal vocabulary (launch-outcome-unproven,
+        // runtime-ownership-conflict, launching, deployment-mismatch) is
+        // mapped by the PreviewCoordinator BEFORE this build gate runs: the
+        // Runtime manager exposes facts, and the Coordinator — not this
+        // controller — composes them into the build gate order.
         const requirement = requirementOf(composition.facts);
         const proof = this.lastHandshakeState;
         if (
@@ -589,16 +548,36 @@ export class PreviewBuildFlow {
         return { admitted: true, reasons: [], request, eligibility };
     }
 
+    /** The current ordinary tool state, read from its single owner. */
+    toolState(): ToolCompatibilityState {
+        return this.toolPort.current();
+    }
+
     /** Strict same-session single-flight launch. A newer eligible request
      *  immediately asks the active older attempt to cancel, then waits for
      *  that attempt's terminal outcome before re-gating and issuing. Queued
-     *  requests superseded before issue never consume AttemptSequence. */
-    buildPreview(input: PreviewCompositionInput): Promise<PreviewBuildLaunch> {
-        const initialGate = this.buildGate(input);
+     *  requests superseded before issue never consume AttemptSequence.
+     *
+     *  The gate is REQUIRED, not defaulted: an unadorned `buildGate` is a
+     *  BYPASS of the PreviewCoordinator, so the API refuses to offer it.
+     *  Production callers go through the PreviewCoordinator (which composes
+     *  its attached-Runtime + transition-in-flight facts BEFORE the build
+     *  gate); tests of the controller alone pass `buildGate` explicitly.
+     *
+     *  Each ADMISSION opens a build-lifecycle that stays open until the
+     *  attempt's terminal outcome settles — that window (issue -> terminal
+     *  outcome, and no narrower) is exposed as `buildInFlight` for the
+     *  Coordinator's transition/build mutual exclusion. */
+    buildPreview(
+        input: PreviewCompositionInput,
+        evaluateGate: (input: PreviewCompositionInput) => PreviewBuildGate,
+    ): Promise<PreviewBuildLaunch> {
+        const initialGate = evaluateGate(input);
         if (!initialGate.admitted) {
             return Promise.resolve({ issued: false, reason: "gate-refused", gate: initialGate });
         }
 
+        this.openBuilds += 1; // admission opens the build lifecycle
         const ordinal = ++this.latestBuildRequestOrdinal;
         this.requestActiveCancellation();
         const predecessor = this.buildQueue;
@@ -607,7 +586,7 @@ export class PreviewBuildFlow {
             if (ordinal !== this.latestBuildRequestOrdinal) {
                 return { issued: false, reason: "superseded-before-issue", gate: initialGate };
             }
-            const gate = this.buildGate(input);
+            const gate = evaluateGate(input);
             if (!gate.admitted || gate.request === null || gate.eligibility?.status !== "eligible") {
                 return { issued: false, reason: "gate-refused", gate };
             }
@@ -618,6 +597,9 @@ export class PreviewBuildFlow {
                 if (launch.issued) {
                     await launch.outcome;
                 }
+            })
+            .finally(() => {
+                this.openBuilds = Math.max(0, this.openBuilds - 1); // terminal outcome settles -> lifecycle closes
             })
             .catch(() => undefined);
         return started;
@@ -711,8 +693,9 @@ export class PreviewBuildFlow {
     }
 
     private currentDeploymentCandidate(): ToolCandidate | null {
-        if (this.runtimeCandidateValue !== null) {
-            return this.observationCandidate(this.runtimeCandidateValue);
+        const owned = this.manager.ownedCandidate;
+        if (owned !== null) {
+            return this.observationCandidate(owned);
         }
         const currentTool = this.toolPort.current();
         if ("candidate" in currentTool) {
@@ -724,7 +707,7 @@ export class PreviewBuildFlow {
     }
 
     private observationCandidate(latestAttemptCandidate: ToolCandidate): ToolCandidate {
-        const runtimeCandidate = this.runtimeCandidateValue;
+        const runtimeCandidate = this.manager.ownedCandidate;
         if (runtimeCandidate === null) {
             return latestAttemptCandidate;
         }
@@ -789,9 +772,18 @@ export class PreviewBuildFlow {
 
     /** The honest runtime view for the graph currently in the editor. A
      *  present build request is used only to derive semantic intent; this
-     *  method never issues work or advances AttemptSequence. */
-    runtimeProjection(input: PreviewCompositionInput): PreviewRuntimeProjection {
-        const gate = this.buildGate(input);
+     *  method never issues work or advances AttemptSequence.
+     *
+     *  The gate is REQUIRED, not defaulted: an unadorned `buildGate` would be
+     *  a BYPASS of the PreviewCoordinator (which composes its attached-Runtime
+     *  and transition-in-flight facts BEFORE the build gate). Production
+     *  projections therefore always go through the Coordinator's composed
+     *  gate; tests of the controller alone pass `buildGate` explicitly. */
+    runtimeProjection(
+        input: PreviewCompositionInput,
+        evaluateGate: (input: PreviewCompositionInput) => PreviewBuildGate,
+    ): PreviewRuntimeProjection {
+        const gate = evaluateGate(input);
         const intent =
             gate.admitted && gate.request !== null && gate.eligibility?.status === "eligible"
                 ? previewBuildIntentOf(gate.request, gate.eligibility.facts)
@@ -806,112 +798,25 @@ export class PreviewBuildFlow {
             : null;
         return projectPreviewRuntime(lineForDeployment(this.sessionState.line, candidate), intent, observation);
     }
-
-    /** Success-first attached launch. A strict Preview build result is the
-     *  only way a publication enters the line, so latestPublished is the
-     *  initial-publication proof. Later failed attempts do not erase that
-     *  active last-good pointer and therefore do not block a relaunch. */
-    launchAttachedPreview(): Promise<AttachedPreviewLaunch> {
-        if (this.runtimeLaunchLane !== null) {
-            return this.runtimeLaunchLane;
-        }
-        if (this.runtimeStateValue.kind === "running" || this.runtimeStateValue.kind === "stopping") {
-            return Promise.resolve({
-                launched: false,
-                reason: "already-running",
-                runtimeId: this.runtimeStateValue.runtimeId,
-            });
-        }
+    /** The candidate deployment a launch would use, derived only from
+     *  build-line facts (the latest published attempt for the deployment).
+     *  The launch itself - admission, session binding, state machine,
+     *  teardown proof - belongs to the Runtime manager. */
+    launchCandidate(): ToolCandidate | null {
         const candidate = this.currentDeploymentCandidate();
-        const published = candidate === null ? undefined : [...lineForDeployment(this.sessionState.line, candidate).attempts]
-            .sort((left, right) => right.attemptSequence - left.attemptSequence)
-            .find(
-                (attempt) =>
-                    attempt.state === "settled" && attempt.outcome.kind === "published",
-            );
-        if (published === undefined) {
-            return Promise.resolve({ launched: false, reason: "initial-publication-unavailable" });
-        }
-        this.runtimeStateValue = { kind: "launching" };
-        this.runtimeCandidateValue = published.candidate;
-        const promise = this.runAttachedLaunch(published.candidate).finally(() => {
-            if (this.runtimeLaunchLane === promise) {
-                this.runtimeLaunchLane = null;
-            }
-        });
-        this.runtimeLaunchLane = promise;
-        return promise;
-    }
-
-    private async runAttachedLaunch(candidate: ToolCandidate): Promise<AttachedPreviewLaunch> {
-        let result: PreviewRuntimeLaunchResult;
-        try {
-            result = await this.runtimeBoundary.launchAttachedPreview(
-                candidate,
-                this.sessionState.sessionId,
-            );
-        } catch (error) {
-            this.runtimeCandidateValue = null;
-            this.runtimeStateValue = { kind: "idle" };
-            throw error;
-        }
-        if (result.kind !== "launched") {
-            if (result.kind === "candidate-invalidated") {
-                this.toolPort.candidateInvalidated(result);
-            }
-            this.runtimeCandidateValue = null;
-            this.runtimeStateValue = { kind: "launch-refused", result };
-            return { launched: false, reason: "host-refused", result };
-        }
-        this.runtimeStateValue = {
-            kind: "running",
-            runtimeId: result.runtimeId,
-            runtimeIdentity: result.runtimeIdentity,
-        };
-        void result.exited.then((exit) => {
-            const state = this.runtimeStateValue;
-            if (
-                (state.kind === "running" || state.kind === "stopping") &&
-                state.runtimeId.sequence === exit.runtimeId.sequence
-            ) {
-                this.runtimeCandidateValue = null;
-                this.runtimeStateValue = {
-                    kind: "exited",
-                    runtimeIdentity: state.runtimeIdentity,
-                    exit,
-                };
-            }
-        });
-        return {
-            launched: true,
-            runtimeId: result.runtimeId,
-            runtimeIdentity: result.runtimeIdentity,
-            exited: result.exited,
-        };
-    }
-
-    async stopAttachedPreview(): Promise<PreviewRuntimeStopOutcome | null> {
-        const state = this.runtimeStateValue;
-        if (state.kind !== "running" && state.kind !== "stopping") {
+        if (candidate === null) {
             return null;
         }
-        this.runtimeStateValue = {
-            kind: "stopping",
-            runtimeId: state.runtimeId,
-            runtimeIdentity: state.runtimeIdentity,
-        };
-        try {
-            return await this.runtimeBoundary.stopAttachedPreview(state.runtimeId);
-        } catch (error) {
-            const current = this.runtimeStateValue;
-            if (current.kind === "stopping" && current.runtimeId.sequence === state.runtimeId.sequence) {
-                this.runtimeStateValue = {
-                    kind: "running",
-                    runtimeId: state.runtimeId,
-                    runtimeIdentity: state.runtimeIdentity,
-                };
-            }
-            throw error;
-        }
+        const published = [...lineForDeployment(this.sessionState.line, candidate).attempts]
+            .sort((left, right) => right.attemptSequence - left.attemptSequence)
+            .find((attempt) => attempt.state === "settled" && attempt.outcome.kind === "published");
+        return published !== undefined ? published.candidate : null;
+    }
+
+    /** Routes the launch "candidate-invalidated" host fact to the owner of
+     *  the ordinary tool state: the manager reports the fact; the build
+     *  authority applies it. */
+    reportCandidateInvalidation(result: CandidateInvalidatedResult): void {
+        this.toolPort.candidateInvalidated(result);
     }
 }

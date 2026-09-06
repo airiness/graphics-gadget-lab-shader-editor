@@ -853,8 +853,8 @@ describe("typed port presentation (core types → data categories)", () => {
         it("wires the advanced gestures: Alt+port = core port disconnect; Ctrl+edge → armed → port click = ONE atomic reconnect; Esc/blank cancel untouched", () => {
             const viewport = read("../../../packages/editor-ui/src/flow/flow-viewport.tsx");
             // Ctrl(+Meta) click arms the reconnect of THAT connection; a
-            // plain click is selection (Slice 1 path). Ports report their
-            // activation as raw data through the gesture context.
+            // plain click is selection. Ports report their activation as
+            // raw data through the gesture context.
             expect(viewport).toMatch(/event\.ctrlKey \|\| event\.metaKey/);
             expect(viewport).toContain("props.onEdgeReconnectArm?.(edge.id)");
             expect(viewport).toContain("PortGestureContext.Provider");
@@ -955,7 +955,12 @@ describe("typed port presentation (core types → data categories)", () => {
             const derived = app.match(/function invalidateRevisionDerivedState\(\): void \{[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
             expect(derived).toContain("setFocus(null)"); // a stale highlight is never shown
             expect(derived).toContain("setEmission(null)"); // HLSL stays bound to its revision
-            for (const caller of ["replaceDocumentSession", "onUndo", "onRedo"]) {
+            // A document REVISION change (undo / redo) must clear the canvas
+            // interaction state AND invalidate the revision-derived state. A
+            // NEW document (open/import) instead starts with an EMPTY
+            // presentation — each DocumentSession owns its own presentation,
+            // so opening never has to clear the prior document's.
+            for (const caller of ["onUndo", "onRedo"]) {
                 const block = app.match(new RegExp(`(?:const|function) ${caller}([\\s\\S]*?\\n\\s{4}\\})`))?.[0] ?? "";
                 expect(block).toContain("clearCanvasInteractionState()");
                 expect(block).toContain("invalidateRevisionDerivedState()");
@@ -973,13 +978,25 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(body).toContain("invalidateRevisionDerivedState()");
         });
 
-        it("a descriptor change invalidates the emission preview too — emission = f(document, descriptor)", () => {
+        it("a descriptor change invalidates ALL open documents' emissions in ONE store transaction — emission = f(document, descriptor)", () => {
             const app = read("../src/app.tsx");
             const body = app.match(/const onDescriptorStateChange = \([^\n]*\n[\s\S]*?\n\s{4}\};/)?.[0] ?? "";
             expect(body).toMatch(/if \(!Object\.is\(next, descriptorState\)\)/);
-            expect(body).toContain("invalidateRevisionDerivedState()");
-            expect(body).toContain("setDescriptorState(next)");
+            // The descriptor is WORKSPACE-scoped: the same authoringStore.apply
+            // commits the new profileDescriptor AND invalidates every open
+            // document's presentation.emission — never the active-document
+            // helper (which would leave other tabs' old-descriptor emissions
+            // posing as current).
+            expect(body).toContain("authoringStore.apply(");
+            expect(body).toContain("descriptorCommit(state, next.kind === \"ready\" ? next.descriptor : null)");
+            expect(body).not.toContain("invalidateRevisionDerivedState()");
             expect(app).toContain("onStateChange={onDescriptorStateChange}");
+            // The workspace-global invalidation law lives in one transition:
+            const store = read("../src/workspace-store.ts");
+            expect(store).toMatch(/export function descriptorCommit\(/);
+            expect(store).toContain("document.presentation.emission !== null");
+            expect(store).toContain("presentation: { ...document.presentation, emission: null }");
+            expect(store).toContain("profileDescriptor: descriptor");
         });
 
         it("discards the redo branch when a new intent is recorded after an undo", () => {
@@ -992,10 +1009,20 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(branched.present).toBe("z");
         });
 
-        it("wires the app: history-owned document, refused ops OUT, provenance changes RESET, guarded keys, disabled buttons", () => {
+        it("wires the app: Workspace-owned active DocumentSession, refused ops OUT, provenance changes RESET, guarded keys, disabled buttons", () => {
             const app = read("../src/app.tsx");
-            // The document IS history.present (no second source of truth).
-            expect(app).toMatch(/const \[history, setHistory\] = useState\(\(\) => createHistory\(seed\)\)/);
+            // Workspace owns the complete DocumentSession records and the
+            // current document IS activeSession.history.present.
+            // The authoring state is a synchronous STORE authority: React is
+            // a useSyncExternalStore projection and NO React-state mirror may
+            // overwrite the store.
+            expect(app).toMatch(/new WorkspaceStore<WorkspaceAuthoringState>/);
+            expect(app).toMatch(/useSyncExternalStore\(\s*authoringStore\.subscribe,\s*authoringStore\.getSnapshot,\s*authoringStore\.getSnapshot/);
+            expect(app).not.toMatch(/useState<WorkspaceSession<DocumentSession>>/);
+            expect(app).toContain("const workspace = authoring.session");
+            expect(app).toMatch(/createSession\(allocateDocumentSessionId\(\), provenanceFromImport\(\), seed\)/);
+            expect(app).toContain("const session = requireActiveDocumentSession(workspace)");
+            expect(app).toMatch(/const history = session\.history;/);
             expect(app).toMatch(/const document = history\.present;/);
             // Applied changes record one labeled step; refused ones note but
             // never record.
@@ -1004,10 +1031,38 @@ describe("typed port presentation (core types → data categories)", () => {
             // and invalidates the revision-derived state.
             const applied = app.match(/function applyAuthoring\([^\n]*\{[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
             expect(applied).toContain("if (!Object.is(result.document, document)) {");
-            expect(applied).toContain("recordHistory(previous, result.document, label)");
+            expect(applied).toContain("recordDocumentChange(previous, result.document, label)");
             expect(applied).toContain("invalidateRevisionDerivedState()");
-            // Provenance transitions (open / import) reset the line.
-            expect(app).toMatch(/const replaceDocumentSession[\s\S]*?setHistory\(createHistory\(next\)\)/);
+            // Provenance transitions (open / import) establish a distinct
+            // editing context with a fresh identity and history line, and
+            // open CO-EXISTING — never discarding the active tab. A native
+            // Open also binds the host-issued URI and revision token.
+            expect(app).toMatch(
+                /const openDocumentSession[\s\S]*?const replacement = createSession\([\s\S]*?canonicalUri,[\s\S]*?fileRevisionToken,[\s\S]*?openWorkspaceDocument\(/,
+            );
+            // Re-opening an already-open host file activates its existing tab
+            // (dedupe by the host canonical URI) instead of opening a twin.
+            expect(app).toContain("activateWorkspaceDocument(current, existing.sessionId)");
+            // Closing a tab is a separate, guarded path through the reducer.
+            expect(app).toMatch(/closeWorkspaceDocument\(current, documentSessionId\)/);
+            // An async save completion is identity-bound (the request
+            // captures its originatingSessionId at intent time) and guards
+            // against NO shadow ref: the current active identity is read
+            // LIVE from the Workspace store at decision time — a shadow ref
+            // could miss a deduped open that activated an EXISTING session.
+            expect(app).toContain("const savedSessionId = session.sessionId");
+            expect(app).toMatch(/const activeSessionIs = \(documentSessionId: DocumentSession\["sessionId"\]\): boolean/);
+            expect(app).toContain("activeWorkspaceDocument(authoringStore.getSnapshot().session)");
+            expect(app).toContain("if (!activeSessionIs(savedSessionId))");
+            expect(app).not.toContain("currentDocumentSessionId");
+            expect(app).not.toContain("workspaceRef");
+            expect(app).toMatch(/updateDocumentSession\(\s*savedSessionId/);
+            expect(app).toContain("channel.openDocument()");
+            expect(app).toContain("snapshot.canonicalDocumentUri");
+            expect(app).toContain("snapshot.fileRevisionToken");
+            expect(app).toContain("channel.saveDocument({ ...target, text })");
+            expect(app).toContain('if (outcome.kind === "conflict")');
+            expect(app).toContain("sessionSaved(current, savedSessionId, snapshot)");
             // Keyboard: the guard predicate runs BEFORE the graph shortcut.
             expect(app).toMatch(/event\.key\.toLowerCase\(\) === "z"[\s\S]*?isEditingTextTarget\(event\.target\)/);
             expect(app).toMatch(/if \(event\.shiftKey\) \{\s*onRedo\(\);\s*\} else \{\s*onUndo\(\);/);
@@ -2205,7 +2260,7 @@ describe("action affordance (chrome kit)", () => {
     });
 });
 
-// --- desktop slice 1: host file-open injection into the descriptor panel -----
+// --- host file-open injection into the descriptor panel ----------------------
 
 describe("descriptor panel: host file-open injection (desktop)", () => {
     it("uses the injected host open and feeds its text to the core reader", async () => {
@@ -2285,5 +2340,244 @@ describe("descriptor panel: host file-open injection (desktop)", () => {
             expect((states[0] as { diagnosticMessage: string }).diagnosticMessage).toContain("denied");
         }
         unmount();
+    });
+});
+
+describe("primary sidebar (activity bar + workspace explorer)", () => {
+    it("is a panel switch (Explorer | Nodes), with Nodes as the default so the library UX is preserved", () => {
+        const app = read("../src/app.tsx");
+        expect(app).toMatch(/useState<"explorer" \| "nodes">\("nodes"\)/);
+        expect(app).toMatch(/gglab-activitybar-btn[\s\S]*?setSidebarPanel\("explorer"\)/);
+        expect(app).toMatch(/gglab-activitybar-btn[\s\S]*?setSidebarPanel\("nodes"\)/);
+    });
+
+    it("wires the Explorer to the HOST channel: choose root → store it → bounded, CANCELLABLE discovery", () => {
+        const app = read("../src/app.tsx");
+        expect(app).toMatch(/channel\.chooseWorkspaceRoot\(\)/);
+        expect(app).toMatch(/setWorkspaceRoot\(state\.session, root\)/);
+        expect(app).toMatch(/channel\.discoverWorkspace\(expectedUri\)/);
+        expect(app).toMatch(/channel\.cancelWorkspaceDiscovery\(id\)/);
+    });
+
+    it("binds a discovery settlement to (canonicalWorkspaceUri, discoveryId) and drops a superseded one", () => {
+        const app = read("../src/app.tsx");
+        // The UI's watched discovery is bound to BOTH its id and the root it ran against.
+        expect(app).toMatch(/discoveryRef\.current = \{ uri: expectedUri, discoveryId: attempt\.discoveryId \}/);
+        // A settlement applies ONLY if it is still the current one (same id + root).
+        expect(app).toMatch(/watching\.discoveryId === settlement\.discoveryId/);
+        expect(app).toMatch(/watching\.uri === expectedUri/);
+        expect(app).toMatch(/settlementUri === expectedUri/);
+    });
+
+    it("invalidates the old discovery binding BEFORE cancelling it when the root is switched", () => {
+        const app = read("../src/app.tsx");
+        // Root chosen → the old binding dies immediately (a late settlement is
+        // dropped by the guard) → only THEN is the cancel requested.
+        expect(app).toMatch(
+            /onChooseWorkspaceRoot[\s\S]*?const superseded = discoveryRef\.current;[\s\S]*?discoveryRef\.current = null;/,
+        );
+        expect(app).toMatch(/cancelWorkspaceDiscovery\(superseded\.discoveryId\)/);
+    });
+
+    it("opens a discovered entry as a co-existing tab via the host exact snapshot (or activates the existing tab) — never an arbitrary path", () => {
+        const app = read("../src/app.tsx");
+        // Already-open detection is by the host canonical URI.
+        expect(app).toMatch(/c\.canonicalUri === entry\.canonicalDocumentUri/);
+        expect(app).toMatch(/channel\.readDocumentSnapshot\(entry\.canonicalDocumentUri\)/);
+        // The open binds the host-issued URI and revision token, co-existing.
+        expect(app).toMatch(
+            /openDocumentSession\(\s*parsed\.value,\s*provenanceFromFile\(snapshot\.displayPath\),\s*snapshot\.canonicalDocumentUri,\s*snapshot\.fileRevisionToken/,
+        );
+    });
+
+    it("renders discovery status, error, and the entry list (a volatile host observation, not a graph authority)", () => {
+        const app = read("../src/app.tsx");
+        expect(app).toContain("gglab-explorer-status");
+        expect(app).toContain("gglab-explorer-error");
+        expect(app).toMatch(/gglab-explorer-list[\s\S]*?entry\.relativePath/);
+    });
+});
+
+describe("preview target ownership (PreviewCoordinator)", () => {
+    it("the Runtime Preview composes from the resolved EXPLICIT target, not the active document", () => {
+        const app = read("../src/app.tsx");
+        expect(app).toMatch(/import \{[\s\S]*?resolvePreviewTarget[\s\S]*?\} from "\.\.\/src\/preview-coordinator\.js"|import \{[\s\S]*?resolvePreviewTarget[\s\S]*?\} from "\.\/preview-coordinator\.js"/);
+        // The composition source is the resolved target's document + emission.
+        expect(app).toMatch(/resolvePreviewTarget\(workspace\)/);
+        expect(app).toMatch(/const previewDocument = previewTargetSession\.history\.present/);
+        expect(app).toMatch(/const previewEmission = previewTargetSession\.presentation\.emission/);
+        expect(app).toMatch(/useShaderPreview\(\{[\s\S]*?document: previewDocument,[\s\S]*?emission: previewEmission/);
+    });
+
+    it("retarget is owned by the PreviewCoordinator: the app delegates the WHOLE transition, and the coordinator tears down LAST, committing in one apply against CURRENT", () => {
+        const app = read("../src/app.tsx");
+        const coordinator = read("../src/preview-coordinator.ts");
+        // The app delegates: no local teardown choreography remains, and
+        // no "host unavailable" null guard blocks the retarget (the
+        // coordinator is always present; with no host it is a pure
+        // Workspace commit).
+        const onPreview = app.match(/const onPreviewThisGraph[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
+        expect(onPreview).toContain("await preview.coordinator.retargetTo(target.sessionId)");
+        expect(onPreview).not.toContain("coordinator === null");
+        expect(onPreview).not.toContain("stopPreviewRuntimeIfAttached");
+        expect(onPreview).not.toContain("commitWorkspacePreviewTarget");
+        // The coordinator owns the discipline: the LAST await is the strict
+        // teardown, and the commit is exactly one store.apply AFTER it,
+        // resolving the emission from the CURRENT descriptor.
+        const retargetBody = coordinator.match(/async retargetTo[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
+        const teardownAt = retargetBody.indexOf("await this.teardownProof()");
+        const applyAt = retargetBody.indexOf("this.store.apply");
+        expect(teardownAt).toBeGreaterThanOrEqual(0);
+        expect(applyAt).toBeGreaterThan(teardownAt);
+        expect(coordinator).toMatch(/const descriptor = state\.profileDescriptor/);
+        expect(coordinator).toMatch(/emitHlsl\(target\.history\.present, descriptor\)/);
+        expect(coordinator).toMatch(/target-emission-unavailable/);
+    });
+
+    it("closing the Preview target is the coordinator's; a NON-target close stays a plain Workspace reducer operation", () => {
+        const app = read("../src/app.tsx");
+        const closeFn = app.match(/async function closeOneTab[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
+        expect(closeFn).toContain("authoringStore.getSnapshot().session.preview.targetDocumentId === documentSessionId");
+        // The close binds to the exact revision the user confirmed
+        // discarding (documentRevision) and hands both to the coordinator.
+        expect(closeFn).toContain("documentRevision(doc)");
+        expect(closeFn).toContain("await preview.coordinator.closeTarget(documentSessionId, expectedRevision)");
+        expect(closeFn).not.toContain("coordinator === null");
+        expect(closeFn).toContain("applyWorkspaceTransition((current) => closeWorkspaceDocument(current, documentSessionId))");
+        expect(closeFn).not.toContain("stopPreviewRuntimeIfAttached");
+    });
+
+    it("the target-resolution rule is a pure, isolated module (not inlined in the render); the authority is one class in the same module", () => {
+        const coordinator = read("../src/preview-coordinator.ts");
+        expect(coordinator).toMatch(/export function resolvePreviewTarget/);
+        expect(coordinator).toMatch(/export function hasExplicitPreviewTarget/);
+        expect(coordinator).toMatch(/workspace\.preview\.targetDocumentId \?\? workspace\.activeDocumentId/);
+        expect(coordinator).toMatch(/export class PreviewCoordinator/);
+    });
+
+    it("the app keeps the structured refusal UX; the hook exposes a NON-NULL coordinator reading live host refs, with gate/projection honest about no-host", () => {
+        const app = read("../src/app.tsx");
+        const hook = read("../src/useShaderPreview.ts");
+        expect(app).toMatch(/describeTransitionRefusal\(result\.refusal\)/);
+        expect(app).toMatch(/Cannot retarget the Preview yet/);
+        expect(app).toMatch(/Cannot close this tab yet/);
+        // The hook owns ONE coordinator per mount, reading the LIVE host
+        // bindings through accessors (so transitions stay available when
+        // no host is attached), and exposes it as NON-NULL.
+        expect(hook).toMatch(/readonly coordinator: PreviewCoordinator;/);
+        expect(hook).toMatch(/\(\) => managerRef\.current/);
+        expect(hook).toMatch(/\(\) => flowRef\.current/);
+        expect(hook).toMatch(/new PreviewCoordinator\(/);
+        expect(hook).toMatch(/input\.workspaceStore/);
+        // gate / projection are honest no-host facts (null), not a dead
+        // optional-chain on a nullable coordinator.
+        expect(hook).toMatch(/gate: flow !== null \? coordinator\.gate\(composition\) : null/);
+        expect(hook).toMatch(/projection: flow !== null \? coordinator\.runtimeProjection\(composition\) : null/);
+        expect(app).toMatch(/workspaceStore: authoringStore/);
+    });
+
+    it("the Runtime manager owns the strict teardown: proven exit, sticky unproven, no second host request", () => {
+        const managerSource = read("../src/preview-runtime-manager.ts");
+        expect(managerSource).toMatch(/async terminateAndJoin\(\)/);
+        // `wait-failed` is NOT a proven teardown: ownership is retained as
+        // unproven (state `exit-unproven`; the binding is retained).
+        expect(managerSource).toMatch(/exit\.kind === "wait-failed"/);
+        expect(managerSource).toMatch(/kind: "exit-unproven"/);
+        // An attached Runtime missing its settlement is an invariant
+        // violation (throws) — never a proven "nothing to do".
+        expect(managerSource).toMatch(/no exit settlement[\s\S]*?teardown cannot be proven complete/);
+        // Launch admission is ONLY from `idle` / `launch-refused`: an
+        // attached or unproven state is a structured refusal, never a
+        // queued relaunch (no second Runtime after an unproven exit).
+        expect(managerSource).toMatch(/reason: "runtime-attached"/);
+        expect(managerSource).toMatch(/reason: "exit-unproven"/);
+        // A repeated stop JOINS the same teardown (no second host request);
+        // a stop after an unproven exit re-reports without a host call.
+        expect(managerSource).toMatch(/outcome: "join-in-progress"/);
+        expect(managerSource).toMatch(/outcome: "unproven-rejoin"/);
+        // The ownership binding projects the exact deployment toolPath of
+        // the owned candidate and is retained until the exit is proven.
+        expect(managerSource).toMatch(/deploymentToolPath: candidate\.toolPath/);
+        // The single stop-request lane is shared by stop() and
+        // terminateAndJoin(); a failed request rolls the state back to
+        // `running` (ownership retained) and rejects the teardown.
+        expect(managerSource).toMatch(/private stopLane/);
+        expect(managerSource).toMatch(/this\.stateValue = \{ kind: "running", runtimeId, runtimeIdentity \}/);
+        expect(managerSource).toMatch(/could not be stopped/);
+    });
+
+    it("a Workspace seeds its Preview target at the first open and re-seeds it on a target close (never a live follow)", () => {
+        const ws = read("../src/workspace-session.ts");
+        expect(ws).toMatch(
+            /workspace\.preview\.targetDocumentId === null\s*\? \{ targetDocumentId: document\.sessionId \}/,
+        );
+        expect(ws).toMatch(
+            /workspace\.preview\.targetDocumentId === documentSessionId\s*\? \(documents\.length > 0 \? activeDocumentId : null\)/,
+        );
+    });
+
+    it("close/retarget discipline: revision binding, build↔transition mutual exclusion, proven-no-Runtime commits, and the bypass is closed", () => {
+        const coordinator = read("../src/preview-coordinator.ts");
+        const flow = read("../src/preview-build-controller.ts");
+        const hook = read("../src/useShaderPreview.ts");
+
+        // Revision binding (no data loss): closeTarget binds to the exact
+        // revision the user confirmed and revalidates it at commit time.
+        expect(coordinator).toMatch(/async closeTarget\(/);
+        expect(coordinator).toMatch(/expectedRevision: string/);
+        expect(coordinator).toMatch(/document-changed-during-close/);
+        expect(coordinator).toMatch(/documentRevision\(stillOpen\) !== expectedRevision/);
+
+        // Build / transition mutual exclusion, both directions, no queue.
+        expect(coordinator).toMatch(/build-in-flight/);
+        expect(coordinator).toMatch(/preview-transition-in-flight/);
+        expect(flow).toMatch(/preview-transition-in-flight/);
+        expect(flow).toMatch(/preview-host-unavailable/);
+        expect(flow).toMatch(/private openBuilds = 0/);
+        expect(flow).toMatch(/get buildInFlight\(\)/);
+
+        // Proven no Runtime (manager null) commits the pure Workspace
+        // transition; only an unresolved host teardown blocks.
+        expect(coordinator).toMatch(/teardownProof\(\)/);
+        expect(coordinator).toMatch(/preview-host-unavailable/);
+
+        // The bypass is closed: the strict teardown is reachable ONLY
+        // through the coordinator (no public stopPreviewAndWait), and BOTH
+        // the build gate and the projection gate are REQUIRED arguments
+        // (no uncomposed `buildGate` default to fall into) — every
+        // production build or projection goes through the Coordinator.
+        expect(hook).not.toMatch(/stopPreviewAndWait/);
+        expect(flow).not.toMatch(/stopPreviewAndWait/);
+        expect(flow).toMatch(/buildPreview\([\s\S]*?evaluateGate: \(input: PreviewCompositionInput\) => PreviewBuildGate,[\s\S]*?\): Promise<PreviewBuildLaunch>/);
+        expect(flow).toMatch(/runtimeProjection\([\s\S]*?evaluateGate: \(input: PreviewCompositionInput\) => PreviewBuildGate,[\s\S]*?\): PreviewRuntimeProjection/);
+    });
+});
+
+describe("per-document canvas viewport (pan/zoom never shared)", () => {
+    it("owns a per-document viewport in the presentation, carried across an edit but reset on a content replacement", () => {
+        const ds = read("../src/document-session.ts");
+        expect(ds).toMatch(/export interface CanvasViewport/);
+        expect(ds).toMatch(/readonly viewport: CanvasViewport \| null/);
+        // An edit carries it (emptyPresentation keeps the second argument).
+        expect(ds).toMatch(/emptyPresentation\(session\.presentation\.savedText, session\.presentation\.viewport\)/);
+    });
+
+    it("the app binds the active document's viewport to the canvas and persists user pan/zoom", () => {
+        const app = read("../src/app.tsx");
+        expect(app).toMatch(/onUserPanZoom=\{setViewport\}/);
+        expect(app).toMatch(/requestedViewport=\{viewport\}/);
+        expect(app).toMatch(/requestedViewportToken=\{session\.sessionId\}/);
+        // The setter writes to the ACTIVE document's own presentation.
+        expect(app).toMatch(/const setViewport = \(value: CanvasViewport\): void => patchPresentation\(\{ viewport: value \}\)/);
+    });
+
+    it("the canvas reports only user pan/zoom and restores the token's own view (no restore↔persist loop)", () => {
+        const viewport = read("../../../packages/editor-ui/src/flow/flow-viewport.tsx");
+        expect(viewport).toMatch(/onMoveEnd=\{\(_event, viewport\) => \{/);
+        expect(viewport).toMatch(/props\.onUserPanZoom\?\.\(\{ x: viewport\.x, y: viewport\.y, zoom: viewport\.zoom \}\)/);
+        // Restore keyed on the document-identity token, reading the view from a ref.
+        expect(viewport).toMatch(/\}, \[props\.requestedViewportToken\]\)/);
+        expect(viewport).toMatch(/instance\.viewport|requestedViewportRef\.current/);
+        expect(viewport).toMatch(/instance\.setViewport\(\{ x: requested\.x, y: requested\.y, zoom: requested\.zoom \}, \{ duration: 140 \}\)/);
     });
 });

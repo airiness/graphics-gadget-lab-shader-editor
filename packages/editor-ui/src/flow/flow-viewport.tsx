@@ -238,6 +238,23 @@ export interface FlowViewportProps {
      * touching connections + placement) as ONE authoring operation.
      */
     readonly onNodeMenu?: (nodeId: string, anchor: { x: number; y: number }) => void;
+    /**
+     * The canvas view state (pan/zoom) as a per-document fact. Two facts:
+     *
+     *  - `onUserPanZoom` reports the viewport ONLY when the user finishes a
+     *    pan/zoom gesture (React Flow's move-end). The app persists it to the
+     *    ACTIVE document's own presentation — the viewport never owns it.
+     *  - `requestedViewport` + `requestedViewportToken` restore a document's
+     *    own view when the token (the document identity) changes: if a view
+     *    was captured it is applied; if none (`null`) the canvas fits content.
+     *    This is what keeps two documents from sharing pan/zoom.
+     *
+     * The viewport is a presentation adapter for view state only — it never
+     * mutates a document and never owns selection or semantics.
+     */
+    readonly onUserPanZoom?: (viewport: { readonly x: number; readonly y: number; readonly zoom: number }) => void;
+    readonly requestedViewport?: { readonly x: number; readonly y: number; readonly zoom: number } | null;
+    readonly requestedViewportToken?: unknown;
 }
 
 /**
@@ -288,6 +305,27 @@ export function FlowViewport(props: FlowViewportProps) {
     const { nodes, onNodesChange } = useSyncedFlowNodes(props.nodes);
     // The flow instance (for screen→flow coordinate conversion on drop).
     const flowInstanceRef = useRef<import("@xyflow/react").ReactFlowInstance<ShaderNodeT> | null>(null);
+
+    // Per-document view restore. When the document identity (the token)
+    // changes, restore THAT document's own captured view — or fit content if
+    // it has none. This is what keeps two documents from sharing pan/zoom.
+    // The requested view is read from a ref so the effect's dependency stays
+    // the identity token alone: a user pan (which updates the requested view)
+    // must not re-trigger a restore and fight the in-flight gesture.
+    const requestedViewportRef = useRef(props.requestedViewport ?? null);
+    requestedViewportRef.current = props.requestedViewport ?? null;
+    useEffect(() => {
+        const instance = flowInstanceRef.current;
+        if (instance === null) {
+            return; // not initialized yet; the initial `fitView` prop applies
+        }
+        const requested = requestedViewportRef.current;
+        if (requested !== null) {
+            instance.setViewport({ x: requested.x, y: requested.y, zoom: requested.zoom }, { duration: 140 });
+        } else {
+            instance.fitView({ duration: 140 });
+        }
+    }, [props.requestedViewportToken]);
 
     const handleDragOver = (event: DragEvent<HTMLDivElement>): void => {
         // Only accept when an authoring payload is being dragged.
@@ -389,6 +427,14 @@ export function FlowViewport(props: FlowViewportProps) {
                     // A click (not a drag) selects the node in the app's
                     // session state; the viewport reports the raw id only.
                     props.onNodeSelect?.(node.id);
+                }}
+                onMoveEnd={(_event, viewport) => {
+                    // The user finished a pan/zoom gesture. Report the view
+                    // state (a per-document presentation fact) so the app can
+                    // persist it to the ACTIVE document's own presentation.
+                    // Only user gestures fire this — programmatic restores do
+                    // not, so there is no restore↔persist feedback loop.
+                    props.onUserPanZoom?.({ x: viewport.x, y: viewport.y, zoom: viewport.zoom });
                 }}
             >
                 {/* Overlay layout: controls top-right, minimap bottom-right —

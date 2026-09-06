@@ -1,6 +1,8 @@
 /** React composition for the attached Shader Graph Preview session. Pure
- * protocol/order rules remain in PreviewBuildFlow; this hook owns only desktop
- * boundary construction, actions, render ticks, and the bounded poll timer. */
+ * protocol/order rules remain in PreviewBuildController; the Runtime
+ * lifetime authority lives in AttachedPreviewRuntimeManager; this hook
+ * owns only desktop boundary construction, action wiring, render ticks,
+ * and the bounded poll timer. */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
     PreviewAttemptOutcome,
@@ -13,12 +15,20 @@ import type {
 } from "@gglab/shader-graph-core";
 import type { NativeBuildFlow } from "./native-build-flow.js";
 import {
-    PreviewBuildFlow,
-    type AttachedPreviewRuntimeState,
+    PreviewBuildController,
     type PreviewBuildGate,
     type PreviewCompositionInput,
     type PreviewObservationRefresh,
-} from "./preview-build-flow.js";
+} from "./preview-build-controller.js";
+import {
+    AttachedPreviewRuntimeManager,
+    type AttachedRuntimeState,
+} from "./preview-runtime-manager.js";
+import { PreviewCoordinator } from "./preview-coordinator.js";
+import {
+    WorkspaceStore,
+    type WorkspaceAuthoringState,
+} from "./workspace-store.js";
 import { previewProgramDescriptorIdentity, createPreviewSessionId } from "./preview-program-contract.js";
 import {
     createTauriPreviewObservationBoundary,
@@ -26,6 +36,7 @@ import {
     createTauriToolBoundary,
     toolBoundaryAvailable,
 } from "./toolchain-host.js";
+import { describePreviewAttemptOutcome } from "./preview-attempt-summary.js";
 
 const OBSERVATION_POLL_INTERVAL_MS = 250;
 
@@ -36,13 +47,23 @@ export interface UseShaderPreviewInput {
     readonly emission: HlslEmission | null;
     readonly configuredTarget: string;
     readonly nativeFlow: NativeBuildFlow | null;
+    /** The Workspace commit authority the Preview ownership transitions
+     *  commit to (the same instance the app renders from). */
+    readonly workspaceStore: WorkspaceStore<WorkspaceAuthoringState>;
 }
 
 export interface ShaderPreviewSurface {
-    readonly flow: PreviewBuildFlow | null;
+    readonly flow: PreviewBuildController | null;
+    /** Ownership-transition + gate authority over the Runtime manager and
+     * the build flow. Always present for a mounted editor: with no desktop
+     * host it executes pure Workspace transitions (proven no Runtime) and
+     * structural build refusals; with a host it carries the strict-teardown
+     * discipline. A strict `terminateAndJoin` is reachable only through its
+     * transition methods — never as a raw exposed action. */
+    readonly coordinator: PreviewCoordinator;
     readonly sessionId: string | null;
     readonly gate: PreviewBuildGate | null;
-    readonly runtime: AttachedPreviewRuntimeState;
+    readonly runtime: AttachedRuntimeState;
     readonly projection: PreviewRuntimeProjection | null;
     readonly lastObservationRefresh: PreviewObservationRefresh | null;
     readonly handshakeInFlight: boolean;
@@ -58,11 +79,26 @@ export interface ShaderPreviewSurface {
 
 export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSurface {
     const [, bump] = useState(0);
-    const [flow, setFlow] = useState<PreviewBuildFlow | null>(null);
+    const [flow, setFlow] = useState<PreviewBuildController | null>(null);
     const [buildInFlight, setBuildInFlight] = useState(false);
     const [launchInFlight, setLaunchInFlight] = useState(false);
     const [notes, setNotes] = useState<ShaderPreviewSurface["notes"]>([]);
-    const flowRef = useRef<PreviewBuildFlow | null>(null);
+    const flowRef = useRef<PreviewBuildController | null>(null);
+    const managerRef = useRef<AttachedPreviewRuntimeManager | null>(null);
+    // One coordinator per mount, independent of whether the desktop host
+    // arrives. It reads the LIVE host bindings through the accessors below,
+    // so ownership transitions (retarget / close-the-target) are ALWAYS
+    // available: with no host they are pure Workspace commits (proven no
+    // Runtime), and with a host they carry the strict-teardown discipline.
+    // The strict single-flight slot therefore never gets re-created.
+    const [coordinator] = useState(
+        () =>
+            new PreviewCoordinator(
+                () => managerRef.current,
+                () => flowRef.current,
+                input.workspaceStore,
+            ),
+    );
 
     const note = useCallback((level: "ok" | "info" | "refusal", text: string) => {
         setNotes((previous) => [...previous.slice(-23), { level, text }]);
@@ -84,7 +120,8 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
                 return;
             }
             const sessionId = createPreviewSessionId();
-            const preview = new PreviewBuildFlow(
+            const manager = new AttachedPreviewRuntimeManager(runtime, sessionId);
+            const preview = new PreviewBuildController(
                 tool,
                 {
                     current: () => nativeFlow.tool,
@@ -95,8 +132,9 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
                 },
                 sessionId,
                 observation,
-                runtime,
+                manager,
             );
+            managerRef.current = manager;
             flowRef.current = preview;
             setFlow(preview);
         })().catch((error: unknown) => {
@@ -106,12 +144,21 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
         });
         return () => {
             canceled = true;
-            const current = flowRef.current;
+            const currentManager = managerRef.current;
+            const currentFlow = flowRef.current;
+            managerRef.current = null;
             flowRef.current = null;
             setFlow(null);
-            if (current !== null) {
-                void current.stopAttachedPreview();
+            if (currentManager !== null) {
+                // Strict teardown, fire-and-forget. A plain `stop()` is a
+                // NO-OP while `launching` (nothing attached yet) and would
+                // orphan a Runtime whose launch settles after unmount;
+                // `terminateAndJoin()` first joins the pending launch lane
+                // and then completes the teardown. It must never block the
+                // unmount.
+                void currentManager.terminateAndJoin().catch(() => undefined);
             }
+            void currentFlow;
         };
     }, [input.nativeFlow, note]);
 
@@ -145,14 +192,24 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
     }, [flow, composition, note]);
 
     const launchPreview = useCallback(async (): Promise<void> => {
-        if (flow === null) {
+        const current = flowRef.current;
+        const manager = managerRef.current;
+        if (current === null || manager === null) {
             note("refusal", "Attached Preview launch is unavailable: no desktop Preview host.");
             return;
         }
         setLaunchInFlight(true);
         try {
-            const launch = await flow.launchAttachedPreview();
+            const candidate = current.launchCandidate();
+            if (candidate === null) {
+                note("refusal", "Attached Preview was not launched (initial-publication-unavailable).");
+                return;
+            }
+            const launch = await manager.launch(candidate);
             if (!launch.launched) {
+                if (launch.reason === "host-refused" && launch.result.kind === "candidate-invalidated") {
+                    current.reportCandidateInvalidation(launch.result);
+                }
                 note("refusal", `Attached Preview was not launched (${launch.reason}).`);
                 return;
             }
@@ -164,16 +221,18 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             setLaunchInFlight(false);
             bump((value) => value + 1);
         }
-    }, [flow, note]);
+    }, [note]);
 
     const buildPreview = useCallback(async (): Promise<void> => {
-        if (flow === null) {
+        const current = flowRef.current;
+        const manager = managerRef.current;
+        if (current === null || manager === null) {
             note("refusal", "Preview build is unavailable: no desktop Preview host.");
             return;
         }
         setBuildInFlight(true);
         try {
-            const launch = await flow.buildPreview(composition);
+            const launch = await coordinator.buildPreview(composition);
             if (!launch.issued) {
                 note("refusal", `Preview build was not issued (${launch.reason}).`);
                 return;
@@ -181,12 +240,25 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             bump((value) => value + 1);
             const outcome: PreviewAttemptOutcome = await launch.outcome;
             if (outcome.kind !== "published") {
-                note("refusal", `Preview attempt #${launch.attemptSequence} settled as ${outcome.kind}.`);
+                note("refusal", describePreviewAttemptOutcome(launch.attemptSequence, outcome));
                 return;
             }
-            note("ok", `Preview publication ${outcome.envelope.publicationId.slice(0, 12)}… produced.`);
-            const runtime = flow.runtimeState;
-            if (runtime.kind !== "running" && runtime.kind !== "stopping") {
+            note("ok", describePreviewAttemptOutcome(launch.attemptSequence, outcome));
+            // Success-first UX: a build publication with no (usable)
+            // attached Runtime auto-launches one. `running` / `terminating`
+            // / `launching` suppress it; `exit-unproven` is refused by
+            // launch admission; `runtime-ownership-conflict` and
+            // `launch-outcome-unproven` suppress it (the host KNOWS / MAY
+            // HAVE a Runtime — a second one is forbidden); `idle` (and the
+            // retry lane) admit it.
+            const runtime = manager.state;
+            if (
+                runtime.kind !== "running" &&
+                runtime.kind !== "terminating" &&
+                runtime.kind !== "launching" &&
+                runtime.kind !== "runtime-ownership-conflict" &&
+                runtime.kind !== "launch-outcome-unproven"
+            ) {
                 await launchPreview();
             }
         } catch (error) {
@@ -195,31 +267,45 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             setBuildInFlight(false);
             bump((value) => value + 1);
         }
-    }, [flow, composition, launchPreview, note]);
+    }, [composition, launchPreview, note]);
 
     const stopPreview = useCallback(async (): Promise<void> => {
-        if (flow === null) {
+        const manager = managerRef.current;
+        if (manager === null) {
             return;
         }
         try {
-            const outcome = await flow.stopAttachedPreview();
-            if (outcome !== null) {
+            const outcome = await manager.stop();
+            if (outcome.outcome === "stop-requested") {
+                note("info", `Stop requested for attached Runtime #${outcome.runtimeId.sequence}.`);
+            } else if (outcome.outcome === "join-in-progress") {
                 note(
-                    outcome.stopRequested ? "info" : "refusal",
-                    outcome.stopRequested
-                        ? `Stop requested for attached Runtime #${outcome.runtimeId.sequence}.`
-                        : `Attached Runtime #${outcome.runtimeId.sequence} had already settled.`,
+                    "info",
+                    `Stop already in progress for attached Runtime #${outcome.runtimeId.sequence}; joined the same teardown (no second host request).`,
                 );
+            } else if (outcome.outcome === "unproven-rejoin") {
+                note(
+                    "refusal",
+                    `Attached Runtime #${outcome.runtimeId.sequence} could not be proven exited; re-reported the stored unproven fact (no host call was made).`,
+                );
+            } else {
+                note("info", "No attached Preview Runtime to stop.");
             }
         } catch (error) {
             note("refusal", `Stopping attached Preview failed: ${describeError(error)}`);
         }
         bump((value) => value + 1);
-    }, [flow, note]);
+    }, [note]);
 
-    const runtimeKind = flow?.runtimeState.kind ?? "idle";
+    // A strict `terminateAndJoin()` is intentionally NOT exposed here: it is
+    // the PreviewCoordinator's transition tool (its last await, guarded by
+    // the single-flight slot and commit-time revalidation), not a bypass.
+    // The plain user "Stop" button uses `stopPreview` above.
+
+    const managerState = managerRef.current;
+    const runtimeKind = flow === null || managerState === null ? "idle" : managerState.state.kind;
     useEffect(() => {
-        if (flow === null || runtimeKind !== "running") {
+        if (flow === null || managerState === null || runtimeKind !== "running") {
             return;
         }
         let disposed = false;
@@ -243,14 +329,18 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             disposed = true;
             globalThis.clearInterval(timer);
         };
-    }, [flow, runtimeKind, note]);
+    }, [flow, managerState, runtimeKind, note]);
 
     return {
         flow,
+        coordinator,
         sessionId: flow?.session.sessionId ?? null,
-        gate: flow?.buildGate(composition) ?? null,
-        runtime: flow?.runtimeState ?? { kind: "idle" },
-        projection: flow?.runtimeProjection(composition) ?? null,
+        // gate / projection are host operations: present (as structural
+        // refusals) only while a desktop host (and thus a build line) exists;
+        // `null` is the honest "no host" fact, matching the disabled toolbar.
+        gate: flow !== null ? coordinator.gate(composition) : null,
+        runtime: flow !== null && managerState !== null ? managerState.state : { kind: "idle" },
+        projection: flow !== null ? coordinator.runtimeProjection(composition) : null,
         lastObservationRefresh: flow?.lastObservationRefresh ?? null,
         handshakeInFlight: flow?.previewHandshakeInFlight ?? false,
         buildInFlight,

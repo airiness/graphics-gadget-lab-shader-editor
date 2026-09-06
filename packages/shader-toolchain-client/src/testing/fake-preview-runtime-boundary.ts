@@ -16,6 +16,22 @@ export type FakePreviewRuntimeLaunch = Exclude<
 export interface FakePreviewRuntimeSpec {
     readonly launches: readonly FakePreviewRuntimeLaunch[];
     readonly keepLaunchPending?: boolean | undefined;
+    /** When set, `stopAttachedPreview` acknowledges the stop request but
+     *  holds the process's exit settlement open until `releaseStop()` — a
+     *  deterministic "stopping" window for ownership-transition tests. */
+    readonly holdStopUntilRelease?: boolean | undefined;
+    /** The exit kind `releaseStop()` settles with. `"wait-failed"` models a
+     *  host that could only best-effort kill/wait (cannot prove exit).
+     *  Defaults to `"stopped"`. */
+    readonly stopReleaseKind?: "stopped" | "wait-failed";
+    /** When set, the NEXT `stopAttachedPreview` call REJECTS (the host could
+     *  not even process the request; the process may still exist).
+     *  One-shot per arming; test code may re-arm by writing `true` again. */
+    readonly stopRequestFailure?: boolean | undefined;
+    /** When set, the NEXT `launchAttachedPreview` call REJECTS (the host
+     *  call failed BEFORE delivering a result — a Runtime may still have
+     *  spawned). One-shot per arming. */
+    readonly rejectLaunch?: boolean | undefined;
 }
 
 export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
@@ -27,8 +43,27 @@ export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
         readonly resolve: (result: PreviewRuntimeLaunchResult) => void;
     } | null = null;
     private exits = new Map<number, (exit: PreviewRuntimeExit) => void>();
+    private heldStop: { readonly runtimeId: PreviewRuntimeId; readonly settle: (exit: PreviewRuntimeExit) => void } | null = null;
+    private settledExitCount = 0;
+    private stopRequestFailureArmed = false;
+    private rejectLaunchArmed = false;
 
-    constructor(private readonly spec: FakePreviewRuntimeSpec) {}
+    /** Re-arm the one-shot `stopAttachedPreview` rejection (for "stop #2
+     *  also fails" scenarios). */
+    armStopRequestFailure(): void {
+        this.stopRequestFailureArmed = true;
+    }
+
+    constructor(private readonly spec: FakePreviewRuntimeSpec) {
+        this.stopRequestFailureArmed = this.spec.stopRequestFailure === true;
+        this.rejectLaunchArmed = this.spec.rejectLaunch === true;
+    }
+
+    /** Number of exit settlements actually delivered (natural exit or a
+     *  released stop) — a probe that the teardown was PROVEN complete. */
+    get resolvedExits(): number {
+        return this.settledExitCount;
+    }
 
     get launchCalls(): number {
         return this.launchCount;
@@ -43,6 +78,10 @@ export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
         sessionId: string,
     ): Promise<PreviewRuntimeLaunchResult> {
         this.launchCount += 1;
+        if (this.rejectLaunchArmed) {
+            this.rejectLaunchArmed = false;
+            return Promise.reject(new Error("the host call failed before delivering a launch result"));
+        }
         this.lastLaunchRecord = { candidate, sessionId };
         const script = this.scriptFor(this.launchCount);
         const result = script.kind === "launched" ? this.launched(script.runtimeIdentity) : script;
@@ -55,11 +94,22 @@ export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
     }
 
     async stopAttachedPreview(runtimeId: PreviewRuntimeId): Promise<PreviewRuntimeStopOutcome> {
+        // A rejected request is armed BEFORE anything settles: the host
+        // could not process the request, so the process may still exist.
+        if (this.stopRequestFailureArmed) {
+            this.stopRequestFailureArmed = false;
+            return Promise.reject(new Error("the host could not process the stop request"));
+        }
         const settle = this.exits.get(runtimeId.sequence);
         if (settle === undefined) {
             return { runtimeId, stopRequested: false, alreadySettled: true };
         }
         this.exits.delete(runtimeId.sequence);
+        if (this.spec.holdStopUntilRelease === true) {
+            this.heldStop = { runtimeId, settle };
+            return { runtimeId, stopRequested: true, alreadySettled: false };
+        }
+        this.settledExitCount += 1;
         settle({ runtimeId, kind: "stopped", exitCode: null });
         return { runtimeId, stopRequested: true, alreadySettled: false };
     }
@@ -74,13 +124,31 @@ export class FakePreviewRuntimeBoundary implements PreviewRuntimeBoundary {
         return true;
     }
 
-    exit(runtimeId: PreviewRuntimeId, exitCode = 0): boolean {
+    /** Release a stop held by `holdStopUntilRelease`: the process "exits"
+     *  now, settling the `exited` promise of that exact Runtime. */
+    releaseStop(): boolean {
+        const held = this.heldStop;
+        if (held === null) {
+            return false;
+        }
+        this.heldStop = null;
+        this.settledExitCount += 1;
+        held.settle({
+            runtimeId: held.runtimeId,
+            kind: this.spec.stopReleaseKind ?? "stopped",
+            exitCode: null,
+        });
+        return true;
+    }
+
+    exit(runtimeId: PreviewRuntimeId, exitCode = 0, kind: "exited" | "wait-failed" = "exited"): boolean {
         const settle = this.exits.get(runtimeId.sequence);
         if (settle === undefined) {
             return false;
         }
         this.exits.delete(runtimeId.sequence);
-        settle({ runtimeId, kind: "exited", exitCode });
+        this.settledExitCount += 1;
+        settle({ runtimeId, kind, exitCode });
         return true;
     }
 
