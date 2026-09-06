@@ -230,6 +230,11 @@ body {
 .gglab-body {
     display: grid;
     grid-template-columns: 252px minmax(0, 1fr) 336px;
+    /* Row 1 = the three side/canvas panels (fills the remaining height);
+       row 2 = the bottom panel (sized by its own height, or the 30px
+       collapsed strip). The panel spans all three columns (see
+       .gglab-bottom-panel). */
+    grid-template-rows: minmax(0, 1fr) auto;
     min-height: 0;
 }
 
@@ -246,6 +251,138 @@ body {
 
 .gglab-body-library-collapsed.gglab-body-inspector-collapsed {
     grid-template-columns: 48px minmax(0, 1fr) 48px;
+}
+
+/* ---- bottom panel (presentation dock) --------------------------------------
+   A full-width dock at the foot of the body: it spans all three columns on
+   row 2 (the side/canvas/inspector stay on row 1). The panel is a pure
+   PRESENTATION container — its four views project their owners' structured
+   facts (Output / Build / Preview are chronological event projections,
+   Problems is a replaceable current diagnostic snapshot); the panel itself
+   owns only the visible view, the open state, and the drag-resize height. */
+.gglab-bottom-panel {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--panel);
+    border-top: 1px solid var(--border-soft);
+}
+
+/* The drag handle: a visible 5px strip along the panel's top edge. */
+.gglab-bottom-panel-resize {
+    flex: 0 0 5px;
+    cursor: row-resize;
+}
+
+.gglab-bottom-panel-resize:hover {
+    background: var(--accent-soft);
+}
+
+.gglab-bottom-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border-soft);
+}
+
+.gglab-bottom-panel-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.gglab-bottom-panel-tab {
+    flex: 0 0 auto;
+    padding: 4px 10px;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid transparent;
+    border-radius: var(--r-1);
+    cursor: pointer;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-heading);
+    white-space: nowrap;
+}
+
+.gglab-bottom-panel-tab:hover {
+    color: var(--text);
+    background: var(--panel-hi);
+    border-color: var(--border-soft);
+}
+
+.gglab-bottom-panel-tab.active {
+    color: var(--text);
+    background: var(--panel-hi);
+    border-color: var(--border-soft);
+    font-weight: 700;
+}
+
+.gglab-bottom-panel-actions {
+    display: flex;
+    gap: 2px;
+}
+
+.gglab-bottom-panel-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 10px 12px;
+}
+
+.gglab-bottom-panel-placeholder {
+    margin: 0;
+    color: var(--faint);
+    font-size: var(--type-body);
+    line-height: var(--lh-body);
+}
+
+/* Collapsed: a 30px full-width strip with a horizontal re-open affordance. */
+.gglab-bottom-panel-collapsed {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    height: 30px;
+    background: var(--panel);
+    border-top: 1px solid var(--border-soft);
+}
+
+.gglab-bottom-panel-reopen {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid transparent;
+    border-radius: var(--r-1);
+    cursor: pointer;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-heading);
+}
+
+.gglab-bottom-panel-reopen:hover {
+    color: var(--text);
+    background: var(--panel-hi);
+    border-color: var(--border-soft);
+}
+
+/* While a drag-resize is in flight: the whole viewport reads as resize, and
+   text under the pointer is not selected. */
+body.gglab-resizing,
+body.gglab-resizing * {
+    cursor: row-resize !important;
+}
+
+body.gglab-resizing {
+    user-select: none;
 }
 
 /* Document tab strip — the open editing contexts (guidance #4/#5). Each tab

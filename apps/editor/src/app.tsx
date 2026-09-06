@@ -7,7 +7,7 @@
  * defined here: validation, port-level types, conformance, compatibility,
  * and emission all come from @gglab/shader-graph-core.
  */
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
 import {
     addConnection,
     removeConnection,
@@ -124,6 +124,13 @@ import {
 } from "./workspace-store.js";
 import { saveShortcutOf } from "./shortcuts.js";
 import { INSPECTOR_ZONES, INSPECTOR_ZONE_LABELS, inspectorZoneBadge, type InspectorZone, type InspectorZoneFacts } from "./inspector-tabs.js";
+import {
+    BOTTOM_PANEL_TABS,
+    BOTTOM_PANEL_DEFAULT_HEIGHT,
+    bottomPanelTabLabel,
+    clampBottomPanelHeight,
+    type BottomPanelTab,
+} from "./bottom-panel.js";
 // Type-only (erased at compile time): the official dialog option shapes,
 // used for the single documented boundary cast below. Runtime functions
 // are dynamically imported inside the desktop effect only.
@@ -273,6 +280,38 @@ export function App() {
      *  the zoned-out zones keep their state on their TAB (a projection of
      *  existing facts; the switch itself owns no state). */
     const [inspectorZone, setInspectorZone] = useState<InspectorZone>("contract");
+    // Bottom panel — layout session state, the same model as the two rails
+    // (the app owns which view is visible, whether the panel is open, and the
+    // drag-resize height). Pure presentation: it concedes no Build, Preview,
+    // or Problems authority, and it must never enter the WorkspaceStore or a
+    // DocumentSession (the views in later steps only project their owners'
+    // structured facts, exactly as the inspector zones do).
+    const [bottomPanelOpen, setBottomPanelOpen] = useState(true);
+    const [bottomPanelTab, setBottomPanelTab] = useState<BottomPanelTab>("output");
+    const [bottomPanelHeight, setBottomPanelHeight] = useState(BOTTOM_PANEL_DEFAULT_HEIGHT);
+    // Drag-resize from the panel's top edge: the pointer-down captures the
+    // starting position + height, a window-level move updates the CLAMPED
+    // height, and up/cancel ends the gesture. The handle sits on the TOP of
+    // the panel, so dragging UP grows it. The gesture is pure presentation —
+    // it touches only `bottomPanelHeight`.
+    function beginBottomPanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
+        event.preventDefault();
+        const startY = event.clientY;
+        const startHeight = bottomPanelHeight;
+        const onMove = (move: PointerEvent): void => {
+            setBottomPanelHeight(clampBottomPanelHeight(startHeight + (startY - move.clientY)));
+        };
+        const end = (): void => {
+            window.removeEventListener("pointermove", onMove);
+            window.removeEventListener("pointerup", end);
+            window.removeEventListener("pointercancel", end);
+            window.document.body.classList.remove("gglab-resizing");
+        };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", end);
+        window.addEventListener("pointercancel", end);
+        window.document.body.classList.add("gglab-resizing");
+    }
     // The tab the user asked to close while it is dirty (a confirm guard).
     // `null` = no pending close. Closing discards only if the user
     // explicitly confirms; otherwise the document stays open.
@@ -2466,6 +2505,63 @@ export function App() {
                         </div>
                     )}
                 </aside>
+                {/* Bottom panel — a presentation dock (shell only). The four
+                    views are placeholders; each arrives with its own step and
+                    will project its owner's structured facts (Output / Build /
+                    Preview as chronological event projections, Problems as a
+                    replaceable current diagnostic snapshot). The panel owns
+                    only its visible view, open state, and drag height — it
+                    concedes no Build, Preview, or Problems authority. */}
+                {bottomPanelOpen ? (
+                    <section className="gglab-bottom-panel" style={{ height: `${bottomPanelHeight}px` }} aria-label="Bottom panel">
+                        <div
+                            className="gglab-bottom-panel-resize"
+                            role="separator"
+                            aria-orientation="horizontal"
+                            aria-label="Resize the bottom panel"
+                            onPointerDown={beginBottomPanelResize}
+                        />
+                        <div className="gglab-bottom-panel-header">
+                            <div className="gglab-bottom-panel-tabs" role="tablist" aria-label="Bottom panel views">
+                                {BOTTOM_PANEL_TABS.map((tab) => (
+                                    <button
+                                        key={tab.id}
+                                        type="button"
+                                        role="tab"
+                                        aria-selected={bottomPanelTab === tab.id}
+                                        className={bottomPanelTab === tab.id ? "gglab-bottom-panel-tab active" : "gglab-bottom-panel-tab"}
+                                        onClick={() => setBottomPanelTab(tab.id)}
+                                    >
+                                        {tab.label}
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="gglab-bottom-panel-actions" role="group" aria-label="Bottom panel controls">
+                                <Button variant="icon" size="icon" aria-label="Collapse the bottom panel" title="Collapse the bottom panel" onClick={() => setBottomPanelOpen(false)}>
+                                    <PanelCloseIcon />
+                                </Button>
+                            </div>
+                        </div>
+                        <div className="gglab-bottom-panel-body" role="tabpanel" aria-label={bottomPanelTabLabel(bottomPanelTab)}>
+                            <p className="gglab-bottom-panel-placeholder">
+                                {bottomPanelTabLabel(bottomPanelTab)} — placeholder view; its content arrives with its own step.
+                            </p>
+                        </div>
+                    </section>
+                ) : (
+                    <div className="gglab-bottom-panel-collapsed" aria-label="Bottom panel (collapsed)">
+                        <button
+                            type="button"
+                            className="gglab-bottom-panel-reopen"
+                            onClick={() => setBottomPanelOpen(true)}
+                            title="Expand the bottom panel"
+                            aria-label="Expand the bottom panel"
+                        >
+                            <PanelOpenIcon />
+                            <span>Expand panel</span>
+                        </button>
+                    </div>
+                )}
             </div>
             {saveConflict !== null && (
                 <div
