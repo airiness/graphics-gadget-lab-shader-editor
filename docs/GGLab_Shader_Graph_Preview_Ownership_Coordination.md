@@ -296,6 +296,11 @@ Contract:
 - `reduce` is pure with respect to the store. A thrown exception leaves the
   current snapshot unchanged, publishes nothing, and propagates to the caller
   (**strong exception safety**).
+- A successful commit is DURABLE from the moment `next` differs from the
+  current snapshot (the assignment precedes every notification): a subscriber
+  exception is NOT a transaction rollback — the commit stands, the error
+  propagates to the `apply` caller, and the subscribers after the throwing
+  one are not notified (propagate and stop; never silently swallowed).
 - Reentrant `apply` while another `apply` is reducing or publishing is an
   invariant violation and is rejected. Subscribers observe committed state;
   they do not start nested transactions from the notification call stack.

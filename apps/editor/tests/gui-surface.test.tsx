@@ -978,13 +978,25 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(body).toContain("invalidateRevisionDerivedState()");
         });
 
-        it("a descriptor change invalidates the emission preview too — emission = f(document, descriptor)", () => {
+        it("a descriptor change invalidates ALL open documents' emissions in ONE store transaction — emission = f(document, descriptor)", () => {
             const app = read("../src/app.tsx");
             const body = app.match(/const onDescriptorStateChange = \([^\n]*\n[\s\S]*?\n\s{4}\};/)?.[0] ?? "";
             expect(body).toMatch(/if \(!Object\.is\(next, descriptorState\)\)/);
-            expect(body).toContain("invalidateRevisionDerivedState()");
-            expect(body).toContain("setDescriptorState(next)");
+            // The descriptor is WORKSPACE-scoped: the same authoringStore.apply
+            // commits the new profileDescriptor AND invalidates every open
+            // document's presentation.emission — never the active-document
+            // helper (which would leave other tabs' old-descriptor emissions
+            // posing as current).
+            expect(body).toContain("authoringStore.apply(");
+            expect(body).toContain("descriptorCommit(state, next.kind === \"ready\" ? next.descriptor : null)");
+            expect(body).not.toContain("invalidateRevisionDerivedState()");
             expect(app).toContain("onStateChange={onDescriptorStateChange}");
+            // The workspace-global invalidation law lives in one transition:
+            const store = read("../src/workspace-store.ts");
+            expect(store).toMatch(/export function descriptorCommit\(/);
+            expect(store).toContain("document.presentation.emission !== null");
+            expect(store).toContain("presentation: { ...document.presentation, emission: null }");
+            expect(store).toContain("profileDescriptor: descriptor");
         });
 
         it("discards the redo branch when a new intent is recorded after an undo", () => {
@@ -1033,11 +1045,17 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(app).toContain("activateWorkspaceDocument(current, existing.sessionId)");
             // Closing a tab is a separate, guarded path through the reducer.
             expect(app).toMatch(/closeWorkspaceDocument\(current, documentSessionId\)/);
-            // An async save completion is identity-bound and cannot steal
-            // the path/baseline of a replacement document.
+            // An async save completion is identity-bound (the request
+            // captures its originatingSessionId at intent time) and guards
+            // against NO shadow ref: the current active identity is read
+            // LIVE from the Workspace store at decision time — a shadow ref
+            // could miss a deduped open that activated an EXISTING session.
             expect(app).toContain("const savedSessionId = session.sessionId");
-            expect(app).toContain("currentDocumentSessionId.current = replacement.sessionId");
-            expect(app).toContain("if (currentDocumentSessionId.current !== savedSessionId)");
+            expect(app).toMatch(/const activeSessionIs = \(documentSessionId: DocumentSession\["sessionId"\]\): boolean/);
+            expect(app).toContain("activeWorkspaceDocument(authoringStore.getSnapshot().session)");
+            expect(app).toContain("if (!activeSessionIs(savedSessionId))");
+            expect(app).not.toContain("currentDocumentSessionId");
+            expect(app).not.toContain("workspaceRef");
             expect(app).toMatch(/updateDocumentSession\(\s*savedSessionId/);
             expect(app).toContain("channel.openDocument()");
             expect(app).toContain("snapshot.canonicalDocumentUri");

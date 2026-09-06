@@ -119,6 +119,7 @@ import {
 } from "./workspace-session.js";
 import {
     WorkspaceStore,
+    descriptorCommit,
     type WorkspaceAuthoringState,
 } from "./workspace-store.js";
 import { saveShortcutOf } from "./shortcuts.js";
@@ -230,14 +231,18 @@ export function App() {
                 result,
             };
         });
-    // Async host completions consult this synchronously updated identity.
-    // A stale save must not update another document's baseline or let a
-    // close guard close the replacement document.
-    const currentDocumentSessionId = useRef(session.sessionId);
-    const workspaceRef = useRef(workspace);
-    useEffect(() => {
-        workspaceRef.current = workspace;
-    }, [workspace]);
+    // The Workspace store is the ONE authority for the current active
+    // document (and every other Workspace fact). Async host completions
+    // re-read this LIVE at decision time — a shadow ref (updated by effect
+    // or written at intent time) can observe a store snapshot from before a
+    // committed transition, or miss a deduped open that activated an
+    // EXISTING session — and would then misfire its stale-completion guard.
+    // A request that must be bound to its origin captures that identity at
+    // intent time instead (e.g. `savedSessionId`, `conflict.sessionId`).
+    const activeSessionIs = (documentSessionId: DocumentSession["sessionId"]): boolean => {
+        const active = activeWorkspaceDocument(authoringStore.getSnapshot().session);
+        return active !== null && active.sessionId === documentSessionId;
+    };
     const history = session.history;
     const document = history.present;
     function updateDocumentSession(
@@ -489,9 +494,9 @@ export function App() {
             canonicalUri,
             fileRevisionToken,
         );
-        currentDocumentSessionId.current = replacement.sessionId;
         // Open co-existing: never close the active document. The reducer
-        // activates the new tab (or the same one) and keeps the rest.
+        // activates the new tab (or the same one) and keeps the rest — the
+        // activation ITSELF is the active-identity commit (no shadow write).
         applyWorkspaceTransition((current) => openWorkspaceDocument(current, replacement));
         setInspectorOpen(true);
         setInspectorZone("contract");
@@ -509,7 +514,6 @@ export function App() {
      * switched-away tab keeps its own history, baseline, and presentation
      * (selection/focus/emission/notes) in its DocumentSession record. */
     const onActivateTab = (documentSessionId: DocumentSessionId): void => {
-        currentDocumentSessionId.current = documentSessionId;
         applyWorkspaceTransition((current) => activateWorkspaceDocument(current, documentSessionId));
         requestAnimationFrame(() => fitRef.current?.());
     };
@@ -812,7 +816,6 @@ export function App() {
                         snapshot.canonicalDocumentUri,
                         snapshot.fileRevisionToken,
                     );
-                    currentDocumentSessionId.current = replacement.sessionId;
                     return openWorkspaceDocument(current, replacement);
                 });
                 setInspectorOpen(true);
@@ -857,11 +860,13 @@ export function App() {
         canonicalDocumentUri: outcome.canonicalDocumentUri,
         observedFileRevisionToken: outcome.observedFileRevisionToken,
         destinationOwnerSessionId:
-            workspaceRef.current.documents.find(
-                (candidate) =>
-                    candidate.canonicalUri === outcome.canonicalDocumentUri &&
-                    candidate.sessionId !== savedSessionId,
-            )?.sessionId ?? null,
+            authoringStore
+                .getSnapshot()
+                .session.documents.find(
+                    (candidate) =>
+                        candidate.canonicalUri === outcome.canonicalDocumentUri &&
+                        candidate.sessionId !== savedSessionId,
+                )?.sessionId ?? null,
         localText,
         defaultName,
     });
@@ -875,7 +880,7 @@ export function App() {
             (current) => sessionSaved(current, savedSessionId, snapshot),
             "ignore",
         );
-        if (currentDocumentSessionId.current !== savedSessionId) {
+        if (!activeSessionIs(savedSessionId)) {
             if (saveConflictRef.current?.sessionId === savedSessionId) {
                 dismissSaveConflict();
             }
@@ -925,8 +930,9 @@ export function App() {
             if (outcome.kind === "conflict") {
                 // The initiating document may have been replaced while a
                 // native dialog/write was pending. Never put its conflict in
-                // front of a different active document.
-                if (currentDocumentSessionId.current !== savedSessionId) {
+                // front of a different active document (LIVE store read — a
+                // deduped open that activated THIS session is NOT stale).
+                if (!activeSessionIs(savedSessionId)) {
                     return false;
                 }
                 showSaveConflict(pendingConflict(savedSessionId, origin, text, name, outcome));
@@ -959,7 +965,7 @@ export function App() {
             setOperationNotes((previous) => [...previous, "Save conflict cancelled; the local document remains unchanged."]);
             return;
         }
-        if (currentDocumentSessionId.current !== conflict.sessionId) {
+        if (!activeSessionIs(conflict.sessionId)) {
             dismissSaveConflict();
             return;
         }
@@ -969,7 +975,7 @@ export function App() {
         try {
             if (action === "reload") {
                 const snapshot = await channel.readDocumentSnapshot(conflict.canonicalDocumentUri);
-                if (currentDocumentSessionId.current !== conflict.sessionId) {
+                if (!activeSessionIs(conflict.sessionId)) {
                     dismissSaveConflict();
                     return;
                 }
@@ -1038,7 +1044,7 @@ export function App() {
                 return; // the conflict prompt stays; no choice was completed
             }
             if (outcome.kind === "conflict") {
-                if (currentDocumentSessionId.current !== conflict.sessionId) {
+                if (!activeSessionIs(conflict.sessionId)) {
                     dismissSaveConflict();
                     return;
                 }
@@ -1634,23 +1640,24 @@ export function App() {
     };
 
     const onDescriptorStateChange = (next: DescriptorPanelState): void => {
-        // Emission = f(document, descriptor): the descriptor is the
-        // preview's OTHER authority input, so a descriptor change
-        // invalidates the revision-derived state exactly as a document
-        // change does. The identity check keeps a pure re-set (the very
-        // same state object) an honest no-op.
+        // The descriptor is a WORKSPACE-scoped authority: every open
+        // document's emission snapshot is f(document, D-old) and must never
+        // survive the commit as "current" when the descriptor moves. One
+        // SYNCHRONOUS Workspace transaction therefore commits the new fact
+        // AND invalidates ALL open-document `presentation.emission` snapshots
+        // — workspace-global invalidation in the store, never the
+        // active-document helper (which would leave another tab's old-
+        // descriptor emission behind). The identity check keeps a pure re-set
+        // (the very same state object) an honest no-op.
         if (!Object.is(next, descriptorState)) {
-            invalidateRevisionDerivedState();
-            // The committed descriptor fact flows through the Workspace's
-            // STORE AUTHORITY (the single current descriptor); the panel's
-            // loading/error presentation stays in its own state.
-            authoringStore.apply((state) => {
-                const descriptor = next.kind === "ready" ? next.descriptor : null;
-                return {
-                    next: descriptor === state.profileDescriptor ? state : { ...state, profileDescriptor: descriptor },
-                    result: null,
-                };
-            });
+            // One synchronous Workspace transaction: commit the new
+            // descriptor fact AND invalidate every open document's emission
+            // snapshot (descriptorCommit — workspace-global, never the
+            // active-document helper).
+            authoringStore.apply((state) => ({
+                next: descriptorCommit(state, next.kind === "ready" ? next.descriptor : null),
+                result: null,
+            }));
         }
         setDescriptorState(next);
     };

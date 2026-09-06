@@ -69,9 +69,19 @@ export class WorkspaceStore<TState> {
      *   state, never an in-flight one).
      * - `next === current`  -> the result is returned with NO new snapshot
      *   and NO notification.
-     * - `reduce` (or a subscriber) throws -> the current snapshot stays
-     *   unchanged, nothing is published, and the error propagates
-     *   (strong exception safety; the guard always releases).
+     *
+     * Exception safety is asymmetric on purpose:
+     *
+     * - A REDUCER failure commits nothing: the current snapshot stays
+     *   unchanged, no subscriber is ever notified, and the error
+     *   propagates to the caller (strong exception safety; the guard
+     *   always releases and the store stays usable).
+     * - A successful commit is DURABLE the moment `next` differs from the
+     *   current snapshot: the assignment happens before ANY subscriber
+     *   runs. A subscriber exception is NOT a transaction rollback — the
+     *   commit stands, the error propagates to the `apply` caller, and the
+     *   subscribers after the throwing one are not notified (propagate and
+     *   stop; never silently swallowed, never partially retried).
      */
     readonly apply = <TResult>(
         reduce: (current: TState) => StoreApply<TState, TResult>,
@@ -95,4 +105,35 @@ export class WorkspaceStore<TState> {
             this.inFlight = false;
         }
     };
+}
+
+/**
+ * The Workspace-authoring transition for a DEScriptor commit — the
+ * workspace-scoped rule the app composes inside ONE `authoringStore.apply`
+ * (one synchronous transaction):
+ *
+ *   commit the new descriptor fact AND invalidate EVERY open document's
+ *   `presentation.emission` snapshot.
+ *
+ * Every emission is f(document, D-old); when the descriptor moves, none may
+ * survive the commit posing as current — including the emissions of INACTIVE
+ * documents. This is a workspace-global invalidation, never an
+ * active-document helper. The result preserves identity when nothing
+ * actually changes (no manufactured snapshot, no notification).
+ */
+export function descriptorCommit(
+    state: WorkspaceAuthoringState,
+    descriptor: SurfaceProfileDescriptor | null,
+): WorkspaceAuthoringState {
+    const documents = state.session.documents.map((document) =>
+        document.presentation.emission !== null
+            ? { ...document, presentation: { ...document.presentation, emission: null } }
+            : document,
+    );
+    const invalidated = documents.some((updated, index) => updated !== state.session.documents[index]);
+    const session = invalidated ? { ...state.session, documents } : state.session;
+    if (descriptor === state.profileDescriptor && session === state.session) {
+        return state;
+    }
+    return { ...state, session, profileDescriptor: descriptor };
 }
