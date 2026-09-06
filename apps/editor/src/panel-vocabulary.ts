@@ -12,15 +12,23 @@
  *    - `BuildRow` / `buildChronology` over the editor's `NativeBuildSession`
  *      — settled AND in-flight attempts, both carried by reference, ordered
  *      by the line's own authority (the `BuildId` sequence, never by
- *      arrival position);
+ *      arrival position). Settled rows carry the owner's own attempt-state
+ *      vocabulary (current / stale / last-good / failed / canceled, judged
+ *      by the owner's line rules against the session's issued anchor);
+ *      in-flight rows are presented as `in-flight`;
  *    - `PreviewRow` / `previewChronology` over the editor's
  *      `PreviewBuildSession` — every attempt (pending and settled), ordered
- *      by the line's own authority (the `attemptSequence`);
+ *      by the line's own authority (the `attemptSequence`). The
+ *      record/session pairing is produced INSIDE this projection only —
+ *      a row carries its session binding, and downstream projections work
+ *      from the row, so another session's identity can never be mixed in;
  *    - `ProblemSnapshotEntry` / `ProblemSnapshot` over the diagnostic
  *      layers — the REPLACEABLE CURRENT snapshot, never an append-only log.
- *      Toolchain entries are projected FROM their enclosing attempt record
- *      (the correlation and the severity are derived from that record and
- *      its outcome context, not supplied);
+ *      Toolchain entries are projected FROM the enclosing attempt only:
+ *      failure-envelope diagnostics enter as errors (the settlement says
+ *      so — the diagnostic contract itself carries no severity, and the
+ *      panel does not invent one); a successful settlement's notes stay
+ *      structured evidence with the owner's outcome on the chronology row;
  *    - `OutputEvent`, the Output view's own presentation line (a simple
  *      general chronology with its own presentation sequence);
  *  - the shared correlation helpers (`correlationRefines`,
@@ -65,16 +73,18 @@
  * Headless by construction: no React, no DOM, no host — unit-testable and
  * reusable by any frontend that presents these owners' facts.
  */
-import type { DiagnosticSeverity, ShaderGraphDiagnostic } from "@gglab/shader-graph-core";
 import type {
     AttemptOutcome,
     AttemptRecord,
+    AttemptState,
     BuildId,
     BuildIntent,
     PreviewAttemptOutcome,
     PreviewAttemptRecord,
     ToolDiagnostic,
 } from "@gglab/shader-toolchain-client";
+import { reportBuildLine } from "@gglab/shader-toolchain-client";
+import type { DiagnosticSeverity, ShaderGraphDiagnostic } from "@gglab/shader-graph-core";
 import type { InFlightBuild, NativeBuildSession } from "./native-build-session.js";
 import type { PreviewBuildSession } from "./preview-build-session.js";
 import type { BottomPanelTab } from "./bottom-panel.js";
@@ -200,9 +210,13 @@ export interface InFlightBuildRow {
 }
 
 /** One SETTLED row of the Build chronology: the owner's attempt record,
- *  carried by reference, under the correlation derived from that record. */
+ *  carried by reference, under the correlation derived from that record and
+ *  the attempt state the owner's line rules assign to it. */
 export interface SettledBuildRow {
-    readonly state: "settled";
+    /** The owner's own attempt-state vocabulary: exactly one of
+     *  current / stale / last-good / failed / canceled — judged by the
+     *  owner's line rules, not re-interpreted by the panel. */
+    readonly state: AttemptState;
     readonly buildId: BuildId;
     readonly intent: BuildIntent;
     readonly record: AttemptRecord;
@@ -210,9 +224,11 @@ export interface SettledBuildRow {
     readonly correlation: EvidenceCorrelation;
 }
 
-/** One row of the Build chronology: either settlement state, both owned by
- *  the owner's session — the panel presents both, it does not keep its own
- *  in-flight bookkeeping. */
+/** One row of the Build chronology: in-flight attempts present as
+ *  `in-flight` (the owner's report discipline for issued-and-not-settled
+ *  work), settled attempts present under the owner's attempt-state
+ *  vocabulary. Both are owned by the owner's session — the panel presents,
+ *  it does not keep its own in-flight bookkeeping or re-judge states. */
 export type BuildRow = InFlightBuildRow | SettledBuildRow;
 
 function buildCorrelationFrom(record: { readonly buildId: BuildId; readonly intent: BuildIntent }): EvidenceCorrelation {
@@ -233,19 +249,42 @@ function buildCorrelationFrom(record: { readonly buildId: BuildId; readonly inte
  * is NOT chronology (a slow old attempt may land after a newer one) — the
  * ordering is judged by the BuildId sequence, never by position. A build
  * in flight is a row in this chronology, not an invisible gap: it is
- * presented as `in-flight` until its owner settles it. Returns a fresh
- * array; the owner's session is untouched.
+ * presented as `in-flight` until its owner settles it. Each settled row
+ * carries the attempt state assigned by the OWNER'S line rules (current /
+ * stale / last-good / failed / canceled, judged against the session's
+ * issued-anchor intent) — the presentation layer renders these states, it
+ * never re-interprets them. Returns a fresh array; the owner's session is
+ * untouched.
  */
 export function buildChronology(session: NativeBuildSession): readonly BuildRow[] {
+    const anchor = session.lastIssued;
+    if (anchor === null) {
+        // The session store's own invariant: once an attempt lands in the
+        // line, a last-issued anchor exists (issue precedes settlement).
+        // A line without one is a violated invariant — refuse to judge
+        // currentness instead of fabricating a state.
+        if (session.line.attempts.length > 0) {
+            throw new Error("a settled build line must carry its issued anchor for state judgment");
+        }
+        return [];
+    }
+    // The owner's own line rules assign exactly one state to every settled
+    // attempt in the line (current / stale / last-good / failed /
+    // canceled); the panel reads those assignments, it does not derive its
+    // own.
+    const report = reportBuildLine(session.line, anchor.intent);
     const settled: BuildRow[] = session.line.attempts.map(
-        (record): SettledBuildRow => ({
-            state: "settled",
-            buildId: record.buildId,
-            intent: record.intent,
-            record,
-            outcome: record.outcome,
-            correlation: buildCorrelationFrom(record),
-        }),
+        (record): SettledBuildRow => {
+            const state = report.states.find((entry) => entry.buildId.sequence === record.buildId.sequence)?.state;
+            return {
+                state: state === undefined ? "stale" : state,
+                buildId: record.buildId,
+                intent: record.intent,
+                record,
+                outcome: record.outcome,
+                correlation: buildCorrelationFrom(record),
+            };
+        },
     );
     const inFlight: BuildRow[] = session.inFlight.map(
         (record): InFlightBuildRow => ({
@@ -256,9 +295,7 @@ export function buildChronology(session: NativeBuildSession): readonly BuildRow[
             correlation: buildCorrelationFrom(record),
         }),
     );
-    return [...settled, ...inFlight].sort(
-        (a, b) => a.buildId.sequence - b.buildId.sequence,
-    );
+    return [...settled, ...inFlight].sort((a, b) => a.buildId.sequence - b.buildId.sequence);
 }
 
 // ---- Preview chronology (owner: the editor's Preview build session) --------
@@ -272,18 +309,21 @@ export interface PreviewRow {
 }
 
 /**
- * Project one preview-line attempt record into a Preview row. The
- * correlation is derived: the record's build id, its attempt sequence, the
- * session identity that owns the line, the record's intent generated-source
- * identity — and the publication identity ONLY when this attempt actually
- * published (a pending or failed attempt carries none). The document
- * context axes stay absent: a preview attempt's origin is fixed at issue
- * time, and the owner record keeps no origin binding to project from.
+ * Project one preview-line attempt record into a Preview row, bound to the
+ * session that OWNS the line. The correlation is derived: the record's
+ * build id, its attempt sequence, the session identity that owns the line,
+ * the record's intent generated-source identity — and the publication
+ * identity ONLY when this attempt actually published (a pending or failed
+ * attempt carries none). The document context axes stay absent: a preview
+ * attempt's origin is fixed at issue time, and the owner record keeps no
+ * origin binding to project from.
+ *
+ * Deliberately NOT a public entry point: the record and its session must
+ * be paired only inside the owner projection (a row carries the binding,
+ * so downstream projections of a row can never mix another session's
+ * identity into the row's correlation).
  */
-export function previewRowFromAttempt(
-    session: PreviewBuildSession,
-    record: PreviewAttemptRecord,
-): PreviewRow {
+function previewRowFromAttempt(session: PreviewBuildSession, record: PreviewAttemptRecord): PreviewRow {
     const publicationId =
         record.state === "settled" && record.outcome.kind === "published" ? record.outcome.envelope.publicationId : null;
     return {
@@ -443,105 +483,102 @@ export function problemEntriesFromGraphDiagnostics(
     }));
 }
 
-/** The severity a tool-chain diagnostic carries, decided by the OUTCOME
- *  context that encloses it (not claimed by the caller): a failure's
- *  diagnostics are errors; a success's notes are warnings. */
-function toolDiagnosticSeverity(outcome: AttemptOutcome | PreviewAttemptOutcome): DiagnosticSeverity {
-    return outcome.kind === "failed" ? "error" : "warning";
-}
-
 /**
- * The diagnostics an attempt's settlement envelope reports (a cancelled
- * attempt, or a termination without a readable envelope, reports none).
+ * The diagnostics a FAILURE settlement's envelope reports — and nothing
+ * else. The tool diagnostic contract carries NO severity field, so the
+ * panel must not invent one: a diagnostic only enters the Problems view
+ * where the owner's settlement contract makes it a failure payload (a
+ * failure envelope — an error, per that very settlement). Diagnostics
+ * accompanying a successful settlement are structured notes that remain
+ * with the owner's outcome on the chronology row — visible to the view
+ * through the owner's own vocabulary, not re-labelled by the panel.
+ * A canceled attempt, a termination without an envelope, or a successful
+ * settlement projects none here.
  */
-function envelopeDiagnostics(outcome: AttemptOutcome | PreviewAttemptOutcome): readonly ToolDiagnostic[] {
-    if (outcome.kind === "canceled") {
-        return [];
+function failedEnvelopeDiagnostics(
+    outcome: AttemptOutcome | PreviewAttemptOutcome,
+): readonly ToolDiagnostic[] | null {
+    if (outcome.kind === "failed" && "envelope" in outcome) {
+        return outcome.envelope.diagnostics;
     }
-    if (outcome.kind === "failed") {
-        return "envelope" in outcome ? outcome.envelope.diagnostics : [];
-    }
-    // A succeeded / published settlement carries its envelope.
-    return outcome.envelope.diagnostics;
+    return null;
 }
 
 /**
  * Project the TOOLCHAIN diagnostics of one settled build attempt into
- * snapshot entries. Everything is derived from the ENCLOSING owner record
- * and its outcome — never supplied: the correlation carries the attempt's
- * own build id and its intent's generated source identity (the diagnostic
- * may add no location fact of its own, and the enclosure supplies the
- * missing generated-source axis anyway); the severity is decided by the
- * settlement (failure diagnostics are errors, success notes are warnings);
- * the location takes the diagnostic's own source identity when it reports
- * one, else stays honestly `unplaced`. An in-flight or diagnostic-free
- * attempt projects zero entries. Entry identities are deterministic over
- * the enclosing attempt's identity.
+ * snapshot entries. Only a FAILURE ENVELOPE projects entries — its
+ * diagnostics are errors (the settlement says so; the panel adds no
+ * interpretation). Everything else — a cancellation, a termination without
+ * an envelope, a successful settlement's notes — projects zero entries and
+ * stays with the owner's outcome. The correlation is derived from the
+ * ENCLOSING record — the attempt's own build id, its intent's generated
+ * source identity (the diagnostic may carry no location fact of its own,
+ * and the enclosure supplies the missing generated-source axis) — never
+ * supplied. The location takes the diagnostic's own source identity when
+ * it reports one, else stays honestly `unplaced`. Entry identities are
+ * deterministic over the enclosing attempt's identity.
  */
-export function problemEntriesFromBuildAttempt(
-    record: AttemptRecord,
-): readonly ProblemSnapshotEntry[] {
-    const diagnostics = envelopeDiagnostics(record.outcome);
-    const severity = toolDiagnosticSeverity(record.outcome);
+export function problemEntriesFromBuildAttempt(record: AttemptRecord): readonly ProblemSnapshotEntry[] {
+    const diagnostics = failedEnvelopeDiagnostics(record.outcome);
+    if (diagnostics === null) {
+        return [];
+    }
     const correlation: EvidenceCorrelation = {
         ...EMPTY_EVIDENCE_CORRELATION,
         generatedSourceIdentity: record.intent.sourceIdentity,
         buildId: record.buildId,
     };
-    return diagnostics.map((diagnostic, index) => ({
-        identity: `build:${record.buildId.sequence}:${diagnostic.sourceIdentity ?? "unplaced"}@${index}`,
-        severity,
-        code: null,
-        text: diagnostic.message,
-        location:
-            diagnostic.sourceIdentity !== undefined
-                ? { kind: "generated-source", sourceIdentity: diagnostic.sourceIdentity }
-                : { kind: "unplaced" },
-        correlation,
-    }));
+    return diagnostics.map(
+        (diagnostic, index): ProblemSnapshotEntry => ({
+            identity: `build:${record.buildId.sequence}:${diagnostic.sourceIdentity ?? "unplaced"}@${index}`,
+            severity: "error",
+            code: null,
+            text: diagnostic.message,
+            location:
+                diagnostic.sourceIdentity !== undefined
+                    ? { kind: "generated-source", sourceIdentity: diagnostic.sourceIdentity }
+                    : { kind: "unplaced" },
+            correlation,
+        }),
+    );
 }
 
 /**
- * Project the TOOLCHAIN diagnostics of one settled PREVIEW attempt into
- * snapshot entries. Everything is derived from the ENCLOSING owner record
- * and session — never supplied: the correlation carries the attempt's own
- * build id, attempt sequence, the session identity, the intent's
- * generated-source identity, and the publication identity only when this
- * attempt published; the severity is decided by the settlement. An
- * in-flight (pending) or diagnostic-free attempt projects zero entries.
- * Entry identities are deterministic over the enclosing attempt's
- * sequence.
+ * Project the TOOLCHAIN diagnostics of one PREVIEW attempt into snapshot
+ * entries, working from a Preview ROW — the safely-bound pairing of the
+ * record with the session that owns the line (built by the preview
+ * chronology projection, where the record and its session identity are
+ * coupled once). Only a FAILURE ENVELOPE projects entries — its diagnostics
+ * are errors (the settlement says so); a published settlement's notes, a
+ * cancellation, or a termination without an envelope projects zero entries
+ * and stays with the owner's outcome. The correlation is the row's own —
+ * the attempt's build id, attempt sequence, the owning session identity,
+ * the intent's generated-source identity — carried over, never re-derived
+ * or re-paired. Entry identities are deterministic over the enclosing
+ * attempt's sequence.
  */
-export function problemEntriesFromPreviewAttempt(
-    session: PreviewBuildSession,
-    record: PreviewAttemptRecord,
-): readonly ProblemSnapshotEntry[] {
+export function problemEntriesFromPreviewAttempt(row: PreviewRow): readonly ProblemSnapshotEntry[] {
+    const record = row.record;
     if (record.state !== "settled") {
         return [];
     }
-    const outcome = record.outcome;
-    const diagnostics = envelopeDiagnostics(outcome);
-    const severity = toolDiagnosticSeverity(outcome);
-    const publicationId = outcome.kind === "published" ? outcome.envelope.publicationId : null;
-    const correlation: EvidenceCorrelation = {
-        ...EMPTY_EVIDENCE_CORRELATION,
-        generatedSourceIdentity: record.intent.generatedSourceIdentity,
-        buildId: record.buildId,
-        previewAttemptSequence: record.attemptSequence,
-        previewSessionId: session.sessionId,
-        publicationId,
-    };
-    return diagnostics.map((diagnostic, index) => ({
-        identity: `preview:${record.attemptSequence}:${diagnostic.sourceIdentity ?? "unplaced"}@${index}`,
-        severity,
-        code: null,
-        text: diagnostic.message,
-        location:
-            diagnostic.sourceIdentity !== undefined
-                ? { kind: "generated-source", sourceIdentity: diagnostic.sourceIdentity }
-                : { kind: "unplaced" },
-        correlation,
-    }));
+    const diagnostics = failedEnvelopeDiagnostics(record.outcome);
+    if (diagnostics === null) {
+        return [];
+    }
+    return diagnostics.map(
+        (diagnostic, index): ProblemSnapshotEntry => ({
+            identity: `preview:${record.attemptSequence}:${diagnostic.sourceIdentity ?? "unplaced"}@${index}`,
+            severity: "error",
+            code: null,
+            text: diagnostic.message,
+            location:
+                diagnostic.sourceIdentity !== undefined
+                    ? { kind: "generated-source", sourceIdentity: diagnostic.sourceIdentity }
+                    : { kind: "unplaced" },
+            correlation: row.correlation,
+        }),
+    );
 }
 
 /** A fresh snapshot over the given entries (copied — the caller's array is
