@@ -131,6 +131,7 @@ import {
     BOTTOM_PANEL_MIN_HEIGHT,
     bottomPanelTabLabel,
     clampBottomPanelHeight,
+    panelEffectiveMax,
     resolvePanelMaxHeight,
     type BottomPanelTab,
 } from "./bottom-panel.js";
@@ -297,20 +298,22 @@ export function App() {
     const panelBodyRef = useRef<HTMLDivElement | null>(null);
     // The in-flight resize gesture, if any. A single gesture is current at a
     // time; its identity (pointerId) guards against a stale/other pointer.
-    const resizeGestureRef = useRef<{ readonly pointerId: number; readonly startY: number; readonly startHeight: number; readonly effectiveMax: number } | null>(null);
-    // The MEASURED available height of `.gglab-body` (px). This is presentation
-    // state (a live layout measurement), not an authority: it only bounds the
-    // panel height and the resize slider's ARIA range, and is continuously
-    // refreshed by the body's ResizeObserver (see below).
-    const [measuredBodyHeight, setMeasuredBodyHeight] = useState(0);
-
-    // The effective max for the CURRENT available height: the measured body
-    // height minus the Canvas floor, then the absolute ceiling. Reading the
-    // measured body here (not a constant) is what keeps the Canvas from being
-    // pressed away whenever the window changes — not only mid-gesture.
-    function panelEffectiveMax(): number {
-        return resolvePanelMaxHeight(measuredBodyHeight);
-    }
+    // It intentionally holds NO effective max: the body constraint may change
+    // while the gesture is active (a window resize), so every move must use
+    // the CURRENT measured constraint, never a snapshot taken at pointerdown.
+    const resizeGestureRef = useRef<{ readonly pointerId: number; readonly startY: number; readonly startHeight: number } | null>(null);
+    // The MEASURED available height of `.gglab-body` (px), or `null` until the
+    // body has been measured at least once. This is presentation state (a live
+    // layout measurement), not an authority: it only bounds the panel height
+    // and the resize slider's ARIA range, and is continuously refreshed by the
+    // body's ResizeObserver (see below).
+    //
+    // `null` is a meaningful state, distinct from a measured height: before
+    // the first valid measurement the constraint is UNKNOWN (a large window is
+    // just as likely as a small one), so the current panel height must NOT be
+    // re-clamped toward the minimum — the pure vocabulary resolves the active
+    // max from it via `panelEffectiveMax()`.
+    const [measuredBodyHeight, setMeasuredBodyHeight] = useState<number | null>(null);
 
     // Pointer-capture boundary: a real browser captures the pointer on the
     // handle (so release is delivered even outside the window); jsdom and a
@@ -338,7 +341,6 @@ export function App() {
             pointerId: event.pointerId,
             startY: event.clientY,
             startHeight: bottomPanelHeight,
-            effectiveMax: panelEffectiveMax(),
         };
         capturePointer(event.currentTarget, event.pointerId);
         window.document.body.classList.add("gglab-resizing");
@@ -349,7 +351,10 @@ export function App() {
         if (gesture === null || gesture.pointerId !== event.pointerId) {
             return;
         }
-        setBottomPanelHeight(clampBottomPanelHeight(gesture.startHeight + (gesture.startY - event.clientY), gesture.effectiveMax));
+        // The constraint is resolved from the CURRENT measured body height on
+        // every move — never a max captured at pointerdown — so a window that
+        // shrinks mid-drag keeps the Canvas above its floor.
+        setBottomPanelHeight(clampBottomPanelHeight(gesture.startHeight + (gesture.startY - event.clientY), panelEffectiveMax(measuredBodyHeight)));
     }
 
     function endBottomPanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
@@ -366,7 +371,9 @@ export function App() {
     // right grow, down / left shrink, each by a fixed step within the current
     // effective range.
     function stepBottomPanelResize(delta: number): void {
-        const effectiveMax = panelEffectiveMax();
+        // Resolve the active max from the CURRENT body state (null = unknown
+        // constraint → the absolute ceiling only).
+        const effectiveMax = panelEffectiveMax(measuredBodyHeight);
         setBottomPanelHeight((current) => clampBottomPanelHeight(current + delta * BOTTOM_PANEL_KEYBOARD_STEP, effectiveMax));
     }
 
@@ -453,12 +460,17 @@ export function App() {
         return () => observer.disconnect();
     }, []);
 
-    // Whenever the measured available height changes, re-clamp the CURRENT
-    // panel height into the new effective range. This is what keeps the
-    // Canvas above its floor in a shrinking window — including after a
-    // collapse → shrink → reopen round-trip — so the stored height is always a
-    // legal one for the body it will render into.
+    // Whenever a VALID measurement of the available height arrives (or
+    // changes), re-clamp the CURRENT panel height into the new effective
+    // range. This is what keeps the Canvas above its floor in a shrinking
+    // window — including after a collapse → shrink → reopen round-trip.
+    // Crucially, while the measurement is still `null` (unknown), the current
+    // height is left untouched: an unknown constraint must not collapse the
+    // default toward the minimum.
     useEffect(() => {
+        if (measuredBodyHeight === null) {
+            return;
+        }
         setBottomPanelHeight((current) => clampBottomPanelHeight(current, resolvePanelMaxHeight(measuredBodyHeight)));
     }, [measuredBodyHeight]);
 
@@ -2678,7 +2690,7 @@ export function App() {
                             aria-orientation="vertical"
                             aria-label="Resize the bottom panel height"
                             aria-valuemin={BOTTOM_PANEL_MIN_HEIGHT}
-                            aria-valuemax={Math.round(panelEffectiveMax())}
+                            aria-valuemax={Math.round(panelEffectiveMax(measuredBodyHeight))}
                             aria-valuenow={bottomPanelHeight}
                             tabIndex={0}
                             title="Resize the bottom panel (drag, or use the arrow keys)"

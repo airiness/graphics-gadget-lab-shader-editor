@@ -82,3 +82,19 @@ export function clampBottomPanelHeight(height: number, effectiveMax: number): nu
     const value = Number.isFinite(height) ? Math.round(height) : BOTTOM_PANEL_DEFAULT_HEIGHT;
     return Math.min(upper, Math.max(BOTTOM_PANEL_MIN_HEIGHT, value));
 }
+
+/**
+ * Resolve the ACTIVE effective max for a resize ACTION (a drag or a keyboard
+ * step) for the CURRENT state of the body measurement: `null` = the body has
+ * not been measured yet (an UNKNOWN constraint, NOT a 0px body — the layout
+ * may simply be a very large one, so the panel must only be capped by the
+ * absolute ceiling until a real measurement arrives); a positive finite
+ * number = the measured available height. `null` must never collapse the
+ * current height to the minimum.
+ */
+export function panelEffectiveMax(measuredBodyHeight: number | null): number {
+    if (measuredBodyHeight === null || !Number.isFinite(measuredBodyHeight)) {
+        return BOTTOM_PANEL_MAX_HEIGHT;
+    }
+    return resolvePanelMaxHeight(measuredBodyHeight);
+}

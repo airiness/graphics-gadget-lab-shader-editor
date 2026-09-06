@@ -22,7 +22,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { App } from "../src/app.js";
-import { BOTTOM_PANEL_TABS, BOTTOM_PANEL_MIN_HEIGHT } from "../src/bottom-panel.js";
+import { BOTTOM_PANEL_TABS, BOTTOM_PANEL_DEFAULT_HEIGHT, BOTTOM_PANEL_MAX_HEIGHT, BOTTOM_PANEL_MIN_HEIGHT } from "../src/bottom-panel.js";
 
 const read = (relative: string): string => readFileSync(join(dirname(fileURLToPath(import.meta.url)), relative), "utf8");
 
@@ -316,6 +316,69 @@ describe("the Bottom Panel shell", () => {
             fireEvent.pointerMove(handle, { pointerId: 41, clientY: 10 });
         });
         expect(panelHeightPx(container)).toBe(beforeStray);
+        unmount();
+    });
+
+    it("does not press the current height toward the minimum before the first valid measurement", () => {
+        const { root, container, unmount } = mountApp();
+        const handle = () => root.getByRole("slider", { name: /resize the bottom panel/i });
+        // The body is UNMEASURED: its constraint is unknown (a large window is
+        // just as likely as a small one), so the current/default height stays.
+        expect(panelHeightPx(container)).toBe(BOTTOM_PANEL_DEFAULT_HEIGHT);
+        // …and the slider range is only the absolute ceiling.
+        expect(handle().getAttribute("aria-valuemax")).toBe(String(BOTTOM_PANEL_MAX_HEIGHT));
+        // A resize action even must not push it toward the minimum.
+        act(() => {
+            fireEvent.pointerDown(handle(), { pointerId: 1 });
+        });
+        act(() => {
+            fireEvent.pointerMove(handle(), { pointerId: 1 });
+        });
+        act(() => {
+            fireEvent.pointerUp(handle(), { pointerId: 1 });
+        });
+        expect(panelHeightPx(container)).toBe(BOTTOM_PANEL_DEFAULT_HEIGHT);
+        // The FIRST valid measurement then takes effect — and a large body
+        // simply confirms the current height as legal (it does not reset it).
+        act(() => {
+            fireBodyResize(container, 800);
+        });
+        expect(panelHeightPx(container)).toBe(BOTTOM_PANEL_DEFAULT_HEIGHT);
+        expect(handle().getAttribute("aria-valuemax")).toBe(String(480));
+        unmount();
+    });
+
+    it("keeps an active drag under the CURRENT body constraint, even while it shrinks", () => {
+        const { root, container, unmount } = mountApp();
+        const handle = () => root.getByRole("slider", { name: /resize the bottom panel/i });
+
+        // Begin the gesture under a large body (effective max 480).
+        act(() => {
+            fireBodyResize(container, 800);
+        });
+        act(() => {
+            fireEvent.pointerDown(handle(), { pointerId: 61 });
+        });
+        // The gesture is active:
+        expect(window.document.body.classList.contains("gglab-resizing")).toBe(true);
+        // …then the body shrinks to 400 (effective max 160) while it is active.
+        // The continuous observer re-clamps the stored height:
+        act(() => {
+            fireBodyResize(container, 400);
+        });
+        expect(panelHeightPx(container)).toBe(160);
+        // A further move must stay UNDER the current constraint — a max
+        // captured at pointerdown (480) must not be able to re-break the floor.
+        act(() => {
+            fireEvent.pointerMove(handle(), { pointerId: 61 });
+        });
+        const after = panelHeightPx(container);
+        expect(after).toBeLessThanOrEqual(160);
+        expect(after).toBeGreaterThanOrEqual(BOTTOM_PANEL_MIN_HEIGHT);
+        act(() => {
+            fireEvent.pointerUp(handle(), { pointerId: 61 });
+        });
+        expect(window.document.body.classList.contains("gglab-resizing")).toBe(false);
         unmount();
     });
 

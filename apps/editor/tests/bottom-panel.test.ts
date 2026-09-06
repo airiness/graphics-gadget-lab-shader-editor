@@ -13,6 +13,7 @@ import {
     CANVAS_MIN_FLOOR_HEIGHT,
     bottomPanelTabLabel,
     clampBottomPanelHeight,
+    panelEffectiveMax,
     resolvePanelMaxHeight,
 } from "../src/bottom-panel.js";
 
@@ -72,6 +73,23 @@ describe("the Canvas-floor effective max", () => {
         expect(resolvePanelMaxHeight(Number.NaN)).toBe(BOTTOM_PANEL_MAX_HEIGHT);
         expect(resolvePanelMaxHeight(Number.POSITIVE_INFINITY)).toBe(BOTTOM_PANEL_MAX_HEIGHT);
         expect(resolvePanelMaxHeight(Number.NEGATIVE_INFINITY)).toBe(BOTTOM_PANEL_MAX_HEIGHT);
+    });
+});
+
+describe("the active max for a resize action", () => {
+    it("treats an UNMEASURED body (null) as an unknown constraint, not 0px", () => {
+        // Unknown constraint: only the absolute ceiling applies. This is what
+        // keeps the current/default height from being pressed to the minimum
+        // before the first real measurement arrives.
+        expect(panelEffectiveMax(null)).toBe(BOTTOM_PANEL_MAX_HEIGHT);
+        // A degenerate (non-finite) reading is likewise unknown, not small.
+        expect(panelEffectiveMax(Number.NaN)).toBe(BOTTOM_PANEL_MAX_HEIGHT);
+    });
+
+    it("applies the Canvas floor once a valid measurement arrives", () => {
+        expect(panelEffectiveMax(800)).toBe(BOTTOM_PANEL_MAX_HEIGHT);
+        expect(panelEffectiveMax(400)).toBe(160);
+        expect(panelEffectiveMax(300)).toBe(BOTTOM_PANEL_MIN_HEIGHT);
     });
 });
 
