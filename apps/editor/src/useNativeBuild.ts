@@ -30,7 +30,6 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HlslEmission, SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
-import type { AttemptOutcome, BuildLineReport } from "@gglab/shader-toolchain-client";
 import { createBuildTargetConfiguration, setBuildTarget, type BuildTargetConfiguration } from "./build-target-config.js";
 import {
     createDiscoveryConfiguration,
@@ -40,7 +39,6 @@ import {
     type DiscoveryConfiguration,
 } from "./discovery-config.js";
 import { projectBuildInspector, type BuildInspectorFacts } from "./build-inspector.js";
-import { sessionReport } from "./native-build-session.js";
 import { NativeBuildFlow } from "./native-build-flow.js";
 import { type NativeBuildReadiness } from "./native-build-readiness.js";
 import { createTauriToolBoundary, toolBoundaryAvailable } from "./toolchain-host.js";
@@ -95,15 +93,10 @@ export interface NativeBuildSurface {
     readonly discoveryConfig: DiscoveryConfiguration;
     readonly setToolPath: (path: string) => void;
     readonly setSiblingBuildOutput: (path: string) => void;
-    /** The session's line projection against the current intent. */
-    readonly lineReport: BuildLineReport | null;
-    /** The NEWEST ISSUED attempt's outcome (the client's vocabulary) —
-     *  read from the session line, its single authority: the anchor's
-     *  own record once settled; null (an honest "not yet") while the
-     *  anchor is still in flight. Under out-of-order settlements this
-     *  can never be a different attempt's outcome. */
-    readonly lastOutcome: AttemptOutcome | null;
-    /** The inspector projection (one source of truth per field). */
+    /** The inspector projection (one source of truth per field) — the
+     *  SELECTION-ORIENTED facts only; the session's line (the attempt
+     *  chronology) is projected by the bottom panel's Build view over
+     *  the flow's own build session. */
     readonly inspector: BuildInspectorFacts | null;
     /** Whether a handshake is in flight — the flow's single-flight lane,
      *  observed (shared by the startup bring-up and this surface). */
@@ -260,36 +253,12 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
 
     const ready = readiness.status === "Ready";
 
-    // The line projection is derived on every render (the session store
-    // is the flow's; a memo keyed on the wrong fact would go stale the
-    // moment the session moves — derivation is the only safe shape).
-    const lineReport =
-        flow === null || flow.buildSession.lastIssued === null ? null : sessionReport(flow.buildSession, flow.buildSession.lastIssued.intent);
-
-    // The attempt outcome is read from the session line — its single
-    // authority ("BuildId → intent → outcome", one record per attempt).
-    // The NEWEST ISSUED attempt is the anchor; read THAT record: settled
-    // means its outcome, still in flight means the honest "not yet".
-    // Under out-of-order settlements a late older settlement can never
-    // masquerade as the newest one here.
-    const lastOutcome: AttemptOutcome | null = (() => {
-        if (flow === null) {
-            return null;
-        }
-        const anchor = flow.buildSession.lastIssued;
-        if (anchor === null) {
-            return null;
-        }
-        const record = flow.buildSession.line.attempts.find((entry) => entry.buildId.sequence === anchor.buildId.sequence);
-        return record?.outcome ?? null;
-    })();
-
     const inspector = useMemo(() => {
         if (flow === null) {
             return null;
         }
-        return projectBuildInspector(flow, input.descriptor, { ok: input.descriptorCompatible, detail: input.descriptorDetail }, target, readiness, input.emission !== null && input.emission.ok === true && input.emission.sourceMap !== null ? { sourceIdentity: input.emission.sourceMap.generatedSourceIdentity } : null, lineReport, lastOutcome);
-    }, [flow, input, target, readiness, lineReport, lastOutcome]);
+        return projectBuildInspector(flow, input.descriptor, { ok: input.descriptorCompatible, detail: input.descriptorDetail }, target, readiness, input.emission !== null && input.emission.ok === true && input.emission.sourceMap !== null ? { sourceIdentity: input.emission.sourceMap.generatedSourceIdentity } : null);
+    }, [flow, input, target, readiness]);
 
     const discoverNow = useCallback(async (): Promise<void> => {
         if (flow === null) {
@@ -372,8 +341,6 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
         discoveryConfig,
         setToolPath,
         setSiblingBuildOutput,
-        lineReport,
-        lastOutcome,
         inspector,
         handshakeInFlight,
         discoveryInFlight,

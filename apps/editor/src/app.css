@@ -2014,3 +2014,84 @@ button.gglab-diagnostics-item:hover {
 .gglab-native-state-canceled {
     color: var(--warn);
 }
+
+/* The Build / Preview panel views: one row per attempt — the identity head
+   (attempt sequence, the owner's own state, the composed request), the session
+   identity line, and the outcome facts carried by the row's record. The state
+   words render in the same badge language as the inspector's build state. */
+.gglab-bottom-view {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    height: 100%;
+    overflow-y: auto;
+}
+
+.gglab-bottom-view-empty {
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--type-body);
+}
+
+.gglab-bottom-view-rows {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.gglab-bottom-view-row {
+    border: 1px solid var(--edge);
+    border-radius: var(--radius, 6px);
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.gglab-bottom-view-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.gglab-bottom-view-identity {
+    color: var(--faint);
+    font-size: var(--type-meta);
+}
+
+.gglab-bottom-view-outcome {
+    margin: 0;
+    font-size: var(--type-body);
+}
+
+.gglab-bottom-view-row p {
+    margin: 0;
+    font-size: var(--type-meta);
+    color: var(--muted);
+}
+
+.gglab-view-state {
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+}
+
+.gglab-view-state-current,
+.gglab-view-state-last-good,
+.gglab-view-state-published {
+    color: var(--ok, var(--text));
+}
+
+.gglab-view-state-stale,
+.gglab-view-state-in-flight,
+.gglab-view-state-pending {
+    color: var(--muted);
+}
+
+.gglab-view-state-failed,
+.gglab-view-state-canceled {
+    color: var(--warn);
+}

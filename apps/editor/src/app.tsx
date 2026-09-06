@@ -135,6 +135,7 @@ import {
     resolvePanelMaxHeight,
     type BottomPanelTab,
 } from "./bottom-panel.js";
+import { BuildPanelView, PreviewPanelView } from "./bottom-panel-views.js";
 // Type-only (erased at compile time): the official dialog option shapes,
 // used for the single documented boundary cast below. Runtime functions
 // are dynamically imported inside the desktop effect only.
@@ -2496,26 +2497,10 @@ export function App() {
                                 {native.handshakeInFlight ? "Handshaking…" : "Handshake (establish proof)"}
                             </Button>
                         </ButtonGroup>
-                        {native.lineReport !== null && (
-                            <>
-                                <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
-                                    Build line
-                                </h3>
-                                <p className="gglab-native-field-hint">
-                                    This session's attempts, in issue order (the newest issued anchors `current`).
-                                </p>
-                                <dl className="gglab-facts">
-                                    {native.lineReport.states.map((entry, index) => (
-                                        <div key={`${entry.buildId.sequence}-${index}`} className="gglab-fact">
-                                            <dt>
-                                                #{entry.buildId.sequence} · {entry.intent.target}
-                                            </dt>
-                                            <dd className={`gglab-native-state gglab-native-state-${entry.state}`}>{entry.state}</dd>
-                                        </div>
-                                    ))}
-                                </dl>
-                            </>
-                        )}
+                        {/* The attempt CHRONOLOGY (the build line's states,
+                            the outcomes, the diagnostics) projects to the
+                            bottom panel's Build view — the inspector keeps
+                            the selection-oriented facts above. */}
                         {native.inspector !== null && (
                             <>
                                 <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
@@ -2530,7 +2515,8 @@ export function App() {
                                 <InspectorRows title="Build" rows={native.inspector.build} />
                             </>
                         )}
-                        {native.notes.length > 0 && <ul className="gglab-native-notes">{renderNativeNotes(native.notes)}</ul>}
+                        {/* The surface's operation notes render in the build
+                            panel view — one display surface, owned by it. */}
                     </section>
                     <section className="gglab-panel gglab-panel-native-build" aria-label="Shader Graph Preview">
                         <h2 className="gglab-panel-title">Shader Graph Preview</h2>
@@ -2661,7 +2647,8 @@ export function App() {
                                 Stop attached Lab
                             </Button>
                         </ButtonGroup>
-                        {preview.notes.length > 0 && <ul className="gglab-native-notes">{renderNativeNotes(preview.notes)}</ul>}
+                        {/* The surface's operation notes render in the preview
+                            panel view — one display surface, owned by it. */}
                     </section>
                         </>
                     )}
@@ -2724,10 +2711,22 @@ export function App() {
                                 </Button>
                             </div>
                         </div>
+                        {/* The four views over their owners' structured
+                            facts. Build and Preview render the OWNER'S
+                            session projected through the panel vocabulary's
+                            chronology (each row's state is the owner's own,
+                            never re-judged here); the inspector keeps the
+                            selection-oriented facts and its actions. */}
                         <div className="gglab-bottom-panel-body" role="tabpanel" aria-label={bottomPanelTabLabel(bottomPanelTab)}>
-                            <p className="gglab-bottom-panel-placeholder">
-                                {bottomPanelTabLabel(bottomPanelTab)} — placeholder view; its content arrives with its own step.
-                            </p>
+                            {bottomPanelTab === "build" ? (
+                                <BuildPanelView session={native.flow?.buildSession ?? null} notes={native.notes} />
+                            ) : bottomPanelTab === "preview" ? (
+                                <PreviewPanelView session={preview.flow?.session ?? null} notes={preview.notes} />
+                            ) : (
+                                <p className="gglab-bottom-panel-placeholder">
+                                    {bottomPanelTabLabel(bottomPanelTab)} — placeholder view; its content arrives with its own step.
+                                </p>
+                            )}
                         </div>
                     </section>
                 ) : (
@@ -2931,14 +2930,6 @@ function InspectorRows(props: { title: string; rows: readonly BuildInspectorRow[
 }
 
 /** The native-build operation notes (structured one-liners). */
-function renderNativeNotes(notes: readonly { readonly level: "ok" | "info" | "refusal"; readonly text: string }[]): readonly ReactElement[] {
-    return notes.map((note, index) => (
-        <li key={`${note.text}-${index}`} className={`gglab-note-${note.level}`}>
-            {note.text}
-        </li>
-    ));
-}
-
 function EmissionPreview(props: { emission: HlslEmission }) {
     const { emission } = props;
     if (emission.ok === false) {
