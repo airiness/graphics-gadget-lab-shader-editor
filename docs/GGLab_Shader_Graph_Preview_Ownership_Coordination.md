@@ -1,11 +1,15 @@
 # GGLab Shader Graph Preview Ownership Coordination
 
-> Status: **design-freeze, 2026-09-05** — this revision folds the final
-> architecture review into the plan. Slice 1 (Runtime lifetime authority) is
-> implemented and under boundary-by-boundary acceptance; its review rounds
-> additionally froze `runtime-ownership-conflict` and
-> `launch-outcome-unproven` as first-class safety states (see the Runtime
-> state machine below).
+> Status: **design-freeze 2026-09-05; Slice 1 implemented and closure
+> verified against the root gates** — this revision records the final,
+> as-implemented architecture. Slice 1 (Runtime lifetime authority + Workspace
+> commit authority + Preview transition procedure + build authority) is
+> implemented and closure-verified; its review rounds additionally froze
+> `runtime-ownership-conflict` and `launch-outcome-unproven` as first-class
+> safety states (see the Runtime state machine below). The old distributed
+> ownership seams (`PreviewBuildFlow`, the raw `useShaderPreview` build path,
+> and the `app.tsx` transition choreography) have been fully replaced by the
+> modules below and no longer exist in the production path.
 >
 > Authority relationship: this document records the Preview ownership
 > architecture decision and the Slice 1 implementation plan. The normative
@@ -39,7 +43,7 @@ procedure, and build state.
 |---|---|---|---|
 | Document/target state | `WorkspaceSession` reducers | Open documents, active document, `preview.targetDocumentId` | Runtime process lifetime |
 | Workspace commit authority | `WorkspaceStore` | Current Workspace authoring state, synchronous atomic apply, publication/subscription | Preview-specific refusal vocabulary |
-| Build authority | `PreviewBuildFlow` (renamed later to `PreviewBuildController`) | Handshake, build, publication, observation, build-side gate reasons | Runtime lifetime or target state |
+| Build authority | `PreviewBuildController` | Handshake, build, publication, observation, build-side gate reasons | Runtime lifetime or target state |
 | Runtime lifetime authority | `AttachedPreviewRuntimeManager` | Launch admission, Runtime ownership binding, stop/join proof, Runtime state machine | Build-domain refusal vocabulary or target state |
 | Transition authority | `PreviewCoordinator` | Sole executor of retarget / target-close transitions and cross-domain gate composition | A second copy of target state |
 
@@ -412,11 +416,13 @@ projected as a proven absence:
   Runtime.
 
 In the current product flow this is low-risk (the detaching window does not
-normally coincide with a user transition), but BEFORE a host reconnect /
-rebind is supported the Coordinator must not treat a mid-detach ref as
-proven absence: it should either keep the old binding joinable for the
-duration of the detach or expose an explicit `detaching` fact that blocks
-ownership transitions (refusal) rather than committing on an unproven exit.
+normally coincide with a user transition), so Slice 1 accepts it as a stated
+limitation. Making the `detaching` state first-class — so the Coordinator
+blocks transitions on an explicit `detaching` fact instead of a mid-detach
+`manager === null`, or keeps the old binding joinable for the duration of the
+detach, and so host reconnect / rebind can be supported — is a **Slice 2
+boundary** (see "Slice 2 boundary"), NOT part of Slice 1. Slice 1 does not
+expand scope to it, and neither the Coordinator nor the hook claims it.
 
 ### `retargetTo(targetDocumentId)`
 
@@ -541,10 +547,12 @@ The composed gate above is the ONLY admissible path for a Preview build in
 production. The controller's `buildPreview` takes the gate as a REQUIRED
 argument (there is no uncomposed default to call); production code therefore
 cannot bypass the Coordinator by invoking the controller with its bare
-`buildGate`. The strict `terminateAndJoin()` teardown is likewise reachable
-only through the Coordinator's transitions — the hook no longer exposes a
-`stopPreviewAndWait`. The read-only `runtimeProjection` gate keeps its default
-because it issues nothing.
+`buildGate`. The read-only `runtimeProjection` gate is likewise a REQUIRED
+argument (no default), so every production projection — though it issues
+nothing — also goes through the Coordinator's composed gate. The strict
+`terminateAndJoin()` teardown is reachable only through the Coordinator's
+transitions (and the documented unmount-cleanup disposal) — the hook no
+longer exposes a `stopPreviewAndWait`.
 
 Do **not** compare `deploymentToolPath` with Preview Program Descriptor
 identity. Descriptor identity remains part of the Preview build requirement,
@@ -621,7 +629,10 @@ Untouched in Slice 1:
 
 ## Slice 1 execution steps
 
-Each boundary must be independently green and reviewable.
+All five boundaries below are implemented and closure-verified (each was
+independently green and accepted before the next). The "Exit gate" column
+records the verification that closed each boundary; Step 5 is the root
+closure gate.
 
 | Step | Content | Exit gate |
 |---|---|---|
@@ -680,6 +691,11 @@ It may additionally expose `is_runtime_alive(runtimeId)` and/or a host-level
 process-lifetime binding if cross-restart ownership guarantees are required.
 Only the host can provide a genuine re-proof once Slice 1 has entered
 `exit-unproven`.
+
+Slice 2 also owns making the host `detaching` binding state first-class and
+host reconnect / rebind (see "Host-binding lifecycle (known boundary)"):
+while that lands, Slice 1 accepts the mid-detach `manager === null` window as
+a stated, low-risk limitation rather than claiming it.
 
 ## Verification and handoff
 
