@@ -55,8 +55,12 @@ export interface UseShaderPreviewInput {
 export interface ShaderPreviewSurface {
     readonly flow: PreviewBuildFlow | null;
     /** Ownership-transition + gate authority over the Runtime manager and
-     *  the build flow. Null while no desktop Preview host exists. */
-    readonly coordinator: PreviewCoordinator | null;
+     * the build flow. Always present for a mounted editor: with no desktop
+     * host it executes pure Workspace transitions (proven no Runtime) and
+     * structural build refusals; with a host it carries the strict-teardown
+     * discipline. A strict `terminateAndJoin` is reachable only through its
+     * transition methods — never as a raw exposed action. */
+    readonly coordinator: PreviewCoordinator;
     readonly sessionId: string | null;
     readonly gate: PreviewBuildGate | null;
     readonly runtime: AttachedRuntimeState;
@@ -70,13 +74,6 @@ export interface ShaderPreviewSurface {
     readonly buildPreview: () => Promise<void>;
     readonly launchPreview: () => Promise<void>;
     readonly stopPreview: () => Promise<void>;
-    /** Strict teardown: resolves only after the attached Runtime's exit is
-     * PROVEN (`terminated`). Rejects when the exit settles as
-     * `exit-unproven` (the host could only best-effort kill/wait and cannot
-     * prove exit) or the stop request fails — a caller must NOT retarget or
-     * close the target after such a failure. `stopPreview` alone is for the
-     * plain user "Stop" button, never for an ownership transition. */
-    readonly stopPreviewAndWait: () => Promise<void>;
     readonly notes: readonly { readonly level: "ok" | "info" | "refusal"; readonly text: string }[];
 }
 
@@ -88,7 +85,20 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
     const [notes, setNotes] = useState<ShaderPreviewSurface["notes"]>([]);
     const flowRef = useRef<PreviewBuildFlow | null>(null);
     const managerRef = useRef<AttachedPreviewRuntimeManager | null>(null);
-    const coordinatorRef = useRef<PreviewCoordinator | null>(null);
+    // One coordinator per mount, independent of whether the desktop host
+    // arrives. It reads the LIVE host bindings through the accessors below,
+    // so ownership transitions (retarget / close-the-target) are ALWAYS
+    // available: with no host they are pure Workspace commits (proven no
+    // Runtime), and with a host they carry the strict-teardown discipline.
+    // The strict single-flight slot therefore never gets re-created.
+    const [coordinator] = useState(
+        () =>
+            new PreviewCoordinator(
+                () => managerRef.current,
+                () => flowRef.current,
+                input.workspaceStore,
+            ),
+    );
 
     const note = useCallback((level: "ok" | "info" | "refusal", text: string) => {
         setNotes((previous) => [...previous.slice(-23), { level, text }]);
@@ -126,7 +136,6 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             );
             managerRef.current = manager;
             flowRef.current = preview;
-            coordinatorRef.current = new PreviewCoordinator(manager, preview, input.workspaceStore);
             setFlow(preview);
         })().catch((error: unknown) => {
             if (!canceled) {
@@ -139,7 +148,6 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             const currentFlow = flowRef.current;
             managerRef.current = null;
             flowRef.current = null;
-            coordinatorRef.current = null;
             setFlow(null);
             if (currentManager !== null) {
                 // Strict teardown, fire-and-forget. A plain `stop()` is a
@@ -218,8 +226,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
     const buildPreview = useCallback(async (): Promise<void> => {
         const current = flowRef.current;
         const manager = managerRef.current;
-        const coordinator = coordinatorRef.current;
-        if (current === null || manager === null || coordinator === null) {
+        if (current === null || manager === null) {
             note("refusal", "Preview build is unavailable: no desktop Preview host.");
             return;
         }
@@ -290,22 +297,10 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
         bump((value) => value + 1);
     }, [note]);
 
-    // No try/catch here on purpose: an ownership transition (retarget /
-    // close the target) needs to KNOW when the teardown did not complete,
-    // so the caller refuses the commit instead of splitting ownership.
-    const stopPreviewAndWait = useCallback(async (): Promise<void> => {
-        const manager = managerRef.current;
-        if (manager === null) {
-            return;
-        }
-        const proof = await manager.terminateAndJoin();
-        if (proof.outcome === "exit-unproven") {
-            throw new Error(
-                `Attached Preview Runtime #${proof.runtimeId.sequence} could not be proven exited (host wait-failed); the ownership transition was not committed.`,
-            );
-        }
-        bump((value) => value + 1);
-    }, [bump]);
+    // A strict `terminateAndJoin()` is intentionally NOT exposed here: it is
+    // the PreviewCoordinator's transition tool (its last await, guarded by
+    // the single-flight slot and commit-time revalidation), not a bypass.
+    // The plain user "Stop" button uses `stopPreview` above.
 
     const managerState = managerRef.current;
     const runtimeKind = flow === null || managerState === null ? "idle" : managerState.state.kind;
@@ -336,14 +331,16 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
         };
     }, [flow, managerState, runtimeKind, note]);
 
-    const coordinator = flow !== null ? coordinatorRef.current : null;
     return {
         flow,
         coordinator,
         sessionId: flow?.session.sessionId ?? null,
-        gate: coordinator?.gate(composition) ?? null,
+        // gate / projection are host operations: present (as structural
+        // refusals) only while a desktop host (and thus a build line) exists;
+        // `null` is the honest "no host" fact, matching the disabled toolbar.
+        gate: flow !== null ? coordinator.gate(composition) : null,
         runtime: flow !== null && managerState !== null ? managerState.state : { kind: "idle" },
-        projection: coordinator?.runtimeProjection(composition) ?? null,
+        projection: flow !== null ? coordinator.runtimeProjection(composition) : null,
         lastObservationRefresh: flow?.lastObservationRefresh ?? null,
         handshakeInFlight: flow?.previewHandshakeInFlight ?? false,
         buildInFlight,
@@ -353,7 +350,6 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
         buildPreview,
         launchPreview,
         stopPreview,
-        stopPreviewAndWait,
         notes,
     };
 }

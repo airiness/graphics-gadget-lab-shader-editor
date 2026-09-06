@@ -281,6 +281,21 @@ export function isDirty(session: DocumentSession): boolean {
     return serializeShaderGraphDocument(session.history.present) !== session.savedBaseline;
 }
 
+/** The document's CURRENT authoring revision, as its canonical
+ * serialization. The core's serialization is deterministic and structurally
+ * stable (fixed field order, recursively sorted canonical JSON), so two
+ * revisions compare equal exactly when their contents are the same document
+ * state — a new authoring revision always produces a different one.
+ *
+ * Load-bearing for the close-the-Preview-target transition: that transition
+ * must bind to the exact revision the user confirmed discarding. If a NEWER
+ * revision exists by the time the commit runs, closing it would discard work
+ * the user never confirmed — so the transition revalidates this revision
+ * and refuses instead. */
+export function documentRevision(session: DocumentSession): string {
+    return serializeShaderGraphDocument(session.history.present);
+}
+
 /**
  * Target for a plain Save of the current document.
  *

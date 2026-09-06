@@ -51,8 +51,10 @@ import { canonicalV1Fixture } from "../../../packages/shader-graph-core/tests/fi
 import { canonicalV2Fixture } from "../../../packages/shader-graph-core/tests/fixtures/descriptor-v2.js";
 import {
     createSession,
+    documentRevision,
     provenanceFromFile,
     provenanceFromImport,
+    recordDocumentChange,
     type DocumentSession,
 } from "../src/document-session.js";
 import {
@@ -367,7 +369,9 @@ function makeWorld(
     const port = new TestToolPort();
     const flow = new PreviewBuildFlow(tool, port, SESSION_ID, observation, manager);
     const store = new WorkspaceStore<WorkspaceAuthoringState>(state);
-    const coordinator = new PreviewCoordinator(manager, flow, store);
+    // This world HAS a host (real manager + flow); the accessors stand in
+    // for the hook's live refs.
+    const coordinator = new PreviewCoordinator(() => manager, () => flow, store);
     return { runtime, manager, flow, port, coordinator, store };
 }
 
@@ -610,7 +614,7 @@ describe("PreviewCoordinator — target-close transition", () => {
         );
 
         await attach(world);
-        const close = world.coordinator.closeTarget(A.sessionId);
+        const close = world.coordinator.closeTarget(A.sessionId, documentRevision(A));
         expect(world.runtime.releaseStop()).toBe(true); // wait-failed settlement
 
         const result = await close;
@@ -640,7 +644,7 @@ describe("PreviewCoordinator — target-close transition", () => {
         );
 
         await attach(world);
-        const close = world.coordinator.closeTarget(A.sessionId);
+        const close = world.coordinator.closeTarget(A.sessionId, documentRevision(A));
         expect(world.runtime.releaseStop()).toBe(true);
         const result = await close;
 
@@ -672,7 +676,7 @@ describe("PreviewCoordinator — target-close transition", () => {
         );
 
         await attach(world);
-        const result = await world.coordinator.closeTarget(B.sessionId);
+        const result = await world.coordinator.closeTarget(B.sessionId, documentRevision(B));
         expect(result).toMatchObject({
             ok: false,
             refusal: { reason: "document-not-preview-target", documentSessionId: B.sessionId },
@@ -706,6 +710,200 @@ describe("PreviewCoordinator — target-close transition", () => {
         // the transition was CLAIMED, not refused as in-flight).
         const again = await world.coordinator.retargetTo(A.sessionId);
         expect(again).toMatchObject({ ok: false, refusal: { reason: "target-emission-unavailable" } });
+    });
+
+    it("does NOT close a NEWER revision a pending teardown raced with: the close binds to the revision the user confirmed discarding (document-changed-during-close)", async () => {
+        const A = docSession("A", V1_GRAPH);
+        const B = docSession("B", V2_GRAPH);
+        // The revision the (dirty-confirmed) user saw when closing: A's
+        // CURRENT content.
+        const confirmedRevision = documentRevision(A);
+        const world = makeWorld(
+            {
+                session: {
+                    workspaceRoot: null,
+                    documents: [A, B],
+                    activeDocumentId: B.sessionId,
+                    preview: { targetDocumentId: A.sessionId },
+                },
+                profileDescriptor: D2,
+            },
+            { launches: [{ kind: "launched", runtimeIdentity: "runtime-a" }], holdStopUntilRelease: true, stopReleaseKind: "stopped" },
+        );
+
+        await attach(world);
+        const close = world.coordinator.closeTarget(A.sessionId, confirmedRevision);
+        // The strict teardown was issued and is held pending (terminating —
+        // read without consuming the hold), so the commit cannot have run yet.
+        expect(world.manager.state).toMatchObject({ kind: "terminating" });
+        // While it is pending, A is edited into a NEWER revision (the exact
+        // data-loss race: the user confirmed discarding the OLD one). V1_EMIT
+        // is a distinct, valid document → a different canonical revision.
+        const revised = V1_EMIT;
+        const revisedA = recordDocumentChange(A, revised, "edit while close is pending");
+        world.store.apply((current) => ({
+            next: {
+                ...current,
+                session: { ...current.session, documents: current.session.documents.map((document) => (document.sessionId === A.sessionId ? revisedA : document)) },
+            },
+            result: null,
+        }));
+        // The teardown then settles PROVEN. Commit-time revalidation must see
+        // the NEWER revision and REFUSE — never silently close it.
+        expect(world.runtime.releaseStop()).toBe(true);
+        const result = await close;
+        expect(result).toMatchObject({
+            ok: false,
+            refusal: { reason: "document-changed-during-close", documentSessionId: A.sessionId },
+        });
+        // A REMAINS OPEN with the newer revision preserved — and the target
+        // did not move.
+        const snapshot = world.store.getSnapshot();
+        expect(snapshot.session.documents.map((document) => document.sessionId)).toEqual([A.sessionId, B.sessionId]);
+        expect(snapshot.session.documents.find((document) => document.sessionId === A.sessionId)?.history.present).toBe(revised);
+        expect(snapshot.session.preview.targetDocumentId).toBe(A.sessionId);
+    });
+});
+
+describe("PreviewCoordinator — build / transition mutual exclusion", () => {
+    it("refuses a Preview build while an ownership transition is in flight — no queue, no auto-supersede", async () => {
+        const A = docSession("A", V1_GRAPH);
+        const B = docSession("B", V2_GRAPH);
+        const world = makeWorld(
+            {
+                session: {
+                    workspaceRoot: null,
+                    documents: [A, B],
+                    activeDocumentId: B.sessionId,
+                    preview: { targetDocumentId: A.sessionId },
+                },
+                profileDescriptor: D2,
+            },
+            { launches: [{ kind: "launched", runtimeIdentity: "runtime-a" }], holdStopUntilRelease: true, stopReleaseKind: "stopped" },
+        );
+
+        await attach(world);
+        // Kick off a retarget whose strict teardown is held pending.
+        const retarget = world.coordinator.retargetTo(B.sessionId);
+        expect(world.manager.state).toMatchObject({ kind: "terminating" }); // teardown in flight
+
+        // A build arriving while the transition is in flight must be a
+        // STRUCTURAL refusal (preview-transition-in-flight), not queued and
+        // not superseded — and it opens NO build lifecycle.
+        const build = await world.coordinator.buildPreview(readyComposition());
+        expect(build).toMatchObject({
+            issued: false,
+            reason: "gate-refused",
+            gate: { admitted: false, reasons: [{ reason: "preview-transition-in-flight" }] },
+        });
+        expect(world.flow.buildInFlight).toBe(false); // nothing was queued
+
+        // The transition then proceeds and commits once its teardown
+        // settles — nothing in the meantime was deferred or superseded.
+        expect(world.runtime.releaseStop()).toBe(true);
+        const result = await retarget;
+        expect(result).toMatchObject({ ok: true, targetChanged: true, identity: { kind: "retarget", targetDocumentId: B.sessionId } });
+    });
+
+    it("refuses a target-close (not just a retarget) while a transition is in flight, and vice versa: one slot, both directions", async () => {
+        const A = docSession("A", V1_GRAPH);
+        const B = docSession("B", V2_GRAPH);
+        const world = makeWorld(
+            {
+                session: {
+                    workspaceRoot: null,
+                    documents: [A, B],
+                    activeDocumentId: B.sessionId,
+                    preview: { targetDocumentId: A.sessionId },
+                },
+                profileDescriptor: D2,
+            },
+            { launches: [{ kind: "launched", runtimeIdentity: "runtime-a" }], holdStopUntilRelease: true, stopReleaseKind: "stopped" },
+        );
+
+        await attach(world);
+        // A close-target transition is in flight (teardown held)...
+        const close = world.coordinator.closeTarget(A.sessionId, documentRevision(A));
+        expect(world.manager.state).toMatchObject({ kind: "terminating" });
+        // ...a retarget arriving is refused as in-flight (not queued)...
+        const retargetRefused = await world.coordinator.retargetTo(B.sessionId);
+        expect(retargetRefused).toMatchObject({ ok: false, refusal: { reason: "transition-in-flight" } });
+        // ...and a second close is refused as in-flight too.
+        const closeRefused = await world.coordinator.closeTarget(A.sessionId, documentRevision(A));
+        expect(closeRefused).toMatchObject({ ok: false, refusal: { reason: "transition-in-flight" } });
+
+        // The teardown settles; the ORIGINAL close commits...
+        expect(world.runtime.releaseStop()).toBe(true);
+        const result = await close;
+        expect(result).toMatchObject({ ok: true, identity: { kind: "close-target", targetDocumentId: A.sessionId } });
+    });
+});
+
+describe("PreviewCoordinator — proven no Runtime (no host) still commits Workspace transitions", () => {
+    // A coordinator whose host bindings are ABSENT (the manager and flow
+    // accessors return null). The distinction that must hold: proven no
+    // Runtime (no host) ALLOWS the pure Workspace transition, while a
+    // host's safety state (unproven exit / conflict) BLOCKS it.
+    function hostless(state: WorkspaceAuthoringState): { coordinator: PreviewCoordinator; store: WorkspaceStore<WorkspaceAuthoringState> } {
+        const store = new WorkspaceStore<WorkspaceAuthoringState>(state);
+        return { coordinator: new PreviewCoordinator(() => null, () => null, store), store };
+    }
+
+    const twoDocs = (targetDoc: DocumentSession, otherDoc: DocumentSession) => ({
+        session: {
+            workspaceRoot: null,
+            documents: [targetDoc, otherDoc],
+            activeDocumentId: otherDoc.sessionId,
+            preview: { targetDocumentId: targetDoc.sessionId },
+        },
+        profileDescriptor: D1,
+    });
+
+    it("commits a retarget with NO teardown (no host) — a pure Workspace commit under the CURRENT descriptor", async () => {
+        const A = docSession("A", V1_GRAPH);
+        const B = docSession("B", V1_EMIT);
+        const { coordinator, store } = hostless(twoDocs(A, B));
+
+        const result = await coordinator.retargetTo(B.sessionId);
+        expect(result).toMatchObject({ ok: true, targetChanged: true, identity: { kind: "retarget", targetDocumentId: B.sessionId } });
+        // The commit re-resolved the CURRENT target emission under the
+        // CURRENT descriptor — no Runtime was involved at all.
+        const snapshot = store.getSnapshot();
+        expect(snapshot.session.preview.targetDocumentId).toBe(B.sessionId);
+        const docB = snapshot.session.documents.find((document) => document.sessionId === B.sessionId);
+        expect(docB?.presentation.emission).toEqual(emitHlsl(V1_EMIT, D1));
+    });
+
+    it("commits a target-close (with the target re-seed) with NO teardown (no host)", async () => {
+        const A = docSession("A", V1_GRAPH);
+        const B = docSession("B", V1_EMIT);
+        const { coordinator, store } = hostless(twoDocs(A, B));
+
+        const result = await coordinator.closeTarget(A.sessionId, documentRevision(A));
+        expect(result).toMatchObject({ ok: true, identity: { kind: "close-target", targetDocumentId: A.sessionId } });
+        const snapshot = store.getSnapshot();
+        expect(snapshot.session.documents.map((document) => document.sessionId)).toEqual([B.sessionId]);
+        expect(snapshot.session.preview.targetDocumentId).toBe(B.sessionId);
+    });
+
+    it("is a STRUCTURAL refusal for the build and the gate (preview-host-unavailable), and a neutral projection", async () => {
+        const A = docSession("A", V1_GRAPH);
+        const { coordinator } = hostless({
+            session: { workspaceRoot: null, documents: [A], activeDocumentId: A.sessionId, preview: { targetDocumentId: A.sessionId } },
+            profileDescriptor: D1,
+        });
+
+        expect(coordinator.gate(readyComposition())).toMatchObject({
+            admitted: false,
+            reasons: [{ reason: "preview-host-unavailable" }],
+        });
+        const build = await coordinator.buildPreview(readyComposition());
+        expect(build).toMatchObject({
+            issued: false,
+            reason: "gate-refused",
+            gate: { admitted: false, reasons: [{ reason: "preview-host-unavailable" }] },
+        });
+        expect(coordinator.runtimeProjection(readyComposition())).toMatchObject({ freshness: "idle" });
     });
 });
 

@@ -2412,10 +2412,13 @@ describe("preview target ownership (PreviewCoordinator)", () => {
     it("retarget is owned by the PreviewCoordinator: the app delegates the WHOLE transition, and the coordinator tears down LAST, committing in one apply against CURRENT", () => {
         const app = read("../src/app.tsx");
         const coordinator = read("../src/preview-coordinator.ts");
-        // The app delegates: no local teardown choreography remains.
+        // The app delegates: no local teardown choreography remains, and
+        // no "host unavailable" null guard blocks the retarget (the
+        // coordinator is always present; with no host it is a pure
+        // Workspace commit).
         const onPreview = app.match(/const onPreviewThisGraph[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
-        expect(onPreview).toContain("const coordinator = preview.coordinator;");
-        expect(onPreview).toContain("await coordinator.retargetTo(target.sessionId)");
+        expect(onPreview).toContain("await preview.coordinator.retargetTo(target.sessionId)");
+        expect(onPreview).not.toContain("coordinator === null");
         expect(onPreview).not.toContain("stopPreviewRuntimeIfAttached");
         expect(onPreview).not.toContain("commitWorkspacePreviewTarget");
         // The coordinator owns the discipline: the LAST await is the strict
@@ -2435,7 +2438,11 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         const app = read("../src/app.tsx");
         const closeFn = app.match(/async function closeOneTab[\s\S]*?\n\s{4}\}/)?.[0] ?? "";
         expect(closeFn).toContain("authoringStore.getSnapshot().session.preview.targetDocumentId === documentSessionId");
-        expect(closeFn).toContain("await coordinator.closeTarget(documentSessionId)");
+        // The close binds to the exact revision the user confirmed
+        // discarding (documentRevision) and hands both to the coordinator.
+        expect(closeFn).toContain("documentRevision(doc)");
+        expect(closeFn).toContain("await preview.coordinator.closeTarget(documentSessionId, expectedRevision)");
+        expect(closeFn).not.toContain("coordinator === null");
         expect(closeFn).toContain("applyWorkspaceTransition((current) => closeWorkspaceDocument(current, documentSessionId))");
         expect(closeFn).not.toContain("stopPreviewRuntimeIfAttached");
     });
@@ -2448,19 +2455,25 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         expect(coordinator).toMatch(/export class PreviewCoordinator/);
     });
 
-    it("the app keeps the structured refusal UX: both transition paths abort with a note on refusal, and the hook exposes the coordinator (with the store)", () => {
+    it("the app keeps the structured refusal UX; the hook exposes a NON-NULL coordinator reading live host refs, with gate/projection honest about no-host", () => {
         const app = read("../src/app.tsx");
         const hook = read("../src/useShaderPreview.ts");
         expect(app).toMatch(/describeTransitionRefusal\(result\.refusal\)/);
         expect(app).toMatch(/Cannot retarget the Preview yet/);
         expect(app).toMatch(/Cannot close this tab yet/);
-        expect(app).toMatch(/const coordinator = preview\.coordinator;/);
-        expect(app).toMatch(/if \(coordinator === null\)/);
+        // The hook owns ONE coordinator per mount, reading the LIVE host
+        // bindings through accessors (so transitions stay available when
+        // no host is attached), and exposes it as NON-NULL.
+        expect(hook).toMatch(/readonly coordinator: PreviewCoordinator;/);
+        expect(hook).toMatch(/\(\) => managerRef\.current/);
+        expect(hook).toMatch(/\(\) => flowRef\.current/);
+        expect(hook).toMatch(/new PreviewCoordinator\(/);
+        expect(hook).toMatch(/input\.workspaceStore/);
+        // gate / projection are honest no-host facts (null), not a dead
+        // optional-chain on a nullable coordinator.
+        expect(hook).toMatch(/gate: flow !== null \? coordinator\.gate\(composition\) : null/);
+        expect(hook).toMatch(/projection: flow !== null \? coordinator\.runtimeProjection\(composition\) : null/);
         expect(app).toMatch(/workspaceStore: authoringStore/);
-        expect(hook).toMatch(/readonly coordinator: PreviewCoordinator \| null/);
-        expect(hook).toMatch(/new PreviewCoordinator\(manager, preview, input\.workspaceStore\)/);
-        expect(hook).toMatch(/gate: coordinator\?\.gate\(composition\) \?\? null/);
-        expect(hook).toMatch(/projection: coordinator\?\.runtimeProjection\(composition\) \?\? null/);
     });
 
     it("the Runtime manager owns the strict teardown: proven exit, sticky unproven, no second host request", () => {
@@ -2501,6 +2514,41 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         expect(ws).toMatch(
             /workspace\.preview\.targetDocumentId === documentSessionId\s*\? \(documents\.length > 0 \? activeDocumentId : null\)/,
         );
+    });
+
+    it("close/retarget discipline: revision binding, build↔transition mutual exclusion, proven-no-Runtime commits, and the bypass is closed", () => {
+        const coordinator = read("../src/preview-coordinator.ts");
+        const flow = read("../src/preview-build-flow.ts");
+        const hook = read("../src/useShaderPreview.ts");
+
+        // Revision binding (no data loss): closeTarget binds to the exact
+        // revision the user confirmed and revalidates it at commit time.
+        expect(coordinator).toMatch(/async closeTarget\(/);
+        expect(coordinator).toMatch(/expectedRevision: string/);
+        expect(coordinator).toMatch(/document-changed-during-close/);
+        expect(coordinator).toMatch(/documentRevision\(stillOpen\) !== expectedRevision/);
+
+        // Build / transition mutual exclusion, both directions, no queue.
+        expect(coordinator).toMatch(/build-in-flight/);
+        expect(coordinator).toMatch(/preview-transition-in-flight/);
+        expect(flow).toMatch(/preview-transition-in-flight/);
+        expect(flow).toMatch(/preview-host-unavailable/);
+        expect(flow).toMatch(/private openBuilds = 0/);
+        expect(flow).toMatch(/get buildInFlight\(\)/);
+
+        // Proven no Runtime (manager null) commits the pure Workspace
+        // transition; only an unresolved host teardown blocks.
+        expect(coordinator).toMatch(/teardownProof\(\)/);
+        expect(coordinator).toMatch(/preview-host-unavailable/);
+
+        // The bypass is closed: the strict teardown is reachable ONLY
+        // through the coordinator (no public stopPreviewAndWait), and the
+        // build gate is a REQUIRED argument (no uncomposed default to fall
+        // into) — read-only projection keeps its default, but that is not
+        // the issuance path.
+        expect(hook).not.toMatch(/stopPreviewAndWait/);
+        expect(flow).not.toMatch(/stopPreviewAndWait/);
+        expect(flow).toMatch(/buildPreview\([\s\S]*?evaluateGate: \(input: PreviewCompositionInput\) => PreviewBuildGate,[\s\S]*?\): Promise<PreviewBuildLaunch>/);
     });
 });
 

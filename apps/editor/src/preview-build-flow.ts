@@ -152,7 +152,12 @@ export type PreviewBuildGateReason =
     | { readonly reason: "attached-runtime-deployment-mismatch" }
     | { readonly reason: "preview-proof-missing" }
     | { readonly reason: "preview-ineligible"; readonly eligibility: PreviewEligibility }
-    | { readonly reason: "request-not-well-formed"; readonly verdict: Exclude<PreviewRequestWellFormed, { ok: true }> };
+    | { readonly reason: "request-not-well-formed"; readonly verdict: Exclude<PreviewRequestWellFormed, { ok: true }> }
+    /** The PreviewCoordinator composes these two structural refusals BEFORE
+     *  any of the facts above: a transition owns the slot, or the desktop
+     *  host (and with it this very flow) does not exist for this mount. */
+    | { readonly reason: "preview-transition-in-flight" }
+    | { readonly reason: "preview-host-unavailable" };
 
 export interface PreviewBuildGate {
     readonly admitted: boolean;
@@ -260,6 +265,10 @@ export class PreviewBuildFlow {
     private handshakeInFlightCount = 0;
     private buildQueue: Promise<void> = Promise.resolve();
     private latestBuildRequestOrdinal = 0;
+    /** Admitted Preview build lifecycles still open (admission -> terminal
+     * attempt outcome). One side of the Coordinator's mutual exclusion:
+     * while nonzero, no ownership transition may commit. */
+    private openBuilds = 0;
     private activeBuild: { readonly buildId: BuildId; cancelRequested: boolean } | null = null;
     private acceptedObservationState: {
         readonly candidate: ToolCandidate;
@@ -291,6 +300,15 @@ export class PreviewBuildFlow {
 
     get previewHandshakeInFlight(): boolean {
         return this.handshakeInFlightCount > 0;
+    }
+
+    /** True while at least one Preview build lifecycle is open — from its
+     * admission through issue to its terminal attempt outcome. This is the
+     * build-side fact of the Coordinator's transition/build mutual
+     * exclusion: ownership transitions and build lifecycles never overlap.
+     * Reads a count; it never advances the build line or issues work. */
+    get buildInFlight(): boolean {
+        return this.openBuilds > 0;
     }
 
     get activeBuildId(): BuildId | null {
@@ -540,18 +558,26 @@ export class PreviewBuildFlow {
      *  that attempt's terminal outcome before re-gating and issuing. Queued
      *  requests superseded before issue never consume AttemptSequence.
      *
-     *  The gate is injected so the PreviewCoordinator can compose its
-     *  attached-Runtime refusal checks BEFORE the build gate; unadorned
-     *  callers (tests of the controller alone) get the build gate. */
+     *  The gate is REQUIRED, not defaulted: an unadorned `buildGate` is a
+     *  BYPASS of the PreviewCoordinator, so the API refuses to offer it.
+     *  Production callers go through the PreviewCoordinator (which composes
+     *  its attached-Runtime + transition-in-flight facts BEFORE the build
+     *  gate); tests of the controller alone pass `buildGate` explicitly.
+     *
+     *  Each ADMISSION opens a build-lifecycle that stays open until the
+     *  attempt's terminal outcome settles — that window (issue -> terminal
+     *  outcome, and no narrower) is exposed as `buildInFlight` for the
+     *  Coordinator's transition/build mutual exclusion. */
     buildPreview(
         input: PreviewCompositionInput,
-        evaluateGate: (input: PreviewCompositionInput) => PreviewBuildGate = (candidate) => this.buildGate(candidate),
+        evaluateGate: (input: PreviewCompositionInput) => PreviewBuildGate,
     ): Promise<PreviewBuildLaunch> {
         const initialGate = evaluateGate(input);
         if (!initialGate.admitted) {
             return Promise.resolve({ issued: false, reason: "gate-refused", gate: initialGate });
         }
 
+        this.openBuilds += 1; // admission opens the build lifecycle
         const ordinal = ++this.latestBuildRequestOrdinal;
         this.requestActiveCancellation();
         const predecessor = this.buildQueue;
@@ -571,6 +597,9 @@ export class PreviewBuildFlow {
                 if (launch.issued) {
                     await launch.outcome;
                 }
+            })
+            .finally(() => {
+                this.openBuilds = Math.max(0, this.openBuilds - 1); // terminal outcome settles -> lifecycle closes
             })
             .catch(() => undefined);
         return started;

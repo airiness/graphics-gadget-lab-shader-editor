@@ -18,26 +18,33 @@ import {
     type SurfaceProfileDescriptor,
 } from "@gglab/shader-graph-core";
 import { canonicalV1Fixture } from "../../../packages/shader-graph-core/tests/fixtures/descriptor-v1.js";
-import { PreviewBuildFlow, type PreviewCompositionInput, type PreviewToolStatePort } from "../src/preview-build-flow.js";
+import { PreviewBuildFlow, type PreviewBuildGate, type PreviewCompositionInput, type PreviewToolStatePort } from "../src/preview-build-flow.js";
 import { AttachedPreviewRuntimeManager } from "../src/preview-runtime-manager.js";
 import { previewSessionReport } from "../src/preview-build-session.js";
 import { PreviewCoordinator } from "../src/preview-coordinator.js";
 import { WorkspaceStore, type WorkspaceAuthoringState } from "../src/workspace-store.js";
-import { createWorkspaceSession } from "../src/workspace-session.js";
+import { createDocumentSessionId, createWorkspaceSession } from "../src/workspace-session.js";
 
 function manager(boundary: FakePreviewRuntimeBoundary): AttachedPreviewRuntimeManager {
     return new AttachedPreviewRuntimeManager(boundary, SESSION_ID);
 }
 
-/** The attached-Runtime refusal vocabulary is mapped by the Coordinator
- * (before the Controller's build gate), so these scenarios are observed
- * through `coordinator.gate`. */
+/** The Coordinator reads the host bindings through accessors; the test
+ * world has both, so simple constant accessors stand in for the live refs. */
 function coordinator(manager: AttachedPreviewRuntimeManager, flow: PreviewBuildFlow): PreviewCoordinator {
     return new PreviewCoordinator(
-        manager,
-        flow,
+        () => manager,
+        () => flow,
         new WorkspaceStore<WorkspaceAuthoringState>({ session: createWorkspaceSession(), profileDescriptor: null }),
     );
+}
+
+/** The UNADORNED controller gate. Production callers go through the
+ * PreviewCoordinator (which composes its facts BEFORE this gate); tests of
+ * the controller alone must name their gate explicitly — there is no
+ * silent uncomposed default to fall into. */
+function selfGate(flow: PreviewBuildFlow): (input: PreviewCompositionInput) => PreviewBuildGate {
+    return (input) => flow.buildGate(input);
 }
 
 const DESCRIPTOR_IDENTITY = "a7".repeat(32);
@@ -264,7 +271,7 @@ async function prove(flow: PreviewBuildFlow, input = composition()): Promise<voi
 
 async function publish(flow: PreviewBuildFlow, input = composition()): Promise<void> {
     await prove(flow, input);
-    const launch = await flow.buildPreview(input);
+    const launch = await flow.buildPreview(input, selfGate(flow));
     if (!launch.issued) {
         throw new Error("test Preview build must issue");
     }
@@ -300,7 +307,7 @@ describe("Preview handshake orchestration", () => {
             reasons: [{ reason: "preview-proof-missing" }],
             request: null,
         });
-        expect((await flow.buildPreview(input)).issued).toBe(false);
+        expect((await flow.buildPreview(input, selfGate(flow))).issued).toBe(false);
         expect(boundary.previewBuildCalls).toBe(0);
     });
 
@@ -348,7 +355,7 @@ describe("Preview build orchestration", () => {
         const input = composition();
         await prove(flow, input);
 
-        const launch = await flow.buildPreview(input);
+        const launch = await flow.buildPreview(input, selfGate(flow));
         expect(launch.issued).toBe(true);
         if (!launch.issued) {
             throw new Error("test gate must issue");
@@ -383,12 +390,12 @@ describe("Preview build orchestration", () => {
         const input = composition();
         await prove(flow, input);
 
-        const first = await flow.buildPreview(input);
+        const first = await flow.buildPreview(input, selfGate(flow));
         if (!first.issued) {
             throw new Error("first attempt must issue");
         }
         expect(flow.activeBuildId).toEqual(first.buildId);
-        const secondPending = flow.buildPreview(input);
+        const secondPending = flow.buildPreview(input, selfGate(flow));
         await expect(first.outcome).resolves.toEqual({ kind: "canceled" });
         const second = await secondPending;
         expect(second).toMatchObject({ issued: true, attemptSequence: 2 });
@@ -410,8 +417,8 @@ describe("Preview build orchestration", () => {
         const input = composition();
         await prove(flow, input);
 
-        const firstPending = flow.buildPreview(input);
-        const secondPending = flow.buildPreview(input);
+        const firstPending = flow.buildPreview(input, selfGate(flow));
+        const secondPending = flow.buildPreview(input, selfGate(flow));
         const first = await firstPending;
         const second = await secondPending;
         expect(first).toMatchObject({ issued: false, reason: "superseded-before-issue" });
@@ -433,12 +440,12 @@ describe("Preview build orchestration", () => {
         const input = composition();
         await prove(flow, input);
 
-        const first = await flow.buildPreview(input);
+        const first = await flow.buildPreview(input, selfGate(flow));
         if (!first.issued) {
             throw new Error("first attempt must issue");
         }
         await first.outcome;
-        const second = await flow.buildPreview({ ...input, emission: emission(`${input.emission?.source}// revision 2`) });
+        const second = await flow.buildPreview({ ...input, emission: emission(`${input.emission?.source}// revision 2`) }, selfGate(flow));
         if (!second.issued) {
             throw new Error("second attempt must issue");
         }
@@ -456,7 +463,7 @@ describe("Preview build orchestration", () => {
         const input = composition();
         await prove(flow, input);
 
-        const launch = await flow.buildPreview(input);
+        const launch = await flow.buildPreview(input, selfGate(flow));
         if (!launch.issued) {
             throw new Error("attempt must issue");
         }
@@ -478,7 +485,7 @@ describe("Preview Runtime observation orchestration", () => {
         const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observation, manager(runtimes()));
         const input = composition();
         await prove(flow, input);
-        const launch = await flow.buildPreview(input);
+        const launch = await flow.buildPreview(input, selfGate(flow));
         if (!launch.issued) {
             throw new Error("attempt must issue");
         }
@@ -512,7 +519,7 @@ describe("Preview Runtime observation orchestration", () => {
         const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observation, manager(runtimes()));
         const input = composition();
         await prove(flow, input);
-        const first = await flow.buildPreview(input);
+        const first = await flow.buildPreview(input, selfGate(flow));
         if (!first.issued) {
             throw new Error("first attempt must issue");
         }
@@ -520,7 +527,7 @@ describe("Preview Runtime observation orchestration", () => {
         await flow.refreshObservation();
 
         const revised = { ...input, emission: emission(`${input.emission?.source}// revision 2`) };
-        const second = await flow.buildPreview(revised);
+        const second = await flow.buildPreview(revised, selfGate(flow));
         if (!second.issued) {
             throw new Error("second attempt must issue");
         }
@@ -542,7 +549,7 @@ describe("Preview Runtime observation orchestration", () => {
         const flow = new PreviewBuildFlow(fake(), new TestToolPort(), SESSION_ID, observation, manager(runtimes()));
         const input = composition();
         await prove(flow, input);
-        const launch = await flow.buildPreview(input);
+        const launch = await flow.buildPreview(input, selfGate(flow));
         if (!launch.issued) {
             throw new Error("attempt must issue");
         }
@@ -569,7 +576,7 @@ describe("Preview Runtime observation orchestration", () => {
         const flow = new PreviewBuildFlow(fake(), port, SESSION_ID, observation, manager(runtimes()));
         const input = composition();
         await prove(flow, input);
-        const launch = await flow.buildPreview(input);
+        const launch = await flow.buildPreview(input, selfGate(flow));
         if (!launch.issued) {
             throw new Error("attempt must issue");
         }
@@ -610,7 +617,7 @@ describe("Preview Runtime observation orchestration", () => {
         });
 
         await prove(flow, input);
-        const next = await flow.buildPreview(input);
+        const next = await flow.buildPreview(input, selfGate(flow));
         if (!next.issued) {
             throw new Error("the second deployment's Preview build must issue");
         }
@@ -792,5 +799,49 @@ describe("Attached Preview Runtime authority - composition facts read by the flo
         flow.reportCandidateInvalidation(refused.result);
         expect(port.invalidations).toHaveLength(1);
         expect(port.state).toEqual({ status: "unavailable" });
+    });
+});
+
+describe("Coordinator transition / build mutual exclusion (build-side)", () => {
+    it("refuses a retarget AND a target-close while a build lifecycle (issue -> terminal outcome) is open, then releases the exclusion once it settles", async () => {
+        const boundary = fake({ keepCompilePending: true });
+        const manager = new AttachedPreviewRuntimeManager(runtimes([{ kind: "launched", runtimeIdentity: "runtime-a" }]), SESSION_ID);
+        const flow = new PreviewBuildFlow(boundary, new TestToolPort(), SESSION_ID, observations(), manager);
+        const store = new WorkspaceStore<WorkspaceAuthoringState>({ session: createWorkspaceSession(), profileDescriptor: null });
+        const coordinator = new PreviewCoordinator(() => manager, () => flow, store);
+        const target = createDocumentSessionId("some-target");
+
+        // Prove the build gate, then ISSUE a build whose terminal outcome is
+        // held — that is the "build lifecycle in flight" window.
+        await prove(flow, composition());
+        const build = await flow.buildPreview(composition(), selfGate(flow));
+        expect(flow.buildInFlight).toBe(true);
+
+        // Both transition directions are STRUCTURAL refusals — not queued,
+        // not superseded — while the build lifecycle is open.
+        const retargetRefused = await coordinator.retargetTo(target);
+        expect(retargetRefused).toMatchObject({ ok: false, refusal: { reason: "build-in-flight" } });
+        const closeRefused = await coordinator.closeTarget(target, "");
+        expect(closeRefused).toMatchObject({ ok: false, refusal: { reason: "build-in-flight" } });
+
+        // Settle the build's terminal outcome; the lifecycle closes...
+        expect(boundary.releasePending()).toBe(true);
+        if (build.issued) {
+            await build.outcome;
+        }
+        // The flow decrements its in-flight counter in a `.finally` queued
+        // behind this test's own `await build.outcome` continuation, so
+        // yield microtasks until the bookkeeping lands before asserting it.
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(flow.buildInFlight).toBe(false);
+
+        // ...and the exclusion is lifted: the transition is attempted again
+        // (it may refuse for an unrelated, store-level reason — the empty
+        // session has no such tab — but it is no longer build-in-flight).
+        const after = await coordinator.retargetTo(target);
+        if (!after.ok) {
+            expect(after.refusal.reason).not.toBe("build-in-flight");
+        }
     });
 });

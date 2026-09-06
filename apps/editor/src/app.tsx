@@ -81,6 +81,7 @@ import {
     basenameOf,
     closeAction,
     createSession,
+    documentRevision,
     isDirty,
     provenanceFromImport,
     provenanceFromFile,
@@ -542,23 +543,28 @@ export function App() {
     };
 
     /** Apply one accepted tab close. If the tab being closed IS the Preview
-     * target, the PreviewCoordinator owns the transition: strict teardown
-     * LAST-await, then one synchronous commit where the close + the
-     * Preview-target re-seed land together. A refusal leaves the tab open
-     * and the snapshot untouched. A NON-target tab close is a plain
-     * Workspace reducer operation — it never touches the Preview
-     * machinery. */
+     * target, the PreviewCoordinator owns the transition: the strict
+     * teardown (last await; skipped only in the proven-no-Runtime / no-host
+     * case) then one synchronous commit where the close + the Preview-target
+     * re-seed land together.
+     *
+     * Revision binding (data-loss guard): the app captures the EXACT
+     * document revision the user just confirmed discarding and binds the
+     * close to it. If a NEWER revision appears while the teardown is
+     * pending, the coordinator revalidates at commit time and REFUSES
+     * (`document-changed-during-close`) — the newer work is never silently
+     * discarded. A refusal leaves the tab open and the snapshot untouched.
+     * A NON-target tab close is a plain Workspace reducer operation — it
+     * never touches the Preview machinery.
+     *
+     * The coordinator is always present: with no desktop host it still
+     * commits the pure Workspace close (proven no Runtime); it only blocks
+     * when a host's old-Runtime teardown / ownership is unresolved. */
     async function closeOneTab(documentSessionId: DocumentSessionId): Promise<void> {
         if (authoringStore.getSnapshot().session.preview.targetDocumentId === documentSessionId) {
-            const coordinator = preview.coordinator;
-            if (coordinator === null) {
-                setOperationNotes((previous) => [
-                    ...previous,
-                    "Cannot close this tab yet: the Preview target must be resolved but no desktop Preview host is attached.",
-                ]);
-                return;
-            }
-            const result = await coordinator.closeTarget(documentSessionId);
+            const doc = authoringStore.getSnapshot().session.documents.find((candidate) => candidate.sessionId === documentSessionId);
+            const expectedRevision = doc !== undefined ? documentRevision(doc) : "";
+            const result = await preview.coordinator.closeTarget(documentSessionId, expectedRevision);
             if (result.ok === false) {
                 setOperationNotes((previous) => [
                     ...previous,
@@ -594,15 +600,12 @@ export function App() {
     const onPreviewThisGraph = async (): Promise<void> => {
         const target = session;
         const name = tabNameFor(target);
-        const coordinator = preview.coordinator;
-        if (coordinator === null) {
-            setOperationNotes((previous) => [
-                ...previous,
-                "Cannot retarget the Preview yet: no desktop Preview host is attached.",
-            ]);
-            return;
-        }
-        const result = await coordinator.retargetTo(target.sessionId);
+        // The coordinator is always present for a mounted editor: with no
+        // desktop host the retarget is a pure Workspace commit (proven no
+        // Runtime); it blocks only when a host's old-Runtime teardown /
+        // ownership is unresolved. No null check — that would re-introduce
+        // the "host unavailable blocks Workspace transition" coupling.
+        const result = await preview.coordinator.retargetTo(target.sessionId);
         if (result.ok === false) {
             setOperationNotes((previous) => [
                 ...previous,

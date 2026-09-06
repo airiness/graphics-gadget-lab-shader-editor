@@ -350,19 +350,35 @@ teardown settles
 
 Both retarget and target-close transitions obey the same discipline.
 
-1. Claim one strict single-flight slot.
-2. Record a transition identity (`kind`, target document id, monotonic
+1. While a Preview build lifecycle (issue -> terminal outcome) is open, refuse
+   with `build-in-flight` — a structured refusal, not a queue and not an
+   auto-supersede (see "Build / transition mutual exclusion").
+2. Claim one strict single-flight slot; if one is already in flight, refuse
+   with `transition-in-flight` (no queue, no auto-supersede).
+3. Record a transition identity (`kind`, target document id, monotonic
    sequence for evidence only).
-3. Use `claim -> try { ... } finally { release }`; every refusal and exception
+4. Use `claim -> try { ... } finally { release }`; every refusal and exception
    releases the slot.
-4. `manager.terminateAndJoin()` is the transition's **last await** whenever a
-   teardown is required.
-5. After that await, perform exactly one synchronous `WorkspaceStore.apply`.
-6. Revalidate the intent against that apply-time snapshot.
-7. Resolve target emission and run the Workspace reducers inside that same
-   synchronous application.
-8. Never pre-compute a whole next Workspace snapshot before the await and
-   write it back afterwards.
+5. `manager.terminateAndJoin()` is the transition's **last await** whenever a
+   teardown is required. A host's safety/unproven state REFUSES the transition
+   (`teardown-rejected` / `exit-unproven`) rather than committing on an
+   unproven exit.
+6. If NO host is attached (proven no Runtime), there is nothing to join: the
+   transition is a pure Workspace commit — it does not block. The distinction
+   that must hold: proven no Runtime ALLOWS the Workspace transition; an
+   old-Runtime teardown / ownership that is unresolved MUST block.
+7. After the teardown (or immediately, no-host), perform exactly one
+   synchronous `WorkspaceStore.apply`.
+8. Revalidate the intent against that apply-time snapshot.
+9. For a target-close, also revalidate that the document's revision is still
+   the `expectedRevision` the user confirmed discarding; if a NEWER revision
+   has appeared while the teardown was pending, refuse with
+   `document-changed-during-close` and leave the tab open (the newer work is
+   never silently discarded).
+10. Resolve target emission and run the Workspace reducers inside that same
+    synchronous application.
+11. Never pre-compute a whole next Workspace snapshot before the await and
+    write it back afterwards.
 
 Strict single-flight means exactly this:
 
@@ -383,10 +399,12 @@ latest-intent-wins protocol.
 Normal retarget:
 
 ```text
+if a Preview build lifecycle is open: refuse build-in-flight
 claim
 -> validate target exists (early guard)
--> await terminateAndJoin
--> exit-unproven: refuse; no Workspace mutation
+-> if a host is attached: await terminateAndJoin
+     exit-unproven / teardown-rejected: refuse; no Workspace mutation
+-> if NO host is attached: no teardown (proven no Runtime)
 -> store.apply(CURRENT):
      revalidate target still exists
      resolve current descriptor + current target emission
@@ -413,15 +431,24 @@ claim
 `targetChanged: false` does not mean the Workspace was unchanged; the target's
 presentation emission may have changed.
 
-### `closeTarget(documentId)`
+### `closeTarget(documentId, expectedRevision)`
+
+`expectedRevision` is the exact document revision the user confirmed
+discarding; the close is bound to it so a newer revision that appears while the
+teardown is pending can never be silently discarded.
 
 ```text
+if a Preview build lifecycle is open: refuse build-in-flight
 claim
 -> validate document is the Preview target
--> await terminateAndJoin
--> exit-unproven: refuse; tab remains open
+-> if a host is attached: await terminateAndJoin
+     exit-unproven / teardown-rejected: refuse; tab remains open
+-> if NO host is attached: no teardown (proven no Runtime)
 -> store.apply(CURRENT):
      revalidate document is still open and still target
+     revalidate document revision == expectedRevision
+        (a NEWER revision while teardown was pending -> refuse
+         document-changed-during-close; the tab remains OPEN)
      closeWorkspaceDocument(CURRENT.session, documentId)
      reducer re-seeds Preview target from the active document of CURRENT
 -> return ok
@@ -430,6 +457,33 @@ claim
 
 A non-target tab close remains a plain Workspace reducer operation and does not
 depend on Preview machinery.
+
+## Build / transition mutual exclusion
+
+The Coordinator-level ownership transition and the Preview build lifecycle are
+mutually exclusive in BOTH directions. Neither queues the other, and neither
+auto-supersedes the other.
+
+```text
+transition in flight  ->  build refuses  preview-transition-in-flight (structural gate)
+build in flight       ->  retarget / close refuses  build-in-flight
+```
+
+- A build arriving while a transition is in flight is answered by the
+  Coordinator BEFORE it reaches the controller's build gate, as a structural
+  gate refusal (`preview-transition-in-flight`) — it is not queued and it
+  opens no build lifecycle.
+- A retarget or target-close arriving while a build lifecycle (issue ->
+  terminal outcome) is open is answered as a structured refusal
+  (`build-in-flight`) — it is not queued and it is not superseded.
+- The dangerous race this closes: retarget to B commits, then an OLD build on
+  the previous target A still in flight publishes and auto-launches A, leaving
+  "Workspace target B / Runtime publication A". With mutual exclusion, the
+  retarget cannot commit while the old build is in flight, and the old build
+  cannot issue while the retarget is in flight.
+- The controller exposes the build-lifecycle window as `buildInFlight`
+  (admission -> terminal outcome, a safe superset of the minimum), which the
+  Coordinator consults before an ownership transition.
 
 ## Build / Runtime gate composition
 
@@ -458,6 +512,15 @@ coordinator.gate(composition)
     else
         -> controller.buildGate(composition)
 ```
+
+The composed gate above is the ONLY admissible path for a Preview build in
+production. The controller's `buildPreview` takes the gate as a REQUIRED
+argument (there is no uncomposed default to call); production code therefore
+cannot bypass the Coordinator by invoking the controller with its bare
+`buildGate`. The strict `terminateAndJoin()` teardown is likewise reachable
+only through the Coordinator's transitions — the hook no longer exposes a
+`stopPreviewAndWait`. The read-only `runtimeProjection` gate keeps its default
+because it issues nothing.
 
 Do **not** compare `deploymentToolPath` with Preview Program Descriptor
 identity. Descriptor identity remains part of the Preview build requirement,
