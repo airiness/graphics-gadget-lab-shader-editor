@@ -1001,7 +1001,13 @@ describe("typed port presentation (core types → data categories)", () => {
             const app = read("../src/app.tsx");
             // Workspace owns the complete DocumentSession records and the
             // current document IS activeSession.history.present.
-            expect(app).toMatch(/const \[workspace, setWorkspace\] = useState<WorkspaceSession<DocumentSession>>/);
+            // The authoring state is a synchronous STORE authority: React is
+            // a useSyncExternalStore projection and NO React-state mirror may
+            // overwrite the store.
+            expect(app).toMatch(/new WorkspaceStore<WorkspaceAuthoringState>/);
+            expect(app).toMatch(/useSyncExternalStore\(\s*authoringStore\.subscribe,\s*authoringStore\.getSnapshot,\s*authoringStore\.getSnapshot/);
+            expect(app).not.toMatch(/useState<WorkspaceSession<DocumentSession>>/);
+            expect(app).toContain("const workspace = authoring.session");
             expect(app).toMatch(/createSession\(allocateDocumentSessionId\(\), provenanceFromImport\(\), seed\)/);
             expect(app).toContain("const session = requireActiveDocumentSession(workspace)");
             expect(app).toMatch(/const history = session\.history;/);
@@ -2330,7 +2336,7 @@ describe("primary sidebar (activity bar + workspace explorer)", () => {
     it("wires the Explorer to the HOST channel: choose root → store it → bounded, CANCELLABLE discovery", () => {
         const app = read("../src/app.tsx");
         expect(app).toMatch(/channel\.chooseWorkspaceRoot\(\)/);
-        expect(app).toMatch(/setWorkspaceRoot\(current, root\)/);
+        expect(app).toMatch(/setWorkspaceRoot\(state\.session, root\)/);
         expect(app).toMatch(/channel\.discoverWorkspace\(expectedUri\)/);
         expect(app).toMatch(/channel\.cancelWorkspaceDiscovery\(id\)/);
     });

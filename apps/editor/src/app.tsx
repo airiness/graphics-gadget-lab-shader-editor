@@ -7,7 +7,7 @@
  * defined here: validation, port-level types, conformance, compatibility,
  * and emission all come from @gglab/shader-graph-core.
  */
-import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from "react";
 import {
     addConnection,
     removeConnection,
@@ -117,6 +117,10 @@ import {
     type WorkspaceRootHandle,
     type WorkspaceSession,
 } from "./workspace-session.js";
+import {
+    WorkspaceStore,
+    type WorkspaceAuthoringState,
+} from "./workspace-store.js";
 import { saveShortcutOf } from "./shortcuts.js";
 import { INSPECTOR_ZONES, INSPECTOR_ZONE_LABELS, inspectorZoneBadge, type InspectorZone, type InspectorZoneFacts } from "./inspector-tabs.js";
 // Type-only (erased at compile time): the official dialog option shapes,
@@ -175,7 +179,6 @@ export function App() {
     // The seeded startup document and its initial session share ONE
     // instance so the baseline is exactly that document's canonical
     // bytes.
-    const [seed] = useState(() => seedDocument());
     // One local allocator is sufficient for ephemeral identities inside this
     // Workspace lifetime. Persisted graphId and file paths are deliberately
     // not substituted for this identity.
@@ -184,18 +187,49 @@ export function App() {
         documentSessionSequence.current += 1;
         return createDocumentSessionId(`document-session-${documentSessionSequence.current}`);
     };
-    // WorkspaceSession owns the complete open-document records and the active
-    // identity. The canvas projects only the active DocumentSession; history,
-    // provenance, and baseline never live in a parallel app-level state.
-    const [workspace, setWorkspace] = useState<WorkspaceSession<DocumentSession>>(() => {
+    // The Workspace authoring state is the app's ONE synchronous external
+    // STORE AUTHORITY (the Workspace commit authority): the store owns the
+    // open-document records, the active identity, and the single current
+    // profile descriptor fact. React is a projection of that store through
+    // useSyncExternalStore; there is NO React-state mirror that may later
+    // overwrite the store, and no functional updater smuggles results out of
+    // a setState — commit-time code reads CURRENT, reduces, and receives the
+    // structured result synchronously.
+    const [authoringStore] = useState(() => {
+        const seed = seedDocument();
         const initial = createSession(allocateDocumentSessionId(), provenanceFromImport(), seed);
         const opened = openWorkspaceDocument(createWorkspaceSession<DocumentSession>(), initial);
         if (opened.accepted === false) {
             throw new Error(`The initial DocumentSession was refused: ${opened.refusal.reason}.`);
         }
-        return opened.workspace;
+        return new WorkspaceStore<WorkspaceAuthoringState>({
+            session: opened.workspace,
+            profileDescriptor: null,
+        });
     });
+    const authoring = useSyncExternalStore(
+        authoringStore.subscribe,
+        authoringStore.getSnapshot,
+        authoringStore.getSnapshot,
+    );
+    const workspace = authoring.session;
     const session = requireActiveDocumentSession(workspace);
+    // Project one WorkspaceSession reducer transition through the store
+    // authority (read CURRENT -> reduce(CURRENT) -> publish). A reducer that
+    // returns the SAME session object leaves the snapshot identity
+    // untouched: no new snapshot, no notification.
+    const applyWorkspaceTransition = <TResult,>(
+        reduce: (
+            current: WorkspaceSession<DocumentSession>,
+        ) => { readonly workspace: WorkspaceSession<DocumentSession> } & TResult,
+    ): TResult =>
+        authoringStore.apply((state) => {
+            const result = reduce(state.session);
+            return {
+                next: result.workspace === state.session ? state : { ...state, session: result.workspace },
+                result,
+            };
+        });
     // Async host completions consult this synchronously updated identity.
     // A stale save must not update another document's baseline or let a
     // close guard close the replacement document.
@@ -211,16 +245,13 @@ export function App() {
         update: (current: DocumentSession) => DocumentSession,
         missingDocument: "reject" | "ignore" = "reject",
     ): void {
-        setWorkspace((current) => {
-            const result = updateWorkspaceDocument(current, documentSessionId, update);
-            if (result.accepted) {
-                return result.workspace;
-            }
+        const result = applyWorkspaceTransition((current) => updateWorkspaceDocument(current, documentSessionId, update));
+        if (!result.accepted) {
             if (missingDocument === "ignore" && result.refusal.reason === "document-not-open") {
-                return current;
+                return;
             }
             throw new Error(`DocumentSession update was refused: ${result.refusal.reason}.`);
-        });
+        }
     }
     // Application-level (shared) UI state — owned by the shell, not by any
     // one open document:
@@ -459,12 +490,9 @@ export function App() {
             fileRevisionToken,
         );
         currentDocumentSessionId.current = replacement.sessionId;
-        setWorkspace((current) => {
-            // Open co-existing: never close the active document. The reducer
-            // activates the new tab (or the same one) and keeps the rest.
-            const opened = openWorkspaceDocument(current, replacement);
-            return opened.accepted ? opened.workspace : current;
-        });
+        // Open co-existing: never close the active document. The reducer
+        // activates the new tab (or the same one) and keeps the rest.
+        applyWorkspaceTransition((current) => openWorkspaceDocument(current, replacement));
         setInspectorOpen(true);
         setInspectorZone("contract");
     };
@@ -482,10 +510,7 @@ export function App() {
      * (selection/focus/emission/notes) in its DocumentSession record. */
     const onActivateTab = (documentSessionId: DocumentSessionId): void => {
         currentDocumentSessionId.current = documentSessionId;
-        setWorkspace((current) => {
-            const activated = activateWorkspaceDocument(current, documentSessionId);
-            return activated.accepted ? activated.workspace : current;
-        });
+        applyWorkspaceTransition((current) => activateWorkspaceDocument(current, documentSessionId));
         requestAnimationFrame(() => fitRef.current?.());
     };
 
@@ -532,10 +557,7 @@ export function App() {
                 return;
             }
         }
-        setWorkspace((current) => {
-            const closed = closeWorkspaceDocument(current, documentSessionId);
-            return closed.accepted ? closed.workspace : current;
-        });
+        applyWorkspaceTransition((current) => closeWorkspaceDocument(current, documentSessionId));
     }
 
     /** The user confirmed discarding one dirty tab's unsaved changes. */
@@ -581,10 +603,7 @@ export function App() {
                 },
             }));
         }
-        setWorkspace((current) => {
-            const transition = commitWorkspacePreviewTarget(current, target.sessionId);
-            return transition.accepted ? transition.workspace : current;
-        });
+        applyWorkspaceTransition((current) => commitWorkspacePreviewTarget(current, target.sessionId));
         setOperationNotes((previous) => [
             ...previous,
             `Preview target set to "${name}" — switching tabs keeps it until you choose another.`,
@@ -621,7 +640,13 @@ export function App() {
                     // result, so a failed cancel never leaks stale entries.
                 }
             }
-            setWorkspace((current) => setWorkspaceRoot(current, root));
+            authoringStore.apply((state) => {
+                const nextSession = setWorkspaceRoot(state.session, root);
+                return {
+                    next: nextSession === state.session ? state : { ...state, session: nextSession },
+                    result: null,
+                };
+            });
             setExplorerEntries(null);
             setSidebarPanel("explorer");
             // Discover with the just-chosen root (the state read is still the
@@ -773,13 +798,12 @@ export function App() {
                 // If this exact host file is already an open tab, switch to
                 // it (dedupe by the host canonical URI) instead of opening a
                 // second tab. Otherwise open a co-existing new tab.
-                setWorkspace((current) => {
+                applyWorkspaceTransition((current) => {
                     const existing = current.documents.find(
                         (candidate) => candidate.canonicalUri === snapshot.canonicalDocumentUri,
                     );
                     if (existing !== undefined) {
-                        const activated = activateWorkspaceDocument(current, existing.sessionId);
-                        return activated.accepted ? activated.workspace : current;
+                        return activateWorkspaceDocument(current, existing.sessionId);
                     }
                     const replacement = createSession(
                         allocateDocumentSessionId(),
@@ -789,8 +813,7 @@ export function App() {
                         snapshot.fileRevisionToken,
                     );
                     currentDocumentSessionId.current = replacement.sessionId;
-                    const opened = openWorkspaceDocument(current, replacement);
-                    return opened.accepted ? opened.workspace : current;
+                    return openWorkspaceDocument(current, replacement);
                 });
                 setInspectorOpen(true);
                 setInspectorZone("contract");
@@ -1210,7 +1233,9 @@ export function App() {
         return () => window.removeEventListener("keydown", handler);
     }, [fileChannel]);
 
-    const descriptor: SurfaceProfileDescriptor | null = descriptorState.kind === "ready" ? descriptorState.descriptor : null;
+    // The single current descriptor authority: the store's committed fact
+    // (never a capture from a render that could stale across an await).
+    const descriptor: SurfaceProfileDescriptor | null = authoring.profileDescriptor;
 
     const flow = useMemo(() => documentToFlow(document, focus, selectedConnectionId, selectedNodeId), [document, focus, selectedConnectionId, selectedNodeId]);
     const selectedNode = useMemo(
@@ -1616,6 +1641,16 @@ export function App() {
         // same state object) an honest no-op.
         if (!Object.is(next, descriptorState)) {
             invalidateRevisionDerivedState();
+            // The committed descriptor fact flows through the Workspace's
+            // STORE AUTHORITY (the single current descriptor); the panel's
+            // loading/error presentation stays in its own state.
+            authoringStore.apply((state) => {
+                const descriptor = next.kind === "ready" ? next.descriptor : null;
+                return {
+                    next: descriptor === state.profileDescriptor ? state : { ...state, profileDescriptor: descriptor },
+                    result: null,
+                };
+            });
         }
         setDescriptorState(next);
     };
