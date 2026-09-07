@@ -1095,6 +1095,35 @@ Expected UX can include:
 
 UI richness must not leak into semantic persistence.
 
+## 18.1 Shared semantic edit contract
+
+`shader-graph-core` owns `GraphEditCommand`, its strict serialized reader and
+machine-readable catalog, `applyGraphEdit`, and atomic `applyGraphEdits`.
+GUI adapters and the CLI consume this one operation authority. Accepted changes
+return a new document; accepted no-ops and refusals preserve the input instance.
+Refusals carry structured core diagnostics. A batch refusal rolls back all
+preceding edits and identifies the refusing command without exposing a partial
+document as a successful result.
+
+Node and connection IDs, constant-value shapes, parameter declaration creation,
+display-name changes, whole-node deletion and explicit profile selection live
+in core. Existing connection services remain the authority behind the edit
+command adapter. Unknown node versions cannot be reinterpreted for constant
+editing. Deleting a node prunes its connected edges and metadata entry; initial
+placement, history, selection and gesture grouping remain GUI responsibilities.
+
+Editing may leave an incomplete graph. The existing validation, type resolution,
+profile conformance and emission services retain their respective decisions;
+an accepted edit is not an emission or native-build success claim. Profile
+selection requires an explicit command and a descriptor matching the requested
+profile line. Ordinary edits never upgrade a profile implicitly. Parameter
+values remain Runtime-owned; parameter edit commands concern declarations and
+human-facing labels only.
+
+The CLI `edit` command reads a command array and returns core-canonical
+`documentText` without overwriting the input file. `edit-commands` serializes
+the core command catalog. Neither command introduces shader production policy.
+
 ---
 
 # 19. Tauri/native bridge

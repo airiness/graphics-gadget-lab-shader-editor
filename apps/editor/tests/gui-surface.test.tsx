@@ -1257,7 +1257,7 @@ describe("typed port presentation (core types → data categories)", () => {
             const result = setConstantValue(input, nonConstant.id, 1.5);
             expect(result.applied).toBe(false);
             expect(result.document).toBe(input);
-            expect(result.refusal?.reason).toContain("not a catalog constant");
+            expect(result.refusal?.diagnostics[0]?.code).toBe("INVALID_NODE_PROPERTY");
         });
 
         it("the contextual Inspector reaches the shared gate without adding another mutation path", () => {

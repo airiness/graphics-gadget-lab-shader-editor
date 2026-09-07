@@ -31,3 +31,5 @@ export * from "./profile-conformance.js";
 export * from "./profile-descriptor-compatibility.js";
 export * from "./hlsl-emitter.js";
 export * from "./sha256.js";
+export * from "./graph-edit-commands.js";
+export * from "./graph-edits.js";

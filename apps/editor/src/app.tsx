@@ -1526,7 +1526,11 @@ export function App() {
         // below) but never entered the history — undo must never "undo
         // nothing".
         const reason = result.refusal !== undefined ? result.refusal.reason : "The operation was not applied.";
-        reportOperation(reason, "refusal", session);
+        output.append("authoring", "refusal", reason, {
+            ...EMPTY_EVIDENCE_CORRELATION,
+            documentSessionId: session.sessionId,
+            documentRevision: documentRevision(session),
+        }, result.refusal?.diagnostics ?? []);
     }
 
     const onConstantValueCommit = (nodeId: string, value: ConstantValue): boolean => {
