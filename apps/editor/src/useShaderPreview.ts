@@ -36,8 +36,6 @@ import {
     createTauriToolBoundary,
     toolBoundaryAvailable,
 } from "./toolchain-host.js";
-import { describePreviewAttemptOutcome } from "./preview-attempt-summary.js";
-
 const OBSERVATION_POLL_INTERVAL_MS = 250;
 
 export interface UseShaderPreviewInput {
@@ -239,11 +237,13 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             }
             bump((value) => value + 1);
             const outcome: PreviewAttemptOutcome = await launch.outcome;
+            // The settlement itself is the owner Preview session's record —
+            // the Preview panel view renders it as its structured,
+            // correlated row. No flattened note copy of the same attempt
+            // (that was a second, uncorrelated display of owner truth).
             if (outcome.kind !== "published") {
-                note("refusal", describePreviewAttemptOutcome(launch.attemptSequence, outcome));
                 return;
             }
-            note("ok", describePreviewAttemptOutcome(launch.attemptSequence, outcome));
             // Success-first UX: a build publication with no (usable)
             // attached Runtime auto-launches one. `running` / `terminating`
             // / `launching` suppress it; `exit-unproven` is refused by

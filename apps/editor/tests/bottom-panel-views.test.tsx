@@ -273,16 +273,37 @@ describe("the preview view — the owner's Preview session as it holds it", () =
         expect(rows[2]?.querySelector(".gglab-view-state")?.textContent).toBe("pending");
     });
 
-    it("a published row carries its publication identity; a failed row its status and EVERY diagnostic verbatim", () => {
+    it("a published row carries its publication identity; a failed row its HEADLINE plus EVERY diagnostic as its own structured row", () => {
         const view = render(<PreviewPanelView session={previewSession} notes={[]} />).container;
         const rows = buildRowList(view);
+        const failed = rows[1];
+        expect(failed).toBeDefined();
         expect(rows[0]?.textContent).toContain("publication publication-1");
         expect(rows[0]?.textContent).toContain("session a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6");
-        expect(rows[1]?.textContent).toContain("Preview attempt #2 failed");
-        expect(rows[1]?.textContent).toContain("compile-failed (exit 1)");
-        expect(rows[1]?.textContent).toContain("HLSL type error");
-        expect(rows[1]?.textContent).toContain("generated-source-1");
-        expect(rows[1]?.textContent).toContain("preview writer unavailable");
+        // The headline renders ALONE (status + exit code, no flattened
+        // diagnostics — the no-flattening pin lives alongside it below).
+        expect(failed?.querySelector(".gglab-bottom-view-outcome")?.textContent).toBe("Preview attempt #2 failed — compile-failed (exit 1).");
+        const paragraphs = failed !== undefined ? Array.from(failed.querySelectorAll("p")).map((paragraph) => paragraph.textContent) : [];
+        // EVERY diagnostic renders as its OWN row, location identity
+        // preserved, NOT joined into a summary string.
+        expect(paragraphs).toContain("[generated-source-1] HLSL type error");
+        expect(paragraphs).toContain("preview writer unavailable");
+        expect(paragraphs.join("")).not.toContain(" | ");
+    });
+
+    it("a failure with no structured diagnostic says exactly that in its own row", () => {
+        const zeroDiagnostics: PreviewBuildFailureDocument = {
+            command: "build-preview",
+            success: false,
+            status: "compile-failed",
+            exitCode: 1,
+            attemptSequence: 1,
+            diagnostics: [],
+        };
+        const attempt: SettledPreviewAttempt = { attemptSequence: 1, buildId: { sequence: 1 }, candidate, intent: previewIntent, state: "settled", outcome: { kind: "failed", envelope: zeroDiagnostics } };
+        const session: PreviewBuildSession = { sessionId: "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0", line: { attempts: [attempt] }, nextAttemptSequence: 2 };
+        const view = render(<PreviewPanelView session={session} notes={[]} />).container;
+        expect(buildRowList(view)[0]?.textContent).toContain("the tool reported the failure with no structured diagnostic");
     });
 
     it("a success settlement's notes render as the owner's lines — without a severity word invented for them", () => {
@@ -314,6 +335,17 @@ describe("the preview view — the owner's Preview session as it holds it", () =
 // --- The display migration is pinned (chronology out of the inspector) ------
 
 describe("the chronology display migration", () => {
+    it("an attempt settlement is the owner row — no flattened note copy of the same attempt", () => {
+        // Principle: attempt chronology renders as the owner's structured,
+        // correlated rows (the preview view); the remaining operation
+        // notes cover only the operations that have no structured event
+        // projection yet (handshake, launch/stop, observation, host
+        // initialization).
+        const hook = read("../src/useShaderPreview.ts");
+        expect(hook).not.toContain(`note("ok", describePreviewAttemptOutcome`);
+        expect(hook).not.toContain(`note("refusal", describePreviewAttemptOutcome`);
+    });
+
     it("the inspector surface no longer carries a line projection, and the app wires the owners' session values into the two views", () => {
         const app = read("../src/app.tsx");
         // THE OWNER'S SESSION VALUES, the sealed getters themselves.

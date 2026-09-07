@@ -186,22 +186,37 @@ export function BuildPanelView(props: { readonly session: NativeBuildSession | n
     );
 }
 
-/** The structured detail a preview outcome still carries beyond its
- *  summary line: the success envelope's structured notes, rendered as
- *  the tool's own lines (with no severity invented for them). A failure
- *  envelope's diagnostics already live IN the summary line itself; a
- *  termination's structure is complete there too — nothing to add. */
+/** The structured detail a preview outcome carries beyond its headline —
+ *  the SAME structure the Build view uses (aligned, not flattened): a
+ *  failure envelope's diagnostics render as their own rows, each a
+ *  structured fact with its location identity preserved, or exactly "no
+ *  structured diagnostic" when the tool reports none; the success
+ *  envelope's structured notes render as the tool's own lines (with no
+ *  severity invented for them). A termination's structure is complete in
+ *  the headline — nothing to add. */
 function previewOutcomeDetail(outcome: PreviewAttemptOutcome): readonly ReactNode[] {
-    if (outcome.kind !== "published") {
-        return [];
+    if (outcome.kind === "failed" && "envelope" in outcome) {
+        const diagnostics = outcome.envelope.diagnostics;
+        if (diagnostics.length === 0) {
+            return [<p key="no-diagnostics">the tool reported the failure with no structured diagnostic</p>];
+        }
+        return diagnostics.map((diagnostic, index) => (
+            <p key={`diagnostic-${index}`}>
+                {diagnostic.sourceIdentity !== undefined ? `[${diagnostic.sourceIdentity}] ` : ""}
+                {diagnostic.message}
+            </p>
+        ));
     }
-    const diagnostics = outcome.envelope.diagnostics;
-    return diagnostics.map((diagnostic, index) => (
-        <p key={`diagnostic-${index}`}>
-            {diagnostic.sourceIdentity !== undefined ? `[${diagnostic.sourceIdentity}] ` : ""}
-            {diagnostic.message}
-        </p>
-    ));
+    if (outcome.kind === "published") {
+        const diagnostics = outcome.envelope.diagnostics;
+        return diagnostics.map((diagnostic, index) => (
+            <p key={`diagnostic-${index}`}>
+                {diagnostic.sourceIdentity !== undefined ? `[${diagnostic.sourceIdentity}] ` : ""}
+                {diagnostic.message}
+            </p>
+        ));
+    }
+    return [];
 }
 
 /** One preview row's rendering: attempt identity + session identity +
