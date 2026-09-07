@@ -361,11 +361,11 @@ describe("the composition re-reads the CURRENT owner facts on every render", () 
 describe("the problems wiring and boundary", () => {
     it("the app composes the snapshot from the owners' structured facts (the current document's set, the lines' current coordinates) — no load-result disguise, no display-string parsing", () => {
         const app = read("../src/app.tsx");
-        expect(app).toContain("composeProblemSnapshot");
-        // Graph + contract + blocking-emission diagnostics only:
-        expect(app).toContain("...graphSets.flatMap((set) => set.diagnostics)");
-        expect(app).toContain("...contractSets.flatMap((set) => set.diagnostics)");
-        expect(app).toContain("emission.ok === false");
+        expect(app).toContain("composeWorkspaceProblemSnapshot");
+        const composition = read("../src/problems-composition.ts");
+        expect(composition).toContain("validateShaderGraph(graph).diagnostics");
+        expect(composition).toContain("checkProfileConformance(graph, descriptor).diagnostics");
+        expect(composition).toContain("document.presentation.emission?.ok === false");
         // THE LOAD-RESULT PIN: kept on its own surface, never composed
         // under the current document's identity:
         expect(app).not.toContain("problemEntriesFromGraphDiagnostics(loadResult");
@@ -373,7 +373,7 @@ describe("the problems wiring and boundary", () => {
         expect(app).toContain("native.flow?.buildSession ?? null");
         expect(app).toContain("preview.flow?.session ?? null");
         // Presentation-only Clear through the view:
-        expect(app).toContain("<ProblemsPanelView snapshot={shownProblemsSnapshot} onClear={clearProblemsPresentation} />");
+        expect(app).toContain("<ProblemsPanelView snapshot={shownProblemsSnapshot} onClear={clearProblemsPresentation} navigation={problemNavigation} onNavigate={navigateProblem} />");
         expect(app).toContain("emptyProblemSnapshot()");
     });
 

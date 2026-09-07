@@ -26,6 +26,9 @@
  * never memoizes on it.
  */
 import type { ShaderGraphDiagnostic } from "@gglab/shader-graph-core";
+import { checkProfileConformance, checkProfileDescriptorCompatibility, resolveGraphTypes, validateShaderGraph, type SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
+import { documentRevision, type DocumentSession } from "./document-session.js";
+import type { WorkspaceSession } from "./workspace-session.js";
 import type { AttemptRecord } from "@gglab/shader-toolchain-client";
 import type { NativeBuildSession } from "./native-build-session.js";
 import type { PreviewBuildSession } from "./preview-build-session.js";
@@ -108,7 +111,7 @@ export function composeProblemSnapshot(
     const entries: ProblemSnapshotEntry[] = [...problemEntriesFromGraphDiagnostics(diagnostics, context)];
     const buildRecord = currentBuildFailureRecord(buildSession);
     if (buildRecord !== null) {
-        entries.push(...problemEntriesFromBuildAttempt(buildRecord));
+        entries.push(...problemEntriesFromBuildAttempt(buildRecord, buildSession ?? undefined));
     }
     const previewRow = currentPreviewFailureRow(previewSession);
     if (previewRow !== null) {
@@ -125,4 +128,41 @@ export function composeProblemSnapshot(
         }
     }
     return createProblemSnapshot(unique);
+}
+
+/** Each open document has its own latest settled diagnostic coordinate.
+ * A successful build of B must not erase A's failure, even for equal HLSL.
+ * Unbound attempts remain an explicitly unowned coordinate. */
+export function composeWorkspaceProblemSnapshot(
+    workspace: WorkspaceSession<DocumentSession>,
+    descriptor: SurfaceProfileDescriptor | null,
+    buildSession: NativeBuildSession | null,
+    previewSession: PreviewBuildSession | null,
+): ProblemSnapshot {
+    const entries: ProblemSnapshotEntry[] = [];
+    const openIds = new Set(workspace.documents.map((document) => document.sessionId));
+    for (const document of workspace.documents) {
+        const graph = document.history.present;
+        const diagnostics = [
+            ...validateShaderGraph(graph).diagnostics,
+            ...resolveGraphTypes(graph).diagnostics,
+            ...(descriptor === null ? [] : [...checkProfileDescriptorCompatibility(graph, descriptor).diagnostics, ...checkProfileConformance(graph, descriptor).diagnostics]),
+            ...(document.presentation.emission?.ok === false ? document.presentation.emission.diagnostics : []),
+        ];
+        entries.push(...problemEntriesFromGraphDiagnostics(diagnostics, { documentSessionId: document.sessionId, documentRevision: documentRevision(document) }));
+    }
+    const buildAnchors = new Map<string | null, AttemptRecord>();
+    for (const record of [...(buildSession?.line.attempts ?? [])].sort((a, b) => a.buildId.sequence - b.buildId.sequence)) {
+        const id = buildSession?.origins?.get(record.buildId)?.documentSessionId ?? null;
+        if (id === null || openIds.has(id)) buildAnchors.set(id, record);
+    }
+    for (const record of buildAnchors.values()) entries.push(...problemEntriesFromBuildAttempt(record, buildSession ?? undefined));
+    const previewAnchors = new Map<string | null, PreviewRow>();
+    for (const row of previewSession === null ? [] : previewChronology(previewSession)) {
+        if (row.record.state !== "settled") continue;
+        const id = row.correlation.documentSessionId;
+        if (id === null || openIds.has(id)) previewAnchors.set(id, row);
+    }
+    for (const row of previewAnchors.values()) entries.push(...problemEntriesFromPreviewAttempt(row));
+    return createProblemSnapshot(entries);
 }

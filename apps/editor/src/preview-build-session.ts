@@ -16,8 +16,10 @@ import {
     type PreviewBuildLineReport,
     type ToolCandidate,
 } from "@gglab/shader-toolchain-client";
+import type { DocumentEvidenceOrigin } from "./document-evidence.js";
 
 export interface PreviewBuildSession {
+    readonly origins?: ReadonlyMap<BuildId, DocumentEvidenceOrigin>;
     readonly sessionId: string;
     readonly line: PreviewBuildLine;
     readonly nextAttemptSequence: number;
@@ -36,13 +38,20 @@ export function previewSessionIssue(
     buildId: BuildId,
     candidate: ToolCandidate,
     intent: PreviewBuildIntent,
+    origin: DocumentEvidenceOrigin | null = null,
 ): PreviewBuildSession {
     if (attemptSequence !== session.nextAttemptSequence) {
         throw new Error(
             `Preview attempt sequence ${attemptSequence} is not the next sequence ${session.nextAttemptSequence}`,
         );
     }
+    if (origin !== null && origin.sourceMap.generatedSourceIdentity !== intent.generatedSourceIdentity) {
+        throw new Error("Preview origin must name the admitted generated source");
+    }
+    const origins = new Map(session.origins);
+    if (origin !== null) origins.set(buildId, origin);
     return {
+        origins,
         sessionId: session.sessionId,
         line: issuePreviewAttempt(session.line, { attemptSequence, buildId, candidate, intent }),
         nextAttemptSequence: attemptSequence + 1,

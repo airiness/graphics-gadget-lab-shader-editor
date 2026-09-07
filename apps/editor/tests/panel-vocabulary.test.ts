@@ -429,15 +429,15 @@ describe("the graph-native diagnostics (the CURRENT authoring snapshot)", () => 
             expect(entry.correlation.documentSessionId).toBe(session);
             expect(entry.correlation.documentRevision).toBe("revision-current");
             expect(entry.correlation.generatedSourceIdentity).toBeNull();
-            expect(entry.identity).toBe("graph:TYPE_MISMATCH:$.nodes[3].inputs[1]@0");
+            expect(entry.identity).toBe("graph:document-session-vocabulary:TYPE_MISMATCH:$.nodes[3].inputs[1]@0");
         }
     });
 
     it("gives duplicate reports deterministic, distinct identities", () => {
         const entries = problemEntriesFromGraphDiagnostics([graphDiagnostic, graphDuplicate], context);
         expect(entries.map((entry) => entry.identity)).toEqual([
-            "graph:TYPE_MISMATCH:$.nodes[3].inputs[1]@0",
-            "graph:TYPE_MISMATCH:$.nodes[3].inputs[1]@1",
+            "graph:document-session-vocabulary:TYPE_MISMATCH:$.nodes[3].inputs[1]@0",
+            "graph:document-session-vocabulary:TYPE_MISMATCH:$.nodes[3].inputs[1]@1",
         ]);
     });
 });

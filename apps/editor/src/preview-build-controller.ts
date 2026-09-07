@@ -67,6 +67,7 @@ import {
     type PreviewInputContractMismatch,
     type PreviewInputContractSelection,
 } from "./preview-input-contract.js";
+import { captureDocumentEvidence, type DocumentEvidenceOrigin } from "./document-evidence.js";
 import { AttachedPreviewRuntimeManager } from "./preview-runtime-manager.js";
 
 type CandidateInvalidatedResult = Extract<BoundaryResult, { readonly kind: "candidate-invalidated" }>;
@@ -82,6 +83,7 @@ export interface PreviewToolStatePort {
 /** Current editor/core facts from which the Preview request is composed. No
  *  input-contract ID or source bytes are caller claims: both are derived. */
 export interface PreviewCompositionInput {
+    readonly documentSessionId?: import("./workspace-session.js").DocumentSessionId;
     readonly document: ShaderGraphDocument;
     readonly descriptor: SurfaceProfileDescriptor | null;
     readonly descriptorCompatible: boolean;
@@ -572,6 +574,7 @@ export class PreviewBuildController {
         input: PreviewCompositionInput,
         evaluateGate: (input: PreviewCompositionInput) => PreviewBuildGate,
     ): Promise<PreviewBuildLaunch> {
+        const origin = captureDocumentEvidence(input.documentSessionId, input.document, input.emission);
         const initialGate = evaluateGate(input);
         if (!initialGate.admitted) {
             return Promise.resolve({ issued: false, reason: "gate-refused", gate: initialGate });
@@ -590,7 +593,7 @@ export class PreviewBuildController {
             if (!gate.admitted || gate.request === null || gate.eligibility?.status !== "eligible") {
                 return { issued: false, reason: "gate-refused", gate };
             }
-            return this.issueAdmittedBuild(gate, ordinal);
+            return this.issueAdmittedBuild(gate, ordinal, origin);
         })();
         this.buildQueue = started
             .then(async (launch) => {
@@ -605,11 +608,14 @@ export class PreviewBuildController {
         return started;
     }
 
-    private async issueAdmittedBuild(gate: PreviewBuildGate, ordinal: number): Promise<PreviewBuildLaunch> {
+    private async issueAdmittedBuild(gate: PreviewBuildGate, ordinal: number, origin: DocumentEvidenceOrigin | null): Promise<PreviewBuildLaunch> {
         const request = gate.request;
         const eligibility = gate.eligibility;
         if (request === null || eligibility?.status !== "eligible") {
             throw new Error("the private Preview issuer was reached without an admitted request and proof");
+        }
+        if (origin !== null && origin.sourceMap.generatedSourceIdentity !== request.generatedSourceIdentity) {
+            throw new Error("Preview origin must name the admitted generated source");
         }
         const candidate = eligibility.candidate;
         const handle = await this.boundary.buildPreview(candidate, request);
@@ -620,6 +626,7 @@ export class PreviewBuildController {
             handle.buildId,
             candidate,
             previewBuildIntentOf(request, eligibility.facts),
+            origin,
         );
 
         const active = { buildId: handle.buildId, cancelRequested: false };

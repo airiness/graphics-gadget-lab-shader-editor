@@ -199,7 +199,7 @@ export interface FlowViewportProps {
      * initializing — the composition root uses it for "auto layout" and
      * "load" (session convenience, no semantics).
      */
-    readonly onFlowReady?: (fitView: () => void) => void;
+    readonly onFlowReady?: (fitView: (nodeIds?: readonly string[]) => void) => void;
     /**
      * A palette → canvas drop (authoring intent at a coordinate).
      * React Flow contributes the screen→flow coordinate
@@ -374,7 +374,7 @@ export function FlowViewport(props: FlowViewportProps) {
                 proOptions={{ hideAttribution: true }}
                 onInit={(instance) => {
                     flowInstanceRef.current = instance;
-                    props.onFlowReady?.(() => instance.fitView({ duration: 160 }));
+                    props.onFlowReady?.((nodeIds) => instance.fitView({ duration: 160, ...(nodeIds === undefined ? {} : { nodes: nodeIds.map((id) => ({ id })) }) }));
                 }}
                 minZoom={0.2}
                 maxZoom={2.5}

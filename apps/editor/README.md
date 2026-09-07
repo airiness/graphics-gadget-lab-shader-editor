@@ -705,3 +705,34 @@ pnpm tauri dev  # desktop window (requires the Rust toolchain)
 - the action affordance is the button design language (raised rest,
   brighter hover, pressed translate + inset shadow, accent focus ring);
   `primary` stays reserved, not the default surface.
+
+## Bottom Panel evidence
+
+Output retains session-local authoring, document, Workspace, and tool-discovery
+events. Import/read diagnostics remain structured operation evidence here;
+they do not become diagnostics of the active graph. Clear removes only the
+displayed Output history and does not reset event sequencing or domain state.
+
+Build and Preview project their owners' attempt histories. Editor-owned
+issue-time origin records retain the document session, serialized document
+revision, and exact generated source map alongside the attempt identity; this
+metadata does not change the toolchain process contract. Attempts without a
+document origin remain explicitly unowned.
+
+Problems derives graph diagnostics for all open documents and each document's
+latest settled Build/Preview diagnostic coordinate. Pending attempts retain
+the previous settlement's diagnostics. A settlement for another document
+cannot replace those diagnostics, including when both graphs emit identical
+HLSL. Closing a document removes its current Problems while preserving attempt
+history. Clearing Problems suppresses only that exact snapshot; a changed
+snapshot becomes visible again.
+
+Problem navigation activates the owning tab without changing the Preview
+target. Graph diagnostics focus their structured node/connection anchor only
+when the document revision still matches. Older revisions allow document-only
+navigation; closed or unowned documents have an explicit unavailable state.
+The current native diagnostic contract provides a message and optional source
+identity, but no structured line/column. Native diagnostics therefore support
+document navigation only, retaining the issue-time source map for a future
+published location contract. The editor never parses diagnostic prose to
+invent node locations.

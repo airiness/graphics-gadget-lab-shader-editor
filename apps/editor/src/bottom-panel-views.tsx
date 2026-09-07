@@ -18,6 +18,8 @@
  * (sealed ownership), the projections' rules (the vocabulary), and any
  * Build / Preview state beyond what the rows already state.
  */
+import type { EditorOutputEvent } from "./editor-output.js";
+import type { ProblemSnapshotEntry } from "./panel-vocabulary.js";
 import type { ReactNode } from "react";
 import type { AttemptOutcome, PreviewAttemptOutcome } from "@gglab/shader-toolchain-client";
 import type { NativeBuildSession } from "./native-build-session.js";
@@ -290,7 +292,7 @@ export function PreviewPanelView(props: { readonly session: PreviewBuildSession 
  *  over the owners' records); the view renders that set — each entry's
  *  severity, the owner's stable code when the layer has one, the message,
  *  and the entry's location authority — and nothing more. Each row keeps
- *  the entry's stable identity as its key (future document / node
+ *  the entry's stable identity as its key (document / node
  *  navigation resolves from the entry's own location and correlation
  *  values, never parsed from this display).
  *
@@ -298,7 +300,12 @@ export function PreviewPanelView(props: { readonly session: PreviewBuildSession 
  *  the caller replaces the snapshot with the empty one. The view never
  *  touches an owner record — clearing the presentation can never clear
  *  the graph's diagnostics, a build line, or a preview line. */
-export function ProblemsPanelView(props: { readonly snapshot: ProblemSnapshot; readonly onClear: () => void }) {
+export function ProblemsPanelView(props: {
+    readonly snapshot: ProblemSnapshot;
+    readonly onClear: () => void;
+    readonly navigation?: (entry: ProblemSnapshotEntry) => { readonly available: boolean; readonly detail: string };
+    readonly onNavigate?: (entry: ProblemSnapshotEntry) => void;
+}) {
     const { snapshot, onClear } = props;
     const entries = snapshot.entries;
     return (
@@ -315,8 +322,18 @@ export function ProblemsPanelView(props: { readonly snapshot: ProblemSnapshot; r
                 <p className="gglab-bottom-view-empty">This is the whole current state: there is no problem to show.</p>
             ) : (
                 <ul className="gglab-bottom-view-rows" aria-label="Current problems">
-                    {entries.map((entry) => (
-                        <li key={entry.identity} className="gglab-bottom-view-row">
+                    {entries.map((entry) => {
+                        const navigation = props.navigation?.(entry);
+                        return <li key={entry.identity} className="gglab-bottom-view-row">
+                            {navigation !== undefined && (
+                                <button type="button" className="gglab-bottom-view-clear"
+                                    disabled={!navigation.available}
+                                    title={navigation.detail}
+                                    onClick={() => props.onNavigate?.(entry)}>
+                                    Open owning document
+                                </button>
+                            )}
+                            {navigation !== undefined && <p className="gglab-bottom-view-note">{navigation.detail}</p>}
                             <span className="gglab-bottom-view-head">
                                 <span className={`gglab-view-severity gglab-view-severity-${entry.severity}`}>{entry.severity}</span>
                                 {entry.code !== null && <span className="mono">{entry.code}</span>}
@@ -329,8 +346,8 @@ export function ProblemsPanelView(props: { readonly snapshot: ProblemSnapshot; r
                                       ? `generated source ${entry.location.sourceIdentity.slice(0, 12)}…`
                                       : "no location reported"}
                             </span>
-                        </li>
-                    ))}
+                        </li>;
+                    })}
                 </ul>
             )}
         </div>
@@ -349,5 +366,31 @@ function renderNotes(notes: readonly PanelNote[]): ReactNode {
                 </li>
             ))}
         </ul>
+    );
+}
+
+/** General application events; native attempt outcomes remain in their own views. */
+export function OutputPanelView(props: { readonly events: readonly EditorOutputEvent[]; readonly onClear: () => void }) {
+    return (
+        <div className="gglab-bottom-view" aria-label="Output events">
+            <div className="gglab-bottom-view-toolbar">
+                <span>{props.events.length} event{props.events.length === 1 ? "" : "s"}</span>
+                <button type="button" className="gglab-bottom-view-clear" disabled={props.events.length === 0} onClick={props.onClear}>Clear output</button>
+            </div>
+            {props.events.length === 0 ? <p>No output events.</p> : (
+                <ol className="gglab-bottom-view-rows" aria-label="Output chronology">
+                    {props.events.map((event) => (
+                        <li key={event.sequence} className={`gglab-bottom-view-row gglab-note-${event.level}`}>
+                            <span className="mono">#{event.sequence} | {event.category} | {event.level}</span>
+                            {event.correlation.documentSessionId !== null && <span className="gglab-bottom-view-identity mono">document {event.correlation.documentSessionId}</span>}
+                            <p>{event.text}</p>
+                            {event.diagnostics.map((diagnostic, index) => (
+                                <p key={index}><span className="mono">{diagnostic.code} / {diagnostic.severity} / {diagnostic.dataPath}</span> {diagnostic.message}</p>
+                            ))}
+                        </li>
+                    ))}
+                </ol>
+            )}
+        </div>
     );
 }

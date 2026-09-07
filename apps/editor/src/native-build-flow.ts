@@ -41,6 +41,7 @@
  * No argv exists anywhere in this module: the boundary takes domain-
  * shaped values and owns the serialization host-internal.
  */
+import type { DocumentEvidenceOrigin } from "./document-evidence.js";
 import {
     admitCompile,
     admitHandshake,
@@ -505,7 +506,7 @@ export class NativeBuildFlow {
      * and nothing is issued — there is no public method that issues
      * around it.
      */
-    async compile(requestFacts: CompileRequestFacts, input: DescriptorAndTargetInput): Promise<CompileAdmission> {
+    async compile(requestFacts: CompileRequestFacts, input: DescriptorAndTargetInput, origin: DocumentEvidenceOrigin | null = null): Promise<CompileAdmission> {
         const gate = this.compileGate(requestFacts, input);
         if (gate.admitted !== true) {
             return { admitted: false, gate };
@@ -514,7 +515,10 @@ export class NativeBuildFlow {
         // admitted value and the issued value are one and the same
         // target stream (configuration → request → BuildIntent).
         const request = compileRequestFor(requestFacts, input.configuredTarget);
-        const attempt = await this.beginAdmittedCompile(request);
+        if (origin !== null && origin.sourceMap.generatedSourceIdentity !== request.sourceIdentity) {
+            throw new Error("Build origin must name the admitted generated source");
+        }
+        const attempt = await this.beginAdmittedCompile(request, origin);
         return { admitted: true, gate, buildId: attempt.buildId, outcome: attempt.outcome };
     }
 
@@ -540,7 +544,7 @@ export class NativeBuildFlow {
      * the promise, and the session line records the outcome exactly
      * once.
      */
-    private async beginAdmittedCompile(request: NativeCompileRequest): Promise<{ buildId: BuildId; outcome: Promise<AttemptOutcome> }> {
+    private async beginAdmittedCompile(request: NativeCompileRequest, origin: DocumentEvidenceOrigin | null): Promise<{ buildId: BuildId; outcome: Promise<AttemptOutcome> }> {
         const admitted = this.toolState;
         if (admitted.status !== "compatible") {
             throw new Error("an admitted compile was begun on a tool state the gate would not admit; the gate was bypassed");
@@ -554,7 +558,7 @@ export class NativeBuildFlow {
         // Snapshot, NOT the current state: the world has had the whole
         // admission window to move on; this attempt's intent does not.
         const intent = buildIntentOf(request, admitted.provenFacts);
-        this.session = sessionIssue(this.session, handle.buildId, intent);
+        this.session = sessionIssue(this.session, handle.buildId, intent, origin);
         const outcome = (async (): Promise<AttemptOutcome> => {
             const result = await handle.result;
             if (result.kind === "candidate-invalidated") {

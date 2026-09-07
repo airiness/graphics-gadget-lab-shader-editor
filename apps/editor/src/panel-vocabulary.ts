@@ -41,14 +41,9 @@
  *    the owner's record by reference; there is no free "payload +
  *    correlation" row to assemble, so a contradictory combination of
  *    evidence cannot be produced;
- *  - not a place to invent origin: a row's correlation carries the document
- *    context axes ONLY where the owner fact itself has them. Graph-native
- *    diagnostics are computed against THE CURRENT authoring revision, so
- *    those entries carry the document context. Historical build and preview
- *    attempts do NOT: their origin (session, revision) is fixed at issue
- *    time, and the owners keep no origin binding on the records today — so
- *    those axes stay ABSENT rather than stamped with today's values at
- *    render time. A row never receives a fact the owner does not hold;
+ *  - not a place to invent origin: graph facts carry their current document
+ *    context; build facts project the editor session's issue-time origin map.
+ *    An unbound attempt stays unbound, including for identical generated HLSL.
  *  - not a universal "any evidence" row and not a second chronology clock:
  *    the four views keep DISTINCT row types with distinct lifecycles, and
  *    each chronological view keeps its own ordering axis (the build line's
@@ -73,6 +68,7 @@
  * Headless by construction: no React, no DOM, no host — unit-testable and
  * reusable by any frontend that presents these owners' facts.
  */
+import type { DocumentEvidenceOrigin } from "./document-evidence.js";
 import type {
     AttemptOutcome,
     AttemptRecord,
@@ -122,10 +118,9 @@ import type { DocumentSessionId } from "./workspace-session.js";
  * NOT share one correlation namespace: a preview row always co-carries its
  * attempt sequence and session identity, and a build row never does.
  *
- * The document context axes are carried only where the owner fact is
- * CURRENT: graph-native diagnostics (computed against the current authoring
- * revision). Historical attempt rows never receive them from render time —
- * see the module invariants above.
+ * Document axes come from the current graph context or the owning editor
+ * session's issue-time origin. They are never supplied by the active tab at
+ * settlement or render time.
  */
 export interface EvidenceCorrelation {
     readonly documentSessionId: DocumentSessionId | null;
@@ -231,14 +226,13 @@ export interface SettledBuildRow {
  *  it does not keep its own in-flight bookkeeping or re-judge states. */
 export type BuildRow = InFlightBuildRow | SettledBuildRow;
 
-function buildCorrelationFrom(record: { readonly buildId: BuildId; readonly intent: BuildIntent }): EvidenceCorrelation {
-    // The origin of a build attempt (which document session, which
-    // revision) is fixed at issue time and the owner record keeps no origin
-    // binding — so those axes stay absent. The owner facts this record
-    // DOES hold (its build id, its intent's source identity) are carried.
+function buildCorrelationFrom(record: { readonly buildId: BuildId; readonly intent: BuildIntent }, session?: NativeBuildSession): EvidenceCorrelation {
+    // Origin is an editor-session fact captured at issue, never a source lookup.
     return {
         ...EMPTY_EVIDENCE_CORRELATION,
         generatedSourceIdentity: record.intent.sourceIdentity,
+        documentSessionId: session?.origins?.get(record.buildId)?.documentSessionId ?? null,
+        documentRevision: session?.origins?.get(record.buildId)?.documentRevision ?? null,
         buildId: record.buildId,
     };
 }
@@ -292,7 +286,7 @@ export function buildChronology(session: NativeBuildSession): readonly BuildRow[
                 intent: record.intent,
                 record,
                 outcome: record.outcome,
-                correlation: buildCorrelationFrom(record),
+                correlation: buildCorrelationFrom(record, session),
             };
         },
     );
@@ -302,7 +296,7 @@ export function buildChronology(session: NativeBuildSession): readonly BuildRow[
             buildId: record.buildId,
             intent: record.intent,
             record,
-            correlation: buildCorrelationFrom(record),
+            correlation: buildCorrelationFrom(record, session),
         }),
     );
     return [...settled, ...inFlight].sort((a, b) => a.buildId.sequence - b.buildId.sequence);
@@ -326,6 +320,7 @@ declare const previewRowBrand: unique symbol;
  *  CONSUMABLE anywhere, PRODUCIBLE only by the preview-chronology
  *  projection (the module's single brand site). */
 export interface PreviewRow {
+    readonly origin: DocumentEvidenceOrigin | null;
     readonly record: PreviewAttemptRecord;
     readonly correlation: EvidenceCorrelation;
     readonly [previewRowBrand]: true;
@@ -337,9 +332,8 @@ export interface PreviewRow {
  * build id, its attempt sequence, the session identity that owns the line,
  * the record's intent generated-source identity — and the publication
  * identity ONLY when this attempt actually published (a pending or failed
- * attempt carries none). The document context axes stay absent: a preview
- * attempt's origin is fixed at issue time, and the owner record keeps no
- * origin binding to project from.
+ * attempt carries none). Document axes and the source map come from the
+ * owning editor session's issue-time origin map, when present.
  *
  * Deliberately NOT a public entry point: the record and its session must
  * be paired only inside the owner projection (a row carries the binding,
@@ -352,6 +346,8 @@ function previewRowFromAttempt(session: PreviewBuildSession, record: PreviewAtte
     const correlation: EvidenceCorrelation = {
         ...EMPTY_EVIDENCE_CORRELATION,
         generatedSourceIdentity: record.intent.generatedSourceIdentity,
+        documentSessionId: session.origins?.get(record.buildId)?.documentSessionId ?? null,
+        documentRevision: session.origins?.get(record.buildId)?.documentRevision ?? null,
         buildId: record.buildId,
         previewAttemptSequence: record.attemptSequence,
         previewSessionId: session.sessionId,
@@ -361,7 +357,7 @@ function previewRowFromAttempt(session: PreviewBuildSession, record: PreviewAtte
     // identity are coupled into one projection value here, and nowhere
     // else. (A phantom brand cannot be set by an object literal, so the
     // one type assertion lives at this one producer, by construction.)
-    return { record, correlation } as PreviewRow;
+    return { record, correlation, origin: session.origins?.get(record.buildId) ?? null } as PreviewRow;
 }
 
 /**
@@ -442,6 +438,7 @@ export type ProblemLocation =
  *  the owner's location authority) under the identities that correlate it.
  */
 export interface ProblemSnapshotEntry {
+    readonly origin?: DocumentEvidenceOrigin | null;
     /** The stable per-problem key within the snapshot — the projectors
      *  derive it deterministically from the enclosing owner facts (a same
      *  set of facts projects a same set of entries). */
@@ -499,7 +496,7 @@ export function problemEntriesFromGraphDiagnostics(
         documentRevision: context.documentRevision,
     };
     return diagnostics.map((diagnostic, index) => ({
-        identity: `graph:${diagnostic.code}:${diagnostic.dataPath}@${index}`,
+        identity: `graph:${context.documentSessionId}:${diagnostic.code}:${diagnostic.dataPath}@${index}`,
         severity: diagnostic.severity,
         code: diagnostic.code,
         text: diagnostic.message,
@@ -543,18 +540,18 @@ function failedEnvelopeDiagnostics(
  * it reports one, else stays honestly `unplaced`. Entry identities are
  * deterministic over the enclosing attempt's identity.
  */
-export function problemEntriesFromBuildAttempt(record: AttemptRecord): readonly ProblemSnapshotEntry[] {
+export function problemEntriesFromBuildAttempt(record: AttemptRecord, session?: NativeBuildSession): readonly ProblemSnapshotEntry[] {
     const diagnostics = failedEnvelopeDiagnostics(record.outcome);
     if (diagnostics === null) {
         return [];
     }
-    const correlation: EvidenceCorrelation = {
-        ...EMPTY_EVIDENCE_CORRELATION,
-        generatedSourceIdentity: record.intent.sourceIdentity,
-        buildId: record.buildId,
-    };
+    if (session !== undefined && !session.line.attempts.includes(record)) {
+        throw new Error("Build diagnostics must be projected from their owning session");
+    }
+    const correlation = buildCorrelationFrom(record, session);
     return diagnostics.map(
         (diagnostic, index): ProblemSnapshotEntry => ({
+            origin: session?.origins?.get(record.buildId) ?? null,
             identity: `build:${record.buildId.sequence}:${diagnostic.sourceIdentity ?? "unplaced"}@${index}`,
             severity: "error",
             code: null,
@@ -593,7 +590,8 @@ export function problemEntriesFromPreviewAttempt(row: PreviewRow): readonly Prob
     }
     return diagnostics.map(
         (diagnostic, index): ProblemSnapshotEntry => ({
-            identity: `preview:${record.attemptSequence}:${diagnostic.sourceIdentity ?? "unplaced"}@${index}`,
+            origin: row.origin,
+            identity: `preview:${row.correlation.previewSessionId}:${record.attemptSequence}:${diagnostic.sourceIdentity ?? "unplaced"}@${index}`,
             severity: "error",
             code: null,
             text: diagnostic.message,

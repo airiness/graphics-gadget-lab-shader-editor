@@ -61,6 +61,7 @@ const PRODUCT_PROGRAM_COMPOSITION = {
 };
 
 export interface UseNativeBuildInput {
+    readonly onOutputEvent?: (level: "ok" | "info" | "refusal", text: string) => void;
     /** The loaded descriptor instance (null = not loaded — the core's
      *  reader's own fact). */
     readonly descriptor: SurfaceProfileDescriptor | null;
@@ -124,9 +125,11 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
     const flowRef = useRef<NativeBuildFlow | null>(null);
     const startedRef = useRef(false);
 
+    const onOutputEvent = input.onOutputEvent;
     const note = useCallback((level: "ok" | "info" | "refusal", text: string) => {
-        setNotes((previous) => [...previous.slice(-23), { level, text }]);
-    }, []);
+        if (onOutputEvent !== undefined) onOutputEvent(level, text);
+        else setNotes((previous) => [...previous.slice(-23), { level, text }]);
+    }, [onOutputEvent]);
 
     // Desktop only: the product boundary is code-split; the absence (web
     // shell) is a structured capability fact, not an exception.

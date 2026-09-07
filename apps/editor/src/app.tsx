@@ -135,9 +135,11 @@ import {
     resolvePanelMaxHeight,
     type BottomPanelTab,
 } from "./bottom-panel.js";
-import { BuildPanelView, PreviewPanelView, ProblemsPanelView } from "./bottom-panel-views.js";
-import { emptyProblemSnapshot } from "./panel-vocabulary.js";
-import { composeProblemSnapshot } from "./problems-composition.js";
+import { BuildPanelView, PreviewPanelView, ProblemsPanelView, OutputPanelView } from "./bottom-panel-views.js";
+import { EMPTY_EVIDENCE_CORRELATION, emptyProblemSnapshot, type ProblemSnapshotEntry } from "./panel-vocabulary.js";
+import { EditorOutput } from "./editor-output.js";
+import { resolveProblemNavigation } from "./problem-navigation.js";
+import { composeWorkspaceProblemSnapshot } from "./problems-composition.js";
 // Type-only (erased at compile time): the official dialog option shapes,
 // used for the single documented boundary cast below. Runtime functions
 // are dynamically imported inside the desktop effect only.
@@ -275,7 +277,6 @@ export function App() {
     // Application-level (shared) UI state — owned by the shell, not by any
     // one open document:
     const [descriptorState, setDescriptorState] = useState<DescriptorPanelState>({ kind: "empty" });
-    const [loadResult, setLoadResult] = useState<DiagnosticSet | null>(null);
     // Library search — a presentation filter over display names (no semantics).
     const [libraryQuery, setLibraryQuery] = useState("");
     // Whole-library collapse — UI session state (layout), never document data.
@@ -291,8 +292,13 @@ export function App() {
     // (the app owns which view is visible, whether the panel is open, and the
     // drag-resize height). Pure presentation: it concedes no Build, Preview,
     // or Problems authority, and it must never enter the WorkspaceStore or a
-    // DocumentSession (the views in later steps only project their owners'
-    // structured facts, exactly as the inspector zones do).
+    // DocumentSession. Each view projects its owner's structured facts.
+    const [output] = useState(() => new EditorOutput());
+    const outputEvents = useSyncExternalStore(output.subscribe, output.getSnapshot, output.getSnapshot);
+    const setLoadResult = (result: DiagnosticSet): void => {
+        output.append("document", result.ok ? "ok" : "refusal", result.passedText || result.title, EMPTY_EVIDENCE_CORRELATION, result.diagnostics);
+    };
+    const nativeOutput = useMemo(() => (level: "ok" | "info" | "refusal", text: string) => output.append("discovery", level, text), [output]);
     const [bottomPanelOpen, setBottomPanelOpen] = useState(true);
     const [bottomPanelTab, setBottomPanelTab] = useState<BottomPanelTab>("output");
     const [bottomPanelHeight, setBottomPanelHeight] = useState(BOTTOM_PANEL_DEFAULT_HEIGHT);
@@ -496,7 +502,11 @@ export function App() {
     // Workspace Explorer (volatile host observation, not a graph authority).
     const [explorerEntries, setExplorerEntries] = useState<readonly WorkspaceDocumentEntry[] | null>(null);
     const [explorerBusy, setExplorerBusy] = useState(false);
-    const [explorerError, setExplorerError] = useState<string | null>(null);
+    const [explorerError, updateExplorerError] = useState<string | null>(null);
+    const setExplorerError = (message: string | null): void => {
+        updateExplorerError(message);
+        if (message !== null) output.append("workspace", "refusal", message);
+    };
     const [explorerStatus, setExplorerStatus] = useState<string | null>(null);
     // The discovery the UI is CURRENTLY watching, bound to BOTH the canonical
     // workspace root it was launched against and its host-issued discovery id.
@@ -533,7 +543,6 @@ export function App() {
     const nodeMenu = presentation.nodeMenu;
     const focus = presentation.focus;
     const emission = presentation.emission;
-    const operationNotes = presentation.notes;
     const savedText = presentation.savedText;
     const viewport = presentation.viewport;
     /** One patch to this document's presentation (one intent = one patch). */
@@ -557,16 +566,18 @@ export function App() {
      * is a per-document presentation fact: it goes to the ACTIVE document's
      * presentation and is restored when that document becomes active again. */
     const setViewport = (value: CanvasViewport): void => patchPresentation({ viewport: value });
-    const setOperationNotes = (
-        update: ((previous: readonly string[]) => readonly string[]) | readonly string[],
-    ): void => {
-        updateDocumentSession(session.sessionId, (prev) => {
-            const next = typeof update === "function" ? update(prev.presentation.notes) : update;
-            return { ...prev, presentation: { ...prev.presentation, notes: next } };
+    const reportOperation = (text: string, level: "info" | "refusal" = "info", owner: DocumentSession | null = null): void => {
+        // An operation without a captured document owner stays application-local.
+        // In particular, an open/import failure never borrows the active tab.
+        output.append(owner === null ? "document" : "authoring", level, text, owner === null ? EMPTY_EVIDENCE_CORRELATION : {
+            ...EMPTY_EVIDENCE_CORRELATION,
+            documentSessionId: owner.sessionId,
+            documentRevision: documentRevision(owner),
         });
     };
+
     // Viewport fit trigger (registered by the flow adapter via onInit).
-    const fitRef = useRef<(() => void) | null>(null);
+    const fitRef = useRef<((nodeIds?: readonly string[]) => void) | null>(null);
     // Desktop native document I/O channel (absent in the browser
     // — the web build keeps the text save/load surface only).
     const [fileChannel, setFileChannel] = useState<FileChannel | null>(null);
@@ -741,10 +752,7 @@ export function App() {
             return;
         }
         if (workspace.documents.length === 1) {
-            setOperationNotes((previous) => [
-                ...previous,
-                "Cannot close the last open tab — at least one document must stay open.",
-            ]);
+            reportOperation("Cannot close the last open tab — at least one document must stay open.");
             return;
         }
         if (isDirty(doc)) {
@@ -778,10 +786,7 @@ export function App() {
             const expectedRevision = doc !== undefined ? documentRevision(doc) : "";
             const result = await preview.coordinator.closeTarget(documentSessionId, expectedRevision);
             if (result.ok === false) {
-                setOperationNotes((previous) => [
-                    ...previous,
-                    `Cannot close this tab yet: ${describeTransitionRefusal(result.refusal)}.`,
-                ]);
+                reportOperation(`Cannot close this tab yet: ${describeTransitionRefusal(result.refusal)}.`);
                 return;
             }
             return;
@@ -819,18 +824,12 @@ export function App() {
         // the "host unavailable blocks Workspace transition" coupling.
         const result = await preview.coordinator.retargetTo(target.sessionId);
         if (result.ok === false) {
-            setOperationNotes((previous) => [
-                ...previous,
-                `Cannot retarget the Preview yet: ${describeTransitionRefusal(result.refusal)}.`,
-            ]);
+            reportOperation(`Cannot retarget the Preview yet: ${describeTransitionRefusal(result.refusal)}.`);
             return;
         }
-        setOperationNotes((previous) => [
-            ...previous,
-            result.targetChanged
+        reportOperation(result.targetChanged
                 ? `Preview target set to "${name}" — switching tabs keeps it until you choose another.`
-                : `Preview target remains "${name}" — its emission was refreshed against the current descriptor.`,
-        ]);
+                : `Preview target remains "${name}" — its emission was refreshed against the current descriptor.`);
     };
 
     // ---- Workspace Explorer. The host owns the root dialog, discovery,
@@ -870,6 +869,7 @@ export function App() {
                     result: null,
                 };
             });
+            output.append("workspace", "ok", `Workspace opened: ${root.displayPath}`);
             setExplorerEntries(null);
             setSidebarPanel("explorer");
             // Discover with the just-chosen root (the state read is still the
@@ -912,6 +912,7 @@ export function App() {
                     : settlement.kind === "unchanged"
                       ? settlement.canonicalWorkspaceUri
                       : expectedUri;
+            output.append("workspace", "info", `Discovery ${settlement.discoveryId} for ${expectedUri}: ${settlement.kind}${stillCurrent ? "" : " (superseded)"}.`);
             if (stillCurrent && settlementUri === expectedUri) {
                 if (settlement.kind === "changed") {
                     setExplorerEntries(settlement.snapshot.documents);
@@ -996,10 +997,7 @@ export function App() {
             setLoadResult({ title: "Workspace open", ok: false, diagnostics: parsed.diagnostics, passedText: `Could not open ${entry.relativePath} through the core reader.` });
             setExplorerStatus(null);
         } catch (error) {
-            setOperationNotes((previous) => [
-                ...previous,
-                `Workspace open failed (${error instanceof Error ? error.message : String(error)}).`,
-            ]);
+            reportOperation(`Workspace open failed (${error instanceof Error ? error.message : String(error)}).`);
             setExplorerStatus(null);
         }
     };
@@ -1050,7 +1048,7 @@ export function App() {
                 passedText: "",
             });
         } catch (error) {
-            setOperationNotes((previous) => [...previous, `Open failed (${error instanceof Error ? error.message : String(error)}).`]);
+            reportOperation(`Open failed (${error instanceof Error ? error.message : String(error)}).`);
         }
     };
 
@@ -1107,10 +1105,7 @@ export function App() {
         }
         dismissSaveConflict();
         setSavedText(snapshot.text);
-        setOperationNotes((previous) => [
-            ...previous,
-            `Saved ${snapshot.displayPath} as the core's canonical .shadergraph bytes.`,
-        ]);
+        reportOperation(`Saved ${snapshot.displayPath} as the core's canonical .shadergraph bytes.`);
         return true;
     };
 
@@ -1120,10 +1115,7 @@ export function App() {
             conflict.destinationOwnerSessionId === null
                 ? ""
                 : " The destination is already owned by another open document, so it cannot be overwritten from this session.";
-        setOperationNotes((previous) => [
-            ...previous,
-            `Save conflict: the destination changed on disk; the local document was retained (${conflict.canonicalDocumentUri}).${ownerMessage}`,
-        ]);
+        reportOperation(`Save conflict: the destination changed on disk; the local document was retained (${conflict.canonicalDocumentUri}).${ownerMessage}`);
     };
 
     /** Save to the session's target and resolve with success. A conflict is
@@ -1159,7 +1151,7 @@ export function App() {
             }
             return finishSuccessfulSave(savedSessionId, outcome.snapshot);
         } catch (error) {
-            setOperationNotes((previous) => [...previous, `Save failed (${error instanceof Error ? error.message : String(error)}).`]);
+            reportOperation(`Save failed (${error instanceof Error ? error.message : String(error)}).`);
             return false;
         }
     };
@@ -1181,7 +1173,7 @@ export function App() {
         }
         if (action === "cancel") {
             dismissSaveConflict();
-            setOperationNotes((previous) => [...previous, "Save conflict cancelled; the local document remains unchanged."]);
+            reportOperation("Save conflict cancelled; the local document remains unchanged.");
             return;
         }
         if (!activeSessionIs(conflict.sessionId)) {
@@ -1209,10 +1201,7 @@ export function App() {
                         diagnostics: parsed.diagnostics,
                         passedText: "",
                     });
-                    setOperationNotes((previous) => [
-                        ...previous,
-                        "Reload refused: the external file is not a valid ShaderGraph document; local changes were retained.",
-                    ]);
+                    reportOperation("Reload refused: the external file is not a valid ShaderGraph document; local changes were retained.");
                     return;
                 }
                 const reloadedDocument = parsed.value;
@@ -1237,10 +1226,7 @@ export function App() {
                     diagnostics: parsed.diagnostics,
                     passedText: `Reloaded ${snapshot.displayPath}; local changes and their undo history were discarded as chosen.`,
                 });
-                setOperationNotes((previous) => [
-                    ...previous,
-                    `Reloaded ${snapshot.displayPath} from disk.`,
-                ]);
+                reportOperation(`Reloaded ${snapshot.displayPath} from disk.`);
                 requestAnimationFrame(() => fitRef.current?.());
                 return;
             }
@@ -1280,10 +1266,7 @@ export function App() {
             }
             finishSuccessfulSave(conflict.sessionId, outcome.snapshot);
         } catch (error) {
-            setOperationNotes((previous) => [
-                ...previous,
-                `Conflict resolution failed; the local document was retained (${error instanceof Error ? error.message : String(error)}).`,
-            ]);
+            reportOperation(`Conflict resolution failed; the local document was retained (${error instanceof Error ? error.message : String(error)}).`);
         } finally {
             conflictResolutionInFlightRef.current = false;
             setConflictResolutionInFlight(false);
@@ -1394,7 +1377,7 @@ export function App() {
                     return;
                 }
                 if (!dirtyRef.current) {
-                    setOperationNotes((previous) => [...previous, "Close guard: clean session — closing."]);
+                    reportOperation("Close guard: clean session — closing.");
                     return; // not prevented → the api wrapper destroys the window
                 }
                 if (closePendingRef.current) {
@@ -1407,7 +1390,7 @@ export function App() {
                 }
                 closePendingRef.current = true;
                 try {
-                    setOperationNotes((previous) => [...previous, "Close guard: close attempt intercepted — the session has unsaved changes."]);
+                    reportOperation("Close guard: close attempt intercepted — the session has unsaved changes.");
                     // Await the user's choice from the in-page surface
                     // (kept up until answered, like a modal question).
                     const choice: CloseChoice = await new Promise<CloseChoice>((resolve) => {
@@ -1419,16 +1402,16 @@ export function App() {
                     if (choice === "save") {
                         saveSucceeded = await saveRef.current(false);
                     }
-                    setOperationNotes((previous) => [...previous, `Close guard: choice = ${choice}(; save ${saveSucceeded ? "completed" : "not attempted/failed"}).`]);
+                    reportOperation(`Close guard: choice = ${choice}(; save ${saveSucceeded ? "completed" : "not attempted/failed"}).`);
                     if (closeAction(choice, saveSucceeded) === "stay") {
                         event.preventDefault(); // stay — the session is kept
-                        setOperationNotes((previous) => [...previous, choice === "cancel" ? "Close guard: STAYED (Cancel)." : "Close guard: STAYED (the save did not complete)."]);
+                        reportOperation(choice === "cancel" ? "Close guard: STAYED (Cancel)." : "Close guard: STAYED (the save did not complete).");
                         return;
                     }
                     // discard (or a completed save) — NOT prevented, so
                     // the api wrapper destroys the window and the close
                     // happens.
-                    setOperationNotes((previous) => [...previous, choice === "discard" ? "Close guard: closing (unsaved changes discarded, as chosen)." : "Close guard: closing (changes saved)."]);
+                    reportOperation(choice === "discard" ? "Close guard: closing (unsaved changes discarded, as chosen)." : "Close guard: closing (changes saved).");
                 } finally {
                     closePendingRef.current = false;
                 }
@@ -1535,15 +1518,15 @@ export function App() {
                 // emission preview) described the former revision and is
                 // now stale — the preview must never outlive its revision.
                 invalidateRevisionDerivedState();
+                reportOperation(label, "info", session);
             }
-            setOperationNotes([]);
             return;
         }
         // A REFUSED operation is not a change: it is exposed (the note
         // below) but never entered the history — undo must never "undo
         // nothing".
         const reason = result.refusal !== undefined ? result.refusal.reason : "The operation was not applied.";
-        setOperationNotes((previous) => [...previous, reason]);
+        reportOperation(reason, "refusal", session);
     }
 
     const onConstantValueCommit = (nodeId: string, value: ConstantValue): boolean => {
@@ -1884,7 +1867,7 @@ export function App() {
     const onEmit = (): void => {
         if (descriptor === null) {
             setEmission(null);
-            setOperationNotes((previous) => [...previous, "Emission needs the profile contract: load a descriptor instance first (the descriptor is the serialized profile contract, never a header import — and without it the core refuses to emit)."]);
+            reportOperation("Emission needs the profile contract: load a descriptor instance first (the descriptor is the serialized profile contract, never a header import — and without it the core refuses to emit).");
             return;
         }
         setEmission(emitHlsl(document, descriptor));
@@ -1902,6 +1885,7 @@ export function App() {
     // the session store, the inspector projection); the app owns only
     // which facts feed them and the actions the user can take.
     const native = useNativeBuild({
+        onOutputEvent: nativeOutput,
         descriptor,
         descriptorCompatible: profileCompatibility !== null && profileCompatibility.verdict.ok,
         descriptorDetail,
@@ -1917,6 +1901,7 @@ export function App() {
     const previewDocument = previewTargetSession.history.present;
     const previewEmission = previewTargetSession.presentation.emission;
     const preview = useShaderPreview({
+        documentSessionId: previewTargetSession.sessionId,
         document: previewDocument,
         descriptor,
         descriptorCompatible: profileCompatibility !== null && profileCompatibility.verdict.ok,
@@ -1926,42 +1911,40 @@ export function App() {
         workspaceStore: authoringStore,
     });
 
-    // ---- Problems — the replaceable CURRENT diagnostic snapshot ----
-    // A set of current problems, not an append-only log: the CURRENT
-    // authoring diagnostics (the core's own structured facts for the
-    // active document, under its document context) plus the two owner
-    // lines' CURRENT diagnostic coordinate (each line's newest settled
-    // attempt, and only when it settled as a failure envelope). It is
-    // re-derived on EVERY render from the current owner facts: the owner
-    // objects keep their identity across issue / settle while their
-    // sessions move underneath — object identity is not a freshness
-    // token, so nothing here is memoized on it.
-    //
-    // Older failures are NOT current state: they stay with the Build /
-    // Preview chronology views, and the moment a newer attempt settles,
-    // its settlement replaces them as the coordinate. Load-result
-    // diagnostics are deliberately excluded: they belong to the load /
-    // import operation, not to the active document's identity — had they
-    // entered Problems they would need their own provenance, never the
-    // current document context.
-    const problemsDocumentContext = {
-        documentSessionId: session.sessionId,
-        documentRevision: documentRevision(session),
+    // Recompose the Workspace snapshot on every render. Owner objects retain
+    // identity across settlements, so their identity is not a freshness token.
+    const problemsSnapshot = composeWorkspaceProblemSnapshot(workspace, descriptor, native.flow?.buildSession ?? null, preview.flow?.session ?? null);
+    const problemNavigation = (entry: ProblemSnapshotEntry) => {
+        const navigation = resolveProblemNavigation(authoringStore.getSnapshot().session, entry);
+        return { available: navigation.available, detail: navigation.available ? `${sessionTitle(navigation.document, isDirty(navigation.document))}: ${navigation.detail}` : navigation.reason };
     };
-    const currentGraphDiagnostics = [
-        ...graphSets.flatMap((set) => set.diagnostics),
-        ...contractSets.flatMap((set) => set.diagnostics),
-        // Emission diagnostics enter only where they BLOCK the current
-        // emission (the current blocking state); on success they are the
-        // same validation facts the graph sets already carry.
-        ...(emission !== null && emission.ok === false ? [emission.diagnostics] : []),
-    ].flat();
-    const problemsSnapshot = composeProblemSnapshot(
-        currentGraphDiagnostics,
-        problemsDocumentContext,
-        native.flow?.buildSession ?? null,
-        preview.flow?.session ?? null,
-    );
+    const navigateProblem = (entry: ProblemSnapshotEntry): void => {
+        const navigation = resolveProblemNavigation(authoringStore.getSnapshot().session, entry);
+        if (!navigation.available) {
+            output.append("document", "refusal", navigation.reason, entry.correlation);
+            return;
+        }
+        const targetId = navigation.document.sessionId;
+        authoringStore.apply((state) => {
+            const activated = activateWorkspaceDocument(state.session, targetId);
+            const updated = updateWorkspaceDocument(activated.workspace, targetId, (target) => ({
+                ...target,
+                presentation: { ...target.presentation, focus: navigation.focus,
+                    selectedNodeId: navigation.focus?.connectionHighlights.length === 0 ? navigation.focus.nodeHighlights[0]?.nodeId ?? null : null,
+                    selectedConnectionId: navigation.focus?.connectionHighlights[0] ?? null,
+                    edgeMenu: null, nodeMenu: null, reconnectArmed: null },
+            }));
+            return { next: { ...state, session: updated.workspace }, result: null };
+        });
+        setInspectorOpen(true);
+        setInspectorZone("selection");
+        const nodeIds = navigation.focus?.nodeHighlights.map((node) => node.nodeId) ?? [];
+        if (nodeIds.length > 0) requestAnimationFrame(() => {
+            const current = activeWorkspaceDocument(authoringStore.getSnapshot().session);
+            if (current?.sessionId === targetId && documentRevision(current) === documentRevision(navigation.document)) fitRef.current?.(nodeIds);
+        });
+        output.append("document", "info", navigation.detail, entry.correlation);
+    };
 
     // Clear — a PRESENTATION action only: it replaces the displayed
     // snapshot with the empty one and never writes back into the graph,
@@ -1970,7 +1953,7 @@ export function App() {
     // any truth moves (a new settlement, a new graph diagnostic) or the
     // active document changes — the new composition shows from the first
     // render, never the previous revision's set.
-    const problemsSetKey = `${session.sessionId}::${documentRevision(session)}::${problemsSnapshot.entries.map((entry) => entry.identity).join("|")}`;
+    const problemsSetKey = JSON.stringify(problemsSnapshot.entries);
     const [problemsClearedKey, setProblemsClearedKey] = useState<string | null>(null);
     const problemsCleared = problemsClearedKey !== null && problemsClearedKey === problemsSetKey;
     const shownProblemsSnapshot = problemsCleared ? emptyProblemSnapshot() : problemsSnapshot;
@@ -2027,11 +2010,8 @@ export function App() {
     const inspectorZoneFacts: InspectorZoneFacts = {
         selection: { nodeSelected: selectedNode !== null },
         checks: {
-            ok: graphOk && contractOk && (loadResult === null || loadResult.ok),
-            problemCount:
-                graphProblemCount +
-                contractProblemCount +
-                (loadResult !== null ? loadResult.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length : 0),
+            ok: graphOk && contractOk,
+            problemCount: graphProblemCount + contractProblemCount,
         },
         document: { dirty },
         emission: {
@@ -2201,14 +2181,6 @@ export function App() {
                                 query={libraryQuery}
                                 onCollapseLibrary={() => setLibraryOpen(false)}
                             />
-                            {operationNotes.length > 0 && (
-                                <section className="gglab-notes">
-                                    <h2>Authoring notes</h2>
-                                    {operationNotes.map((note, index) => (
-                                        <p key={index}>{note}</p>
-                                    ))}
-                                </section>
-                            )}
                         </>
                     ) : (
                         <NodePalette rail onAddNode={onAddNode} onAddParameter={onAddParameter} descriptor={descriptor} onExpandLibrary={() => setLibraryOpen(true)} />
@@ -2372,9 +2344,6 @@ export function App() {
                     {contractSets.map((set) => (
                         <DiagnosticsPanel key={set.title} title={set.title} diagnostics={set.diagnostics} ok={set.ok} passedText={set.passedText} onSelect={selectDiagnostic} />
                     ))}
-                    {loadResult !== null && (
-                        <DiagnosticsPanel title={loadResult.title} diagnostics={loadResult.diagnostics} ok={loadResult.ok} passedText={loadResult.passedText} onSelect={selectDiagnostic} />
-                    )}
                             </>
                         )}
                         {inspectorZone === "document" && (
@@ -2569,7 +2538,7 @@ export function App() {
                                 <InspectorRows title="Build" rows={native.inspector.build} />
                             </>
                         )}
-                        {/* The surface's operation notes render in the build
+                        {/* Discovery operation events render in Output; the build
                             panel view — one display surface, owned by it. */}
                     </section>
                     <section className="gglab-panel gglab-panel-native-build" aria-label="Shader Graph Preview">
@@ -2780,11 +2749,9 @@ export function App() {
                             ) : bottomPanelTab === "preview" ? (
                                 <PreviewPanelView session={preview.flow?.session ?? null} notes={preview.notes} />
                             ) : bottomPanelTab === "problems" ? (
-                                <ProblemsPanelView snapshot={shownProblemsSnapshot} onClear={clearProblemsPresentation} />
+                                <ProblemsPanelView snapshot={shownProblemsSnapshot} onClear={clearProblemsPresentation} navigation={problemNavigation} onNavigate={navigateProblem} />
                             ) : (
-                                <p className="gglab-bottom-panel-placeholder">
-                                    {bottomPanelTabLabel(bottomPanelTab)} — placeholder view; its content arrives with its own step.
-                                </p>
+                                <OutputPanelView events={outputEvents} onClear={output.clear} />
                             )}
                         </div>
                     </section>

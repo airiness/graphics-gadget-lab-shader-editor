@@ -349,6 +349,24 @@ describe("Preview handshake orchestration", () => {
 });
 
 describe("Preview build orchestration", () => {
+    it("keeps the issuing document and source map when another same-source document becomes active before settlement", async () => {
+        const boundary = fake({ keepCompilePending: true });
+        const flow = new PreviewBuildController(boundary, new TestToolPort(), SESSION_ID, observations(), manager(runtimes()));
+        const id = createDocumentSessionId("issuing-document");
+        const input = composition({ documentSessionId: id });
+        await prove(flow, input);
+        const launch = await flow.buildPreview(input, selfGate(flow));
+        if (!launch.issued) throw new Error("fixture must issue");
+        const origin = flow.session.origins?.get(launch.buildId);
+        expect(origin?.documentSessionId).toBe(id);
+        expect(origin?.sourceMap).toBe(input.emission?.sourceMap);
+        // Gate reads for the new active context cannot relabel pending evidence.
+        flow.buildGate({ ...input, documentSessionId: createDocumentSessionId("same-source-other-document") });
+        boundary.releasePending(launch.buildId);
+        await launch.outcome;
+        expect(flow.session.origins?.get(launch.buildId)).toBe(origin);
+    });
+
     it("derives and issues the exact candidate-bound request after the gate", async () => {
         const boundary = fake();
         const flow = new PreviewBuildController(boundary, new TestToolPort(), SESSION_ID, observations(), manager(runtimes()));
