@@ -136,18 +136,8 @@ import {
     type BottomPanelTab,
 } from "./bottom-panel.js";
 import { BuildPanelView, PreviewPanelView, ProblemsPanelView } from "./bottom-panel-views.js";
-import {
-    createProblemSnapshot,
-    emptyProblemSnapshot,
-    problemEntriesFromBuildAttempt,
-    problemEntriesFromGraphDiagnostics,
-    problemEntriesFromPreviewAttempt,
-    previewChronology,
-    replaceProblemSnapshot,
-    type PanelDocumentContext,
-    type ProblemSnapshot,
-    type ProblemSnapshotEntry,
-} from "./panel-vocabulary.js";
+import { emptyProblemSnapshot } from "./panel-vocabulary.js";
+import { composeProblemSnapshot } from "./problems-composition.js";
 // Type-only (erased at compile time): the official dialog option shapes,
 // used for the single documented boundary cast below. Runtime functions
 // are dynamically imported inside the desktop effect only.
@@ -1937,75 +1927,55 @@ export function App() {
     });
 
     // ---- Problems — the replaceable CURRENT diagnostic snapshot ----
-    // A set of current problems, not an append-only log: it composes the
-    // CURRENT authoring diagnostics (the core's own structured facts) plus
-    // the toolchain diagnostics that FAILURE settlements report on the two
-    // owner lines (failure envelopes only — a success settlement's notes, a
-    // cancellation, and a termination without an envelope project zero
-    // entries; they stay with their owner's outcome on the chronology).
-    // The snapshot is presentation state: replacing it (and Clear) never
-    // writes back into the graph, the build line, or the preview line.
-    const problemsComposition = useMemo(() => {
-        const context: PanelDocumentContext = {
-            documentSessionId: session.sessionId,
-            documentRevision: documentRevision(session),
-        };
-        const entries: ProblemSnapshotEntry[] = [];
-        for (const set of graphSets) {
-            entries.push(...problemEntriesFromGraphDiagnostics(set.diagnostics, context));
-        }
-        for (const set of contractSets) {
-            entries.push(...problemEntriesFromGraphDiagnostics(set.diagnostics, context));
-        }
-        if (loadResult !== null) {
-            entries.push(...problemEntriesFromGraphDiagnostics(loadResult.diagnostics, context));
-        }
-        // Emission diagnostics enter only where they BLOCK emission (the
-        // current blocking state); on success they are the same validation
-        // facts the graph sets already carry — re-projecting them would
-        // duplicate the same fact, not state a new problem.
-        if (emission !== null && emission.ok === false) {
-            entries.push(...problemEntriesFromGraphDiagnostics(emission.diagnostics, context));
-        }
-        const buildSession = native.flow?.buildSession ?? null;
-        if (buildSession !== null) {
-            for (const record of buildSession.line.attempts) {
-                entries.push(...problemEntriesFromBuildAttempt(record));
-            }
-        }
-        const previewSession = preview.flow?.session ?? null;
-        if (previewSession !== null) {
-            for (const row of previewChronology(previewSession)) {
-                entries.push(...problemEntriesFromPreviewAttempt(row));
-            }
-        }
-        // The snapshot is a SET: every entry is unique by its stable
-        // identity (the same owner fact appears once, first-seen wins).
-        const seen = new Set<string>();
-        const unique: ProblemSnapshotEntry[] = [];
-        for (const entry of entries) {
-            if (!seen.has(entry.identity)) {
-                seen.add(entry.identity);
-                unique.push(entry);
-            }
-        }
-        return createProblemSnapshot(unique);
-    }, [session, graphSets, contractSets, loadResult, emission, native.flow, preview.flow]);
+    // A set of current problems, not an append-only log: the CURRENT
+    // authoring diagnostics (the core's own structured facts for the
+    // active document, under its document context) plus the two owner
+    // lines' CURRENT diagnostic coordinate (each line's newest settled
+    // attempt, and only when it settled as a failure envelope). It is
+    // re-derived on EVERY render from the current owner facts: the owner
+    // objects keep their identity across issue / settle while their
+    // sessions move underneath — object identity is not a freshness
+    // token, so nothing here is memoized on it.
+    //
+    // Older failures are NOT current state: they stay with the Build /
+    // Preview chronology views, and the moment a newer attempt settles,
+    // its settlement replaces them as the coordinate. Load-result
+    // diagnostics are deliberately excluded: they belong to the load /
+    // import operation, not to the active document's identity — had they
+    // entered Problems they would need their own provenance, never the
+    // current document context.
+    const problemsDocumentContext = {
+        documentSessionId: session.sessionId,
+        documentRevision: documentRevision(session),
+    };
+    const currentGraphDiagnostics = [
+        ...graphSets.flatMap((set) => set.diagnostics),
+        ...contractSets.flatMap((set) => set.diagnostics),
+        // Emission diagnostics enter only where they BLOCK the current
+        // emission (the current blocking state); on success they are the
+        // same validation facts the graph sets already carry.
+        ...(emission !== null && emission.ok === false ? [emission.diagnostics] : []),
+    ].flat();
+    const problemsSnapshot = composeProblemSnapshot(
+        currentGraphDiagnostics,
+        problemsDocumentContext,
+        native.flow?.buildSession ?? null,
+        preview.flow?.session ?? null,
+    );
 
-    const [problemsSnapshot, setProblemsSnapshot] = useState<ProblemSnapshot>(() => emptyProblemSnapshot());
-    // Replacement is the snapshot's whole lifecycle: a new composition over
-    // the owners' current facts becomes the view, wholesale — the previous
-    // snapshot is never extended.
-    useEffect(() => {
-        setProblemsSnapshot(replaceProblemSnapshot(problemsComposition.entries));
-    }, [problemsComposition]);
-    // Clear — a PRESENTATION action: replace the displayed snapshot with
-    // the empty one. It never touches an owner record, so it can never
-    // clear the graph's diagnostics, the build line, or the preview line;
-    // the next owner fact composes a fresh snapshot that replaces the
-    // cleared state.
+    // Clear — a PRESENTATION action only: it replaces the displayed
+    // snapshot with the empty one and never writes back into the graph,
+    // the build line, or the preview line. The suppression is keyed to
+    // the very set it was cleared for, so it expires by itself the moment
+    // any truth moves (a new settlement, a new graph diagnostic) or the
+    // active document changes — the new composition shows from the first
+    // render, never the previous revision's set.
+    const problemsSetKey = `${session.sessionId}::${documentRevision(session)}::${problemsSnapshot.entries.map((entry) => entry.identity).join("|")}`;
+    const [problemsClearedKey, setProblemsClearedKey] = useState<string | null>(null);
+    const problemsCleared = problemsClearedKey !== null && problemsClearedKey === problemsSetKey;
+    const shownProblemsSnapshot = problemsCleared ? emptyProblemSnapshot() : problemsSnapshot;
     const clearProblemsPresentation = () => {
-        setProblemsSnapshot(emptyProblemSnapshot());
+        setProblemsClearedKey(problemsSetKey);
     };
 
     // The flow object is stable while handshake facts change inside it. Read
@@ -2810,7 +2780,7 @@ export function App() {
                             ) : bottomPanelTab === "preview" ? (
                                 <PreviewPanelView session={preview.flow?.session ?? null} notes={preview.notes} />
                             ) : bottomPanelTab === "problems" ? (
-                                <ProblemsPanelView snapshot={problemsSnapshot} onClear={clearProblemsPresentation} />
+                                <ProblemsPanelView snapshot={shownProblemsSnapshot} onClear={clearProblemsPresentation} />
                             ) : (
                                 <p className="gglab-bottom-panel-placeholder">
                                     {bottomPanelTabLabel(bottomPanelTab)} — placeholder view; its content arrives with its own step.
