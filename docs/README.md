@@ -41,6 +41,13 @@ profile is the Surface Profile Descriptor in the main GGLab repository:
 record for that profile is owned by the GGLab docs repository (listed
 below), not this one.
 
+## Integration readiness records
+
+- [Environment import readiness and publisher handoff](environment-import-readiness.md)
+  records the inspected producer prerequisite, requested publication contract
+  deliverables, and Editor acceptance criteria. It does not define an
+  approved Environment manifest or claim that import is implemented.
+
 ## Documents owned by other repositories (referenced, not copied)
 
 GGLab docs repository:
