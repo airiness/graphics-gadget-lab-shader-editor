@@ -2095,3 +2095,55 @@ button.gglab-diagnostics-item:hover {
 .gglab-view-state-canceled {
     color: var(--warn);
 }
+
+/* The Problems view: the replaceable current diagnostic snapshot. The
+   toolbar carries the whole-state count and the presentation-only Clear
+   action; each entry row keeps its severity, owner code, message, and
+   location authority as structured facts. */
+.gglab-bottom-view-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.gglab-bottom-view-count {
+    color: var(--muted);
+    font-size: var(--type-meta);
+}
+
+.gglab-bottom-view-clear {
+    border: 1px solid var(--edge);
+    border-radius: var(--radius, 6px);
+    background: transparent;
+    color: var(--text);
+    font-size: var(--type-meta);
+    padding: 3px 10px;
+    cursor: pointer;
+}
+
+.gglab-bottom-view-clear:hover:not(:disabled) {
+    border-color: var(--muted);
+}
+
+.gglab-bottom-view-clear:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.gglab-view-severity {
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+}
+
+.gglab-view-severity-error {
+    color: var(--err, var(--warn));
+}
+
+.gglab-view-severity-warning {
+    color: var(--warn);
+}
+
+.gglab-view-severity-info {
+    color: var(--muted);
+}

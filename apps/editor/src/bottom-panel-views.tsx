@@ -1,7 +1,7 @@
 /**
- * The Build and Preview bottom-panel views — PRESENTATION over the panel
- * vocabulary's projections (the frozen vocabulary boundary): each view
- * takes the
+ * The bottom-panel views. The Build and Preview chronology views are
+ * PRESENTATION over the panel vocabulary's projections (the frozen
+ * vocabulary boundary): each view
  * OWNER'S session value (the editor's build-line session / the Preview
  * build session), projects it through the vocabulary's chronology
  * functions, and renders the rows. The rendering layer never re-judges:
@@ -22,8 +22,7 @@ import type { ReactNode } from "react";
 import type { AttemptOutcome, PreviewAttemptOutcome } from "@gglab/shader-toolchain-client";
 import type { NativeBuildSession } from "./native-build-session.js";
 import type { PreviewBuildSession } from "./preview-build-session.js";
-import { buildChronology, type BuildRow } from "./panel-vocabulary.js";
-import { previewChronology, type PreviewRow } from "./panel-vocabulary.js";
+import { buildChronology, previewChronology, type BuildRow, type ProblemSnapshot, type PreviewRow } from "./panel-vocabulary.js";
 import { describePreviewAttemptOutcome } from "./preview-attempt-summary.js";
 
 /** One surface operation note (both surfaces share this note shape). */
@@ -281,6 +280,59 @@ export function PreviewPanelView(props: { readonly session: PreviewBuildSession 
                 </ul>
             )}
             {renderNotes(notes)}
+        </div>
+    );
+}
+
+/** The PROBLEMS view: the replaceable CURRENT diagnostic snapshot — a set
+ *  of entries, not an append-only log. What arrives here is already the
+ *  whole current state (its lifecycle is replacement by the composition
+ *  over the owners' records); the view renders that set — each entry's
+ *  severity, the owner's stable code when the layer has one, the message,
+ *  and the entry's location authority — and nothing more. Each row keeps
+ *  the entry's stable identity as its key (future document / node
+ *  navigation resolves from the entry's own location and correlation
+ *  values, never parsed from this display).
+ *
+ *  "Clear" is a PRESENTATION action only: the view calls `onClear` and
+ *  the caller replaces the snapshot with the empty one. The view never
+ *  touches an owner record — clearing the presentation can never clear
+ *  the graph's diagnostics, a build line, or a preview line. */
+export function ProblemsPanelView(props: { readonly snapshot: ProblemSnapshot; readonly onClear: () => void }) {
+    const { snapshot, onClear } = props;
+    const entries = snapshot.entries;
+    return (
+        <div className="gglab-bottom-view" aria-label="Current problems">
+            <div className="gglab-bottom-view-toolbar">
+                <span className="gglab-bottom-view-count">
+                    {entries.length === 0 ? "No current problems." : `${entries.length} current problem${entries.length === 1 ? "" : "s"}.`}
+                </span>
+                <button type="button" className="gglab-bottom-view-clear" disabled={entries.length === 0} onClick={onClear} title="Replace the displayed snapshot with the empty one (the owners' diagnostic, build, and preview truth is untouched)">
+                    Clear presentation
+                </button>
+            </div>
+            {entries.length === 0 ? (
+                <p className="gglab-bottom-view-empty">This is the whole current state: there is no problem to show.</p>
+            ) : (
+                <ul className="gglab-bottom-view-rows" aria-label="Current problems">
+                    {entries.map((entry) => (
+                        <li key={entry.identity} className="gglab-bottom-view-row">
+                            <span className="gglab-bottom-view-head">
+                                <span className={`gglab-view-severity gglab-view-severity-${entry.severity}`}>{entry.severity}</span>
+                                {entry.code !== null && <span className="mono">{entry.code}</span>}
+                                <span className="gglab-bottom-view-outcome">{entry.text}</span>
+                            </span>
+                            <span className="gglab-bottom-view-identity mono">
+                                {entry.location.kind === "graph"
+                                    ? `graph ${entry.location.dataPath}`
+                                    : entry.location.kind === "generated-source"
+                                      ? `generated source ${entry.location.sourceIdentity.slice(0, 12)}…`
+                                      : "no location reported"}
+                            </span>
+                        </li>
+                    ))}
+                </ul>
+            )}
         </div>
     );
 }
