@@ -2,7 +2,7 @@ import { graph, descriptor, emission, source } from "./evidence-fixture.js";
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render } from "@testing-library/react";
 import { useSyncExternalStore } from "react";
-import { serializeShaderGraphDocument } from "@gglab/shader-graph-core";
+import { emitHlsl, validateShaderGraph, serializeShaderGraphDocument } from "@gglab/shader-graph-core";
 import type { AttemptOutcome, BuildIntent } from "@gglab/shader-toolchain-client";
 import { createSession, documentRevision, provenanceFromImport, recordDocumentChange, type DocumentSession } from "../src/document-session.js";
 import { activateWorkspaceDocument, closeWorkspaceDocument, createDocumentSessionId, createWorkspaceSession, openWorkspaceDocument, updateWorkspaceDocument } from "../src/workspace-session.js";
@@ -74,6 +74,22 @@ describe("document-owned diagnostic navigation", () => {
         expect(() => captureDocumentEvidence({ ...a, history: changed.history }, descriptor)).toThrow("owner");
         expect(Object.isFrozen(origin)).toBe(true);
         expect(Object.isFrozen(origin.sourceMap)).toBe(true);
+    });
+
+    it("deduplicates validation diagnostics repeated by failed emission", () => {
+        const invalid = { ...graph, connections: [] };
+        const validation = validateShaderGraph(invalid).diagnostics;
+        const failed = emitHlsl(invalid, descriptor);
+        expect(failed.ok).toBe(false);
+        const repeated = validation.find(diagnostic => failed.diagnostics.some(other => JSON.stringify(other) === JSON.stringify(diagnostic)));
+        expect(repeated).toBeDefined();
+        const owner = createSession(createDocumentSessionId("invalid-graph"), provenanceFromImport(), invalid);
+        const withEmission = { ...owner, presentation: { ...owner.presentation, emission: failed } };
+        const open = openWorkspaceDocument(createWorkspaceSession<DocumentSession>(), withEmission).workspace;
+        const result = composeWorkspaceProblemSnapshot(open, descriptor, null, null);
+        expect(result.entries.filter(entry => entry.code === repeated!.code && entry.text === repeated!.message && entry.location.kind === "graph" && entry.location.dataPath === repeated!.dataPath)).toHaveLength(1);
+        const context = { documentSessionId: owner.sessionId, documentRevision: documentRevision(owner) };
+        expect(problemEntriesFromGraphDiagnostics([repeated!], context)[0]?.identity).toBe(problemEntriesFromGraphDiagnostics([...validation, repeated!], context).at(-1)?.identity);
     });
 
     it("deduplicates the entire workspace snapshot while retaining chronology", () => {

@@ -429,16 +429,16 @@ describe("the graph-native diagnostics (the CURRENT authoring snapshot)", () => 
             expect(entry.correlation.documentSessionId).toBe(session);
             expect(entry.correlation.documentRevision).toBe("revision-current");
             expect(entry.correlation.generatedSourceIdentity).toBeNull();
-            expect(entry.identity).toBe("graph:document-session-vocabulary:TYPE_MISMATCH:$.nodes[3].inputs[1]@0");
+            expect(entry.identity).toBe(problemEntriesFromGraphDiagnostics([graphDiagnostic, graphDiagnostic], context)[1]?.identity);
         }
     });
 
-    it("gives duplicate reports deterministic, distinct identities", () => {
-        const entries = problemEntriesFromGraphDiagnostics([graphDiagnostic, graphDuplicate], context);
-        expect(entries.map((entry) => entry.identity)).toEqual([
-            "graph:document-session-vocabulary:TYPE_MISMATCH:$.nodes[3].inputs[1]@0",
-            "graph:document-session-vocabulary:TYPE_MISMATCH:$.nodes[3].inputs[1]@1",
-        ]);
+    it("keeps logical identity across aggregation order and separates different facts", () => {
+        const entries = problemEntriesFromGraphDiagnostics([graphDiagnostic, graphDuplicate, graphDiagnostic], context);
+        expect(entries[0]?.identity).toBe(entries[2]?.identity);
+        expect(entries[0]?.identity).not.toBe(entries[1]?.identity);
+        expect(problemEntriesFromGraphDiagnostics([graphDuplicate, graphDiagnostic], context).map(entry => entry.identity)).toEqual([entries[1]?.identity, entries[0]?.identity]);
+        expect(problemEntriesFromGraphDiagnostics([graphDiagnostic], { ...context, documentRevision: "next" })[0]?.identity).not.toBe(entries[0]?.identity);
     });
 });
 

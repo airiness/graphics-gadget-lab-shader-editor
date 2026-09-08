@@ -46,6 +46,10 @@ jobs:
         # (owned by the main repository's build and self-test suites).
         # The Tauri service itself — the host boundary — is checked and
         # tested on its own platform in the native-service job below.
+        env:
+          # An absent checkout must not be read by ordinary unit tests.
+          GGLAB_ENVIRONMENT_SOURCE: ${{ runner.temp }}/absent-main-checkout
+          GGLAB_ENVIRONMENT_QUALIFICATION: "0"
         run: pnpm test
 
       - name: Lint the repository

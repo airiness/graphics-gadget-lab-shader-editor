@@ -1,6 +1,8 @@
 # Correctness and evidence review closure
 
-Status: **blocked**, not ready to claim all review gates passed. No Environment
+Historical closure status: **blocked**, not ready to claim all review gates passed.
+The subsequent working-tree fixes and current submission boundary are recorded
+in [Review follow-up](review-followup.md). No Environment
 functionality, import activation, or UX is added by this change.
 
 ## Editor correctness changes

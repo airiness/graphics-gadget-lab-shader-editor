@@ -43,6 +43,9 @@ below), not this one.
 
 ## Integration readiness records
 
+- [Review follow-up](review-followup.md) records stable diagnostic identities,
+  lazy cross-repo qualification, and the Main-owned 8.3 staging fix.
+
 - [Correctness and evidence review closure](review-closure.md) records the pinned
   producer baseline, regression results and unresolved Windows short-alias gate.
 

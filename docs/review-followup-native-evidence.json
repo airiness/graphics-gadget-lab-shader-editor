@@ -1,0 +1,118 @@
+{
+  "mainBaseRevision": "aa462d091e46f0cd5412ecc6564ce2cc393c369e",
+  "editorBaseRevision": "f15cd35e168635ac251073b04565d625d9f270db",
+  "qualification": "working-tree regression only; no fresh native build or final clean replay",
+  "publisherSha256": "f06d6504f2a3c17eefd5bf5f7af203e10adda14b4275ad4ac4455ef1d5ac3b56",
+  "runs": [
+    {
+      "configuration": "debug",
+      "reportSha256": "c156855f39990942e31ce06d675720e7a8fd2befc321a003f22726731371771a",
+      "success": true,
+      "executables": {
+        "gglab-shaderc.exe": "24835370b732ce509399e4824b941b56f3c7649ba39f3bba79921414a0668ae4",
+        "GraphicsGadgetLab.exe": "68f05b2d55aa8b564c18016d4694125298bfffbf2df98448c9036759206afa6e"
+      },
+      "native": [
+        {
+          "backend": "dx12",
+          "profileVersion": 1,
+          "success": true,
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "immutableClosurePreserved": true
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "success": true,
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "immutableClosurePreserved": true
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "success": true,
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "immutableClosurePreserved": true
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "success": true,
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "immutableClosurePreserved": true
+        }
+      ]
+    },
+    {
+      "configuration": "release",
+      "reportSha256": "94c66be24238f965f2eaced8c1c4019908c71f9f477196388e59fa1269fb967f",
+      "success": true,
+      "executables": {
+        "gglab-shaderc.exe": "1e0f4274af1d69b4700285d5fce760df696bb23ae4622d0a47ce2fd3d8972586",
+        "GraphicsGadgetLab.exe": "6798dbb012d2d3c0ac13fedb01f605ddd6ed64cbda3fb4ffa119c0eca569f725"
+      },
+      "native": [
+        {
+          "backend": "dx12",
+          "profileVersion": 1,
+          "success": true,
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "immutableClosurePreserved": true
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "success": true,
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "immutableClosurePreserved": true
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "success": true,
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "immutableClosurePreserved": true
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "success": true,
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "immutableClosurePreserved": true
+        }
+      ]
+    }
+  ]
+}

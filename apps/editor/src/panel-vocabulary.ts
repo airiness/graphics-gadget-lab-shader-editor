@@ -496,8 +496,9 @@ export function problemEntriesFromGraphDiagnostics(
         documentSessionId: context.documentSessionId,
         documentRevision: context.documentRevision,
     };
-    return diagnostics.map((diagnostic, index) => ({
-        identity: `graph:${context.documentSessionId}:${diagnostic.code}:${diagnostic.dataPath}@${index}`,
+    return diagnostics.map(diagnostic => ({
+        // Tuple encoding avoids delimiter collisions and aggregation-order identities.
+        identity: `graph:${JSON.stringify([context.documentSessionId, context.documentRevision, diagnostic.code, diagnostic.severity, diagnostic.dataPath, diagnostic.message])}`,
         severity: diagnostic.severity,
         code: diagnostic.code,
         text: diagnostic.message,

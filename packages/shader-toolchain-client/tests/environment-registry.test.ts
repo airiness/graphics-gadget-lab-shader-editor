@@ -1,11 +1,8 @@
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { environmentProducerFixtures } from "../../../tests/environment-producer.js";
+import { syntheticEnvironmentManifest } from "../../../tests/environment-synthetic.js";
 import { describe, expect, it } from "vitest";
-import { EnvironmentRegistry, environmentCanonical, environmentRegistryKey, readEnvironmentManifest, readEnvironmentRegistryRecord, recoverEnvironmentRegistration, prepareEnvironmentImport, withEnvironmentRegistry, type EnvironmentRegistration, type EnvironmentRegistryRecord, type EnvironmentRegistryStorage, type EnvironmentRecoveryHost } from "../src/index.js";
-const fixtures = environmentProducerFixtures();
+import { EnvironmentRegistry, environmentCanonical, environmentRegistryKey, readEnvironmentRegistryRecord, recoverEnvironmentRegistration, prepareEnvironmentImport, withEnvironmentRegistry, type EnvironmentRegistration, type EnvironmentRegistryRecord, type EnvironmentRegistryStorage, type EnvironmentRecoveryHost } from "../src/index.js";
 function example(): EnvironmentRegistration {
-    const manifest = readEnvironmentManifest(readFileSync(`${fixtures}/valid.json`, "utf8"), text => createHash("sha256").update(text, "ascii").digest("hex"));
+    const manifest = syntheticEnvironmentManifest();
     const root = "D:/final", stateRoot = "D:/state";
     return { closure: { root, manifest }, state: { root: stateRoot, environmentId: manifest.environmentId }, proof: {
         environmentId: manifest.environmentId, environmentRoot: root, stateRoot,

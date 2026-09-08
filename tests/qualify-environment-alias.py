@@ -45,7 +45,12 @@ def main():
         short = Path(buffer.value)
         assert short.samefile(staging), "Alias must name the same filesystem identity"
         report["distinctShortAlias"] = short.name.lower() != staging.name.lower()
-        for label, path in [("long", staging), ("upper", staging.with_name(staging.name.upper())), ("short", short)]:
+        aliases = [("long", staging), ("upper", staging.with_name(staging.name.upper()))]
+        if report["distinctShortAlias"]:
+            aliases.append(("short", short))
+        else:
+            report["shortAliasStatus"] = "skipped-no-distinct-alias"
+        for label, path in aliases:
             try:
                 producer.verify(path)
                 actual = "accepted"
@@ -56,9 +61,9 @@ def main():
         staging.rename(final)
         producer.verify(final)
         report["finalizedControl"] = "accepted"
-    report["passed"] = all(case["actual"] == case["expected"] for case in report["cases"])
+    report["passed"] = all(case["actual"] == case["expected"] for case in report["cases"]) if report["distinctShortAlias"] else None
     print(json.dumps(report, indent=2))
-    return 0 if report["passed"] else 1
+    return 77 if report["passed"] is None else 0 if report["passed"] else 1
 
 
 if __name__ == "__main__":

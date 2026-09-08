@@ -1,7 +1,8 @@
+import { syntheticEnvironmentManifest } from "../../../tests/environment-synthetic.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { environmentProducerFixtures } from "../../../tests/environment-producer.js";
+import { environmentQualificationEnabled, environmentProducerFixtures } from "../../../tests/environment-producer.js";
 import { describe, expect, it } from "vitest";
 import { EnvironmentContractError, environmentIdentity, parseEnvironmentJson, readEnvironmentManifest, type EnvironmentManifest } from "../src/environment-contract.js";
 import { readEnvironmentBootstrap, readEnvironmentRequest, readEnvironmentResponse, callEnvironmentProducer } from "../src/environment-protocol.js";
@@ -9,19 +10,20 @@ import { verifyEnvironmentClosure, type EnvironmentEntry } from "../src/environm
 import { prepareEnvironmentImport, validateEnvironmentStateRoots, ENVIRONMENT_IMPORT_AVAILABILITY, type EnvironmentFinalProof, type EnvironmentImportHost, type EnvironmentRegistration } from "../src/environment-import.js";
 
 // The producer owns these vectors; require the pinned clean revision.
-const fixtureRoot = environmentProducerFixtures();
-const text = (name: string): string => readFileSync(`${fixtureRoot}/${name}`, "utf8");
+const text = (name: string): string => readFileSync(`${environmentProducerFixtures()}/${name}`, "utf8");
 const hash = (value: string): string => createHash("sha256").update(value, "ascii").digest("hex");
-const valid = (): EnvironmentManifest => readEnvironmentManifest(text("valid.json"), hash);
+const valid = (): EnvironmentManifest => syntheticEnvironmentManifest();
 function rejects(code: string, operation: () => unknown): void {
     try { operation(); throw new Error("Expected rejection"); }
     catch (error) { expect(error).toBeInstanceOf(EnvironmentContractError); expect((error as EnvironmentContractError).diagnostic.code).toBe(code); }
 }
-const fixtures = JSON.parse(text("index.json")) as { cases: { file: string; accept: boolean; error?: string; environmentId?: string }[] };
-describe("producer-owned manifest vectors", () => {
-    for (const vector of fixtures.cases) it(vector.file, () => {
-        if (vector.accept) expect(readEnvironmentManifest(text(vector.file), hash).environmentId).toBe(vector.environmentId);
-        else rejects(vector.error!, () => readEnvironmentManifest(text(vector.file), hash));
+describe("Environment manifest reader", () => {
+    it.runIf(environmentQualificationEnabled)("qualifies all pinned producer manifest vectors", () => {
+        const fixtures = JSON.parse(text("index.json")) as { cases: { file: string; accept: boolean; error?: string; environmentId?: string }[] };
+        for (const vector of fixtures.cases) {
+            if (vector.accept) expect(readEnvironmentManifest(text(vector.file), hash).environmentId).toBe(vector.environmentId);
+            else rejects(vector.error!, () => readEnvironmentManifest(text(vector.file), hash));
+        }
     });
     it("checks duplicate escaped keys, malformed JSON, non-finite and float version tokens", () => {
         for (const input of ['{"a":1,"\\u0061":2}', '\ufeff{}', '{"a":NaN}', '{"a":1e999}', '{"a":1.0}', '{}{}', '[1,]', '{"a":1,}', '"\u0000"']) rejects("invalid-json", () => parseEnvironmentJson(input));
@@ -38,15 +40,14 @@ describe("producer-owned manifest vectors", () => {
         const members = [...conflict.members, { ...conflict.members[0]!, path: "payload/Assets" }].sort((a,b) => a.path < b.path ? -1 : 1);
         rejects("path-conflict", () => readEnvironmentManifest(JSON.stringify({ ...conflict, members }), hash));
     });
-    it("identity is independently derived and formatting/order insensitive", () => {
+    it("identity derivation ignores formatting and field order", () => {
         const m = valid(); expect(environmentIdentity(m, hash)).toBe(m.environmentId);
         expect(readEnvironmentManifest(JSON.stringify(Object.fromEntries(Object.entries(m).reverse()), null, 4), hash)).toEqual(m);
     });
 });
-function closureHost() {
-    const m = valid();
+function closureHost(m = valid()) {
     const files = new Map(m.members.map(member => [member.path, "synthetic fixture; not executable\n"]));
-    files.set("environment.json", text("valid.json"));
+    files.set("environment.json", JSON.stringify(m));
     const entries: EnvironmentEntry[] = [...files.keys()].map(path => ({ path, kind: "file", reparsePoint: false, linkCount: 1 }));
     const host = {
         hashAscii: hash, assertOrdinaryRoot: (root: string) => root,
@@ -56,17 +57,22 @@ function closureHost() {
     };
     return { host, files, entries };
 }
-describe("producer-owned filesystem vectors through closure verifier", () => {
-    const vectors = JSON.parse(text("filesystem-cases.json")) as { cases: { name: string; mutation: string; path: string; replacementUtf8?: string; error: string }[] };
+describe("Environment closure verification", () => {
     it("accepts materialized synthetic closure without claiming readiness", () => expect(verifyEnvironmentClosure(closureHost().host, "D:/environment").manifest.environmentId).toBe(valid().environmentId));
-    for (const v of vectors.cases) it(v.name, () => {
-        const h = closureHost();
-        if (v.mutation === "remove") h.files.delete(v.path);
-        else {
-            h.files.set(v.path, v.replacementUtf8!);
-            if (!h.entries.some(e => e.path === v.path)) h.entries.push({ path: v.path, kind: "file", reparsePoint: false, linkCount: 1 });
+    it.runIf(environmentQualificationEnabled)("qualifies pinned producer filesystem and staging vectors", () => {
+        const vectors = JSON.parse(text("filesystem-cases.json")) as { cases: { mutation: string; path: string; replacementUtf8?: string; error: string }[] };
+        const manifest = readEnvironmentManifest(text("valid.json"), hash);
+        for (const v of vectors.cases) {
+            const h = closureHost(manifest);
+            if (v.mutation === "remove") h.files.delete(v.path);
+            else {
+                h.files.set(v.path, v.replacementUtf8!);
+                if (!h.entries.some(e => e.path === v.path)) h.entries.push({ path: v.path, kind: "file", reparsePoint: false, linkCount: 1 });
+            }
+            rejects(v.error, () => verifyEnvironmentClosure(h.host, "D:/environment"));
         }
-        rejects(v.error, () => verifyEnvironmentClosure(h.host, "D:/environment"));
+        const staging = JSON.parse(text("staging-cases.json")) as { pathSpellings: string[]; expected: { verify: { errorCode: string } } };
+        for (const name of staging.pathSpellings) rejects(staging.expected.verify.errorCode, () => verifyEnvironmentClosure(closureHost(manifest).host, "D:/" + name));
     });
     it("rejects reparse points, hardlinks, case conflicts and staging", () => {
         for (const [patch, code] of [[{ reparsePoint: true }, "reparse-point"], [{ linkCount: 2 }, "hard-link"]] as const) {
@@ -76,13 +82,14 @@ describe("producer-owned filesystem vectors through closure verifier", () => {
         const h = closureHost(), first = h.entries[0]!;
         h.entries.push({ ...first, path: first.path.toUpperCase() }); h.files.set(first.path.toUpperCase(), "x");
         rejects("path-conflict", () => verifyEnvironmentClosure(h.host, "D:/environment"));
-        const staging = JSON.parse(text("staging-cases.json")) as { pathSpellings: string[]; expected: { verify: { errorCode: string } } };
-        for (const name of staging.pathSpellings) rejects(staging.expected.verify.errorCode, () => verifyEnvironmentClosure(closureHost().host, "D:/" + name));
+        for (const name of [".staging-unit", ".STAGING-UNIT"]) rejects("incomplete-publication", () => verifyEnvironmentClosure(closureHost().host, "D:/" + name));
     });
 });
 describe("producer process protocol", () => {
-    const vectors = JSON.parse(text("process-cases.json")) as { cases: { request: unknown; error: string }[] };
-    for (const [index, v] of vectors.cases.entries()) it(`request vector ${index}`, () => rejects(v.error, () => readEnvironmentRequest(v.request)));
+    it.runIf(environmentQualificationEnabled)("qualifies pinned producer process vectors", () => {
+        const vectors = JSON.parse(text("process-cases.json")) as { cases: { request: unknown; error: string }[] };
+        for (const v of vectors.cases) rejects(v.error, () => readEnvironmentRequest(v.request));
+    });
     it("retains multiple explicit candidates and rejects exit/operation mismatch", async () => {
         const result = { candidates: ["Build/Debug", "Build/Release"].map(deployment => ({ deployment, toolSha256: "1".repeat(64), runtimeSha256: "2".repeat(64) })) };
         const stdout = JSON.stringify({ resultVersion: 1, operation: "discover", success: true, result, error: null });
@@ -95,8 +102,8 @@ describe("producer process protocol", () => {
         const error = { code: "cancelled", message: "Published successfully (diagnostic text is not authority)" };
         expect(readEnvironmentResponse(JSON.stringify({ resultVersion: 1, operation: "publish", success: false, result: null, error }), 2, "publish")).toEqual({ success: false, error });
     });
-    it("reads the actual bootstrap and keeps approval pending", () => {
-        const bootstrapPath = resolve(fixtureRoot, "../../../Scripts/Environment/bootstrap.json");
+    it.runIf(environmentQualificationEnabled)("reads the actual bootstrap and keeps approval pending", () => {
+        const bootstrapPath = resolve(environmentProducerFixtures(), "../../../Scripts/Environment/bootstrap.json");
         expect(readEnvironmentBootstrap(readFileSync(bootstrapPath, "utf8")).contractStatus).toBe("implemented-pending-owner-review");
         expect(ENVIRONMENT_IMPORT_AVAILABILITY.enabled).toBe(false);
     });

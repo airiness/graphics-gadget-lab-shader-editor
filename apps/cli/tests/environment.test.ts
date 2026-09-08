@@ -1,19 +1,19 @@
+import { syntheticEnvironmentManifest } from "../../../tests/environment-synthetic.js";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync, statSync, linkSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { environmentProducerFixtures } from "../../../tests/environment-producer.js";
+import { environmentQualificationEnabled, environmentProducerFixtures } from "../../../tests/environment-producer.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { ENVIRONMENT_STATE_ROLES, environmentExecutionLocations, type EnvironmentManifest } from "@gglab/shader-toolchain-client";
 import { verifyEnvironmentDirectory, inspectEnvironmentState } from "../src/environment-host.js";
 import { dispatch } from "../src/index.js";
-const fixtures = environmentProducerFixtures();
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
-function fixture() {
+function fixture(producer = false) {
     const temp = mkdtempSync(join(tmpdir(), "gglab-editor-environment-")); roots.push(temp);
     const root = join(temp, "environment"); mkdirSync(root);
-    const text = readFileSync(join(fixtures, "valid.json"), "utf8"), m = JSON.parse(text) as EnvironmentManifest;
+    const text = producer ? readFileSync(join(environmentProducerFixtures(), "valid.json"), "utf8") : JSON.stringify(syntheticEnvironmentManifest()), m = JSON.parse(text) as EnvironmentManifest;
     for (const member of m.members) { const path = join(root, member.path); mkdirSync(join(path, ".."), { recursive: true }); writeFileSync(path, "synthetic fixture; not executable\n"); }
     writeFileSync(join(root, "environment.json"), text);
     return { root, temp, m };
@@ -27,10 +27,10 @@ describe.runIf(process.platform === "win32")("Windows Environment host", () => {
         // Synthetic files cannot qualify real descriptors or native compatibility.
         expect(dispatch("environment-verify", [f.root, "--profiles"]).code).toBe(1);
     }, 30000);
-    it("consumes producer filesystem vectors through actual filesystem reads", () => {
-        const vectors = JSON.parse(readFileSync(join(fixtures, "filesystem-cases.json"), "utf8")) as { cases: { mutation: string; path: string; replacementUtf8?: string; error: string }[] };
+    it.runIf(environmentQualificationEnabled)("consumes producer filesystem vectors through actual filesystem reads", () => {
+        const vectors = JSON.parse(readFileSync(join(environmentProducerFixtures(), "filesystem-cases.json"), "utf8")) as { cases: { mutation: string; path: string; replacementUtf8?: string; error: string }[] };
         for (const v of vectors.cases) {
-            const f = fixture(), target = join(f.root, v.path);
+            const f = fixture(true), target = join(f.root, v.path);
             if (v.mutation === "remove") rmSync(target); else writeFileSync(target, v.replacementUtf8!);
             expect(JSON.parse(dispatch("environment-verify", [f.root]).sinkText).diagnostics[0].code).toBe(v.error);
         }
@@ -56,9 +56,9 @@ describe.runIf(process.platform === "win32")("Windows Environment host", () => {
         expect(() => inspectEnvironmentState(closure, state)).toThrow("another Environment");
         expect(readFileSync(join(state, "state.json"), "utf8")).toContain("0".repeat(64));
     }, 30000);
-    it("consumes producer staging vectors using aliases of one real Windows directory", () => {
-        const vectors = JSON.parse(readFileSync(join(fixtures, "staging-cases.json"), "utf8")) as { physicalDirectory: string; pathSpellings: string[]; expected: { verify: { errorCode: string } } };
-        const f = fixture(), physical = join(f.temp, vectors.physicalDirectory); renameSync(f.root, physical);
+    it.runIf(environmentQualificationEnabled)("consumes producer staging vectors using aliases of one real Windows directory", () => {
+        const vectors = JSON.parse(readFileSync(join(environmentProducerFixtures(), "staging-cases.json"), "utf8")) as { physicalDirectory: string; pathSpellings: string[]; expected: { verify: { errorCode: string } } };
+        const f = fixture(true), physical = join(f.temp, vectors.physicalDirectory); renameSync(f.root, physical);
         const identity = statSync(physical, { bigint: true });
         for (const spelling of vectors.pathSpellings) {
             const alias = join(f.temp, spelling), observed = statSync(alias, { bigint: true });
