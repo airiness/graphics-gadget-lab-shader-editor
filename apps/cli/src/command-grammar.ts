@@ -42,6 +42,8 @@ export interface CommandGrammar {
 }
 
 export const COMMAND_GRAMMARS = {
+    "environment-verify": { positionalCount: 1, valueOptions: [], flags: ["pretty", "help", "profiles"] },
+    "environment-discover": { positionalCount: 1, valueOptions: [], flags: ["pretty", "help"] },
     edit: {
         positionalCount: 1,
         valueOptions: ["commands", "descriptor"],

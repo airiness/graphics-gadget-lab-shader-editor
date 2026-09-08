@@ -138,8 +138,9 @@ export function composeWorkspaceProblemSnapshot(
     descriptor: SurfaceProfileDescriptor | null,
     buildSession: NativeBuildSession | null,
     previewSession: PreviewBuildSession | null,
+    environmentProblems: readonly ProblemSnapshotEntry[] = [],
 ): ProblemSnapshot {
-    const entries: ProblemSnapshotEntry[] = [];
+    const entries: ProblemSnapshotEntry[] = [...environmentProblems];
     const openIds = new Set(workspace.documents.map((document) => document.sessionId));
     for (const document of workspace.documents) {
         const graph = document.history.present;

@@ -429,6 +429,7 @@ export function appendOutputEvent(line: readonly OutputEvent[], event: OutputEve
  * never fabricated.
  */
 export type ProblemLocation =
+    | { readonly kind: "environment"; readonly root: string; readonly dataPath: string }
     | { readonly kind: "graph"; readonly dataPath: string }
     | { readonly kind: "generated-source"; readonly sourceIdentity: string }
     | { readonly kind: "unplaced" };

@@ -29,6 +29,9 @@ importers:
       '@gglab/shader-graph-core':
         specifier: workspace:*
         version: link:../../packages/shader-graph-core
+      '@gglab/shader-toolchain-client':
+        specifier: workspace:*
+        version: link:../../packages/shader-toolchain-client
     devDependencies:
       '@types/node':
         specifier: ^26.0.0

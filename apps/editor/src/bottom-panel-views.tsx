@@ -340,7 +340,9 @@ export function ProblemsPanelView(props: {
                                 <span className="gglab-bottom-view-outcome">{entry.text}</span>
                             </span>
                             <span className="gglab-bottom-view-identity mono">
-                                {entry.location.kind === "graph"
+                                {entry.location.kind === "environment"
+                                    ? `environment ${entry.location.root} ${entry.location.dataPath}`
+                                    : entry.location.kind === "graph"
                                     ? `graph ${entry.location.dataPath}`
                                     : entry.location.kind === "generated-source"
                                       ? `generated source ${entry.location.sourceIdentity.slice(0, 12)}…`

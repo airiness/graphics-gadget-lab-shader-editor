@@ -138,6 +138,7 @@ import {
 import { BuildPanelView, PreviewPanelView, ProblemsPanelView, OutputPanelView } from "./bottom-panel-views.js";
 import { EMPTY_EVIDENCE_CORRELATION, emptyProblemSnapshot, type ProblemSnapshotEntry } from "./panel-vocabulary.js";
 import { EditorOutput } from "./editor-output.js";
+import { EnvironmentEvidence } from "./environment-evidence.js";
 import { resolveProblemNavigation } from "./problem-navigation.js";
 import { composeWorkspaceProblemSnapshot } from "./problems-composition.js";
 // Type-only (erased at compile time): the official dialog option shapes,
@@ -294,6 +295,8 @@ export function App() {
     // or Problems authority, and it must never enter the WorkspaceStore or a
     // DocumentSession. Each view projects its owner's structured facts.
     const [output] = useState(() => new EditorOutput());
+    const [environmentEvidence] = useState(() => new EnvironmentEvidence(output));
+    const environmentProblems = useSyncExternalStore(environmentEvidence.subscribe, environmentEvidence.getSnapshot, environmentEvidence.getSnapshot);
     const outputEvents = useSyncExternalStore(output.subscribe, output.getSnapshot, output.getSnapshot);
     const setLoadResult = (result: DiagnosticSet): void => {
         output.append("document", result.ok ? "ok" : "refusal", result.passedText || result.title, EMPTY_EVIDENCE_CORRELATION, result.diagnostics);
@@ -1917,7 +1920,7 @@ export function App() {
 
     // Recompose the Workspace snapshot on every render. Owner objects retain
     // identity across settlements, so their identity is not a freshness token.
-    const problemsSnapshot = composeWorkspaceProblemSnapshot(workspace, descriptor, native.flow?.buildSession ?? null, preview.flow?.session ?? null);
+    const problemsSnapshot = composeWorkspaceProblemSnapshot(workspace, descriptor, native.flow?.buildSession ?? null, preview.flow?.session ?? null, environmentProblems);
     const problemNavigation = (entry: ProblemSnapshotEntry) => {
         const navigation = resolveProblemNavigation(authoringStore.getSnapshot().session, entry);
         return { available: navigation.available, detail: navigation.available ? `${sessionTitle(navigation.document, isDirty(navigation.document))}: ${navigation.detail}` : navigation.reason };

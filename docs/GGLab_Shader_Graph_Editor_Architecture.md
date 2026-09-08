@@ -2457,3 +2457,16 @@ The most important decisions are:
 - full Material Program/PSO/draw-grouping integration is acknowledged early but designed separately.
 
 This preserves GGLab's Shader North Star while proving the real Runtime seam before the project invests heavily in editor scale.
+
+## Environment consumer proposal integration
+
+The shared `shader-toolchain-client` owns consumption of the main-owned
+Environment deployment protocol; `shader-graph-core` retains ordinary graph
+and Surface Profile semantics. The CLI and GUI consume the same Environment
+reader, closure verifier, and import transaction interfaces. OS enumeration,
+reparse/link observation, hashing, and process execution remain host operations.
+
+This separation does not approve the producer proposal or enable actual import.
+See [Environment consumer readiness](environment-import-readiness.md) for the
+implemented read-only commands, tested interface boundaries, approval gate, and
+outstanding production host/registry/native qualification work.

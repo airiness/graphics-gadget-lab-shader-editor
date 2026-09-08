@@ -3,7 +3,7 @@ import { EMPTY_EVIDENCE_CORRELATION, type OutputEvent, type EvidenceCorrelation 
 
 export interface EditorOutputEvent extends OutputEvent {
     readonly diagnostics: readonly ShaderGraphDiagnostic[];
-    readonly category: "authoring" | "workspace" | "discovery" | "document";
+    readonly category: "authoring" | "workspace" | "discovery" | "document" | "environment";
     readonly level: "ok" | "info" | "refusal";
 }
 

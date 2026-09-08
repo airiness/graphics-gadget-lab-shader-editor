@@ -130,3 +130,14 @@ node apps/cli/bin/shader-graph.js <command> ...             # equivalent direct 
 
 `main()` is also importable (it takes the argv slice and an optional
 stdout sink), which is what this package's tests drive.
+
+## Environment proposal inspection
+
+`environment-discover <absolute-repository-root>` reads the producer bootstrap
+and returns deployment candidates without selection.
+`environment-verify <absolute-environment-root>` independently validates the
+manifest and filesystem closure; `--profiles` additionally validates final
+Surface Profile descriptors through core. Both accept `--pretty` and use the existing
+JSON envelope/exit convention. Windows, PowerShell, and (for discovery) Python
+3.12+ are required. No environment is imported, registered, activated, or
+claimed natively ready. See `../../docs/environment-import-readiness.md`.

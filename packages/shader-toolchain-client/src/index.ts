@@ -48,3 +48,8 @@ export * from "./process-output.js";
 export * from "./testing/fake-host-boundary.js";
 export * from "./testing/fake-preview-observation-boundary.js";
 export * from "./testing/fake-preview-runtime-boundary.js";
+
+export * from "./environment-contract.js";
+export * from "./environment-protocol.js";
+export * from "./environment-import.js";
+export * from "./environment-closure.js";
