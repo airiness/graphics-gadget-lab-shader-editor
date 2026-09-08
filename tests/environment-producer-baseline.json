@@ -1,5 +1,5 @@
 {
-  "producerRevision": "aa462d091e46f0cd5412ecc6564ce2cc393c369e",
-  "editorBaseRevision": "3834509b771b57fb9b06607a613902ce5b2a51e5",
-  "qualificationStatus": "blocked-staging-short-alias"
+  "producerRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec",
+  "editorBaseRevision": "a835ca86a4064f0221e6052a6b451d1933bb7380",
+  "qualificationStatus": "pending-clean-replay"
 }
