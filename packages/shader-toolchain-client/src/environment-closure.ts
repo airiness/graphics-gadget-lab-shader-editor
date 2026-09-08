@@ -8,13 +8,15 @@ export interface EnvironmentEntry {
 /** Host supplies a complete, bounded inventory including directories, and checks the root's ancestors before reads. */
 export interface EnvironmentClosureHost {
     readonly hashAscii: EnvironmentHash;
-    assertOrdinaryRoot(root: string): void;
+    // Filesystem hosts return the canonical final path after rejecting reparse ancestors.
+    // Synthetic hosts return their model path; they do not qualify filesystem aliases.
+    assertOrdinaryRoot(root: string): string;
     entries(root: string): readonly EnvironmentEntry[];
     readManifest(root: string): string | null;
     hashMember(root: string, locator: string): { readonly size: number; readonly sha256: string };
 }
 export function verifyEnvironmentClosure(host: EnvironmentClosureHost, root: string): VerifiedEnvironmentClosure {
-    host.assertOrdinaryRoot(root);
+    root = host.assertOrdinaryRoot(root);
     // Windows case aliases must not turn an unfinished publication into a finalized one.
     environmentRequire(!root.replace(/\\/g, "/").replace(/\/+$/, "").split("/").at(-1)?.toLowerCase().startsWith(".staging-"), "incomplete-publication", "Staging is not a usable Environment");
     const entries = host.entries(root);

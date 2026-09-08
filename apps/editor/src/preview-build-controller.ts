@@ -83,7 +83,7 @@ export interface PreviewToolStatePort {
 /** Current editor/core facts from which the Preview request is composed. No
  *  input-contract ID or source bytes are caller claims: both are derived. */
 export interface PreviewCompositionInput {
-    readonly documentSessionId?: import("./workspace-session.js").DocumentSessionId;
+    readonly documentOwner?: import("./document-session.js").DocumentSession;
     readonly document: ShaderGraphDocument;
     readonly descriptor: SurfaceProfileDescriptor | null;
     readonly descriptorCompatible: boolean;
@@ -574,7 +574,10 @@ export class PreviewBuildController {
         input: PreviewCompositionInput,
         evaluateGate: (input: PreviewCompositionInput) => PreviewBuildGate,
     ): Promise<PreviewBuildLaunch> {
-        const origin = captureDocumentEvidence(input.documentSessionId, input.document, input.emission);
+        if (input.documentOwner !== undefined && input.document !== input.documentOwner.history.present) {
+            throw new Error("Preview document evidence origin must use its owner snapshot");
+        }
+        const origin = input.documentOwner === undefined ? null : captureDocumentEvidence(input.documentOwner, input.descriptor);
         const initialGate = evaluateGate(input);
         if (!initialGate.admitted) {
             return Promise.resolve({ issued: false, reason: "gate-refused", gate: initialGate });

@@ -335,3 +335,13 @@ one physical Windows directory. This supersedes the unresolved-defect status
 above; the owner-review gate remains pending. See
 [Guarded Environment discovery](environment-tauri-host.md) for the implemented
 read-only Tauri boundary and its remaining integration limits.
+
+
+## Review closure baseline
+
+The current reproducible producer baseline is
+`aa462d091e46f0cd5412ecc6564ce2cc393c369e`, not the historical `cbef1f80`
+working-tree description. The case-alias fix does not close Windows 8.3 aliases:
+a distinct short alias of the same staging directory is still accepted by the
+producer. [Review closure](review-closure.md) records the failing qualification,
+consumer canonical-path refusal, exact revisions, and remaining main-owner work.

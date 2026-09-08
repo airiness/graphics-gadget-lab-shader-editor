@@ -231,8 +231,8 @@ function buildCorrelationFrom(record: { readonly buildId: BuildId; readonly inte
     return {
         ...EMPTY_EVIDENCE_CORRELATION,
         generatedSourceIdentity: record.intent.sourceIdentity,
-        documentSessionId: session?.origins?.get(record.buildId)?.documentSessionId ?? null,
-        documentRevision: session?.origins?.get(record.buildId)?.documentRevision ?? null,
+        documentSessionId: session?.origins?.get(record.buildId.sequence)?.documentSessionId ?? null,
+        documentRevision: session?.origins?.get(record.buildId.sequence)?.documentRevision ?? null,
         buildId: record.buildId,
     };
 }
@@ -346,8 +346,8 @@ function previewRowFromAttempt(session: PreviewBuildSession, record: PreviewAtte
     const correlation: EvidenceCorrelation = {
         ...EMPTY_EVIDENCE_CORRELATION,
         generatedSourceIdentity: record.intent.generatedSourceIdentity,
-        documentSessionId: session.origins?.get(record.buildId)?.documentSessionId ?? null,
-        documentRevision: session.origins?.get(record.buildId)?.documentRevision ?? null,
+        documentSessionId: session.origins?.get(record.buildId.sequence)?.documentSessionId ?? null,
+        documentRevision: session.origins?.get(record.buildId.sequence)?.documentRevision ?? null,
         buildId: record.buildId,
         previewAttemptSequence: record.attemptSequence,
         previewSessionId: session.sessionId,
@@ -357,7 +357,7 @@ function previewRowFromAttempt(session: PreviewBuildSession, record: PreviewAtte
     // identity are coupled into one projection value here, and nowhere
     // else. (A phantom brand cannot be set by an object literal, so the
     // one type assertion lives at this one producer, by construction.)
-    return { record, correlation, origin: session.origins?.get(record.buildId) ?? null } as PreviewRow;
+    return { record, correlation, origin: session.origins?.get(record.buildId.sequence) ?? null } as PreviewRow;
 }
 
 /**
@@ -552,7 +552,7 @@ export function problemEntriesFromBuildAttempt(record: AttemptRecord, session?: 
     const correlation = buildCorrelationFrom(record, session);
     return diagnostics.map(
         (diagnostic, index): ProblemSnapshotEntry => ({
-            origin: session?.origins?.get(record.buildId) ?? null,
+            origin: session?.origins?.get(record.buildId.sequence) ?? null,
             identity: `build:${record.buildId.sequence}:${diagnostic.sourceIdentity ?? "unplaced"}@${index}`,
             severity: "error",
             code: null,
@@ -608,7 +608,9 @@ export function problemEntriesFromPreviewAttempt(row: PreviewRow): readonly Prob
 /** A fresh snapshot over the given entries (copied — the caller's array is
  *  never aliased into the view). */
 export function createProblemSnapshot(entries: readonly ProblemSnapshotEntry[]): ProblemSnapshot {
-    return { entries: [...entries] };
+    const unique = new Map<string, ProblemSnapshotEntry>();
+    for (const entry of entries) if (!unique.has(entry.identity)) unique.set(entry.identity, entry);
+    return { entries: [...unique.values()] };
 }
 
 /** A fresh empty snapshot (the "clear the presentation" result). */
@@ -623,7 +625,7 @@ export function emptyProblemSnapshot(): ProblemSnapshot {
  * previous snapshot is never extended, and no caller array is aliased in.
  */
 export function replaceProblemSnapshot(entries: readonly ProblemSnapshotEntry[]): ProblemSnapshot {
-    return { entries: [...entries] };
+    return createProblemSnapshot(entries);
 }
 
 // ---- View axis --------------------------------------------------------------

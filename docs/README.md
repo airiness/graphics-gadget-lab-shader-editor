@@ -43,6 +43,9 @@ below), not this one.
 
 ## Integration readiness records
 
+- [Correctness and evidence review closure](review-closure.md) records the pinned
+  producer baseline, regression results and unresolved Windows short-alias gate.
+
 - [Guarded Environment discovery](environment-tauri-host.md) documents the
   read-only Tauri bootstrap/publisher boundary and remaining approval gate.
 

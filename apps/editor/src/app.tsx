@@ -1908,7 +1908,7 @@ export function App() {
     const previewDocument = previewTargetSession.history.present;
     const previewEmission = previewTargetSession.presentation.emission;
     const preview = useShaderPreview({
-        documentSessionId: previewTargetSession.sessionId,
+        documentOwner: previewTargetSession,
         document: previewDocument,
         descriptor,
         descriptorCompatible: profileCompatibility !== null && profileCompatibility.verdict.ok,

@@ -65,7 +65,11 @@ modules; this boundary does not sandbox execution of an untrusted repository.
 
 ## Verification and remaining gates
 
-The fixed main-repository working tree at base `cbef1f80` was consumed read-only.
+The producer implementation used for discovery is committed as
+`aa462d091e46f0cd5412ecc6564ce2cc393c369e` (publisher SHA-256 below).
+The earlier `cbef1f80` working-tree reference was not a reproducible baseline.
+Cross-repository tests now require this exact clean producer revision through
+`tests/environment-producer-baseline.json`; see [Review closure](review-closure.md).
 New producer `staging-cases.json` drives both shared reader and Windows CLI tests;
 the latter verifies three spellings refer to one physical staging directory.
 Historical unresolved-defect statements in earlier readiness records describe

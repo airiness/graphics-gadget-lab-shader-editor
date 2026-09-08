@@ -1,15 +1,15 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { environmentProducerFixtures } from "../../../tests/environment-producer.js";
 import { describe, expect, it } from "vitest";
 import { EnvironmentContractError, environmentIdentity, parseEnvironmentJson, readEnvironmentManifest, type EnvironmentManifest } from "../src/environment-contract.js";
 import { readEnvironmentBootstrap, readEnvironmentRequest, readEnvironmentResponse, callEnvironmentProducer } from "../src/environment-protocol.js";
 import { verifyEnvironmentClosure, type EnvironmentEntry } from "../src/environment-closure.js";
 import { prepareEnvironmentImport, validateEnvironmentStateRoots, ENVIRONMENT_IMPORT_AVAILABILITY, type EnvironmentFinalProof, type EnvironmentImportHost, type EnvironmentRegistration } from "../src/environment-import.js";
 
-// The producer owns these vectors. Read the sibling checkout; do not copy a competing fixture contract.
-const fixtureRoot = process.env.GGLAB_ENVIRONMENT_FIXTURES ?? fileURLToPath(new URL("../../../../GraphicsGadgetLab/Tests/Environment/fixtures/", import.meta.url));
+// The producer owns these vectors; require the pinned clean revision.
+const fixtureRoot = environmentProducerFixtures();
 const text = (name: string): string => readFileSync(`${fixtureRoot}/${name}`, "utf8");
 const hash = (value: string): string => createHash("sha256").update(value, "ascii").digest("hex");
 const valid = (): EnvironmentManifest => readEnvironmentManifest(text("valid.json"), hash);
@@ -49,7 +49,7 @@ function closureHost() {
     files.set("environment.json", text("valid.json"));
     const entries: EnvironmentEntry[] = [...files.keys()].map(path => ({ path, kind: "file", reparsePoint: false, linkCount: 1 }));
     const host = {
-        hashAscii: hash, assertOrdinaryRoot: () => {},
+        hashAscii: hash, assertOrdinaryRoot: (root: string) => root,
         entries: () => entries.filter(e => files.has(e.path)),
         readManifest: () => files.get("environment.json") ?? null,
         hashMember: (_root: string, path: string) => ({ size: Buffer.byteLength(files.get(path)!), sha256: hash(files.get(path)!) }),

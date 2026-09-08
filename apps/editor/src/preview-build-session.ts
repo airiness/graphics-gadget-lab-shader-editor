@@ -16,10 +16,10 @@ import {
     type PreviewBuildLineReport,
     type ToolCandidate,
 } from "@gglab/shader-toolchain-client";
-import type { DocumentEvidenceOrigin } from "./document-evidence.js";
+import { isDocumentEvidenceOrigin, type DocumentEvidenceOrigin } from "./document-evidence.js";
 
 export interface PreviewBuildSession {
-    readonly origins?: ReadonlyMap<BuildId, DocumentEvidenceOrigin>;
+    readonly origins?: ReadonlyMap<BuildId["sequence"], DocumentEvidenceOrigin>;
     readonly sessionId: string;
     readonly line: PreviewBuildLine;
     readonly nextAttemptSequence: number;
@@ -45,11 +45,12 @@ export function previewSessionIssue(
             `Preview attempt sequence ${attemptSequence} is not the next sequence ${session.nextAttemptSequence}`,
         );
     }
+    if (origin !== null && !isDocumentEvidenceOrigin(origin)) throw new Error("Invalid document evidence origin");
     if (origin !== null && origin.sourceMap.generatedSourceIdentity !== intent.generatedSourceIdentity) {
         throw new Error("Preview origin must name the admitted generated source");
     }
     const origins = new Map(session.origins);
-    if (origin !== null) origins.set(buildId, origin);
+    if (origin !== null) origins.set(buildId.sequence, origin);
     return {
         origins,
         sessionId: session.sessionId,

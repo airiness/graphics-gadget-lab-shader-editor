@@ -39,7 +39,7 @@ import {
 const OBSERVATION_POLL_INTERVAL_MS = 250;
 
 export interface UseShaderPreviewInput {
-    readonly documentSessionId?: import("./workspace-session.js").DocumentSessionId;
+    readonly documentOwner?: import("./document-session.js").DocumentSession;
     readonly document: ShaderGraphDocument;
     readonly descriptor: SurfaceProfileDescriptor | null;
     readonly descriptorCompatible: boolean;
@@ -162,7 +162,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
     }, [input.nativeFlow, note]);
 
     const composition: PreviewCompositionInput = {
-        ...(input.documentSessionId === undefined ? {} : { documentSessionId: input.documentSessionId }),
+        ...(input.documentOwner === undefined ? {} : { documentOwner: input.documentOwner }),
         document: input.document,
         descriptor: input.descriptor,
         descriptorCompatible: input.descriptorCompatible,

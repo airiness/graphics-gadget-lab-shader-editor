@@ -1,3 +1,6 @@
+import { previewChronology } from "../src/panel-vocabulary.js";
+import { graph as evidenceGraph, descriptor as evidenceDescriptor, emission as evidenceEmission } from "./evidence-fixture.js";
+import { createSession, provenanceFromImport } from "../src/document-session.js";
 import { describe, expect, it } from "vitest";
 import {
     FakeHostBoundary,
@@ -353,18 +356,22 @@ describe("Preview build orchestration", () => {
         const boundary = fake({ keepCompilePending: true });
         const flow = new PreviewBuildController(boundary, new TestToolPort(), SESSION_ID, observations(), manager(runtimes()));
         const id = createDocumentSessionId("issuing-document");
-        const input = composition({ documentSessionId: id });
+        const owner = createSession(id, provenanceFromImport(), evidenceGraph);
+        const input = composition({ documentOwner: owner, document: evidenceGraph, descriptor: evidenceDescriptor, emission: evidenceEmission });
+        expect(() => flow.buildPreview({ ...input, document: { ...evidenceGraph } }, selfGate(flow))).toThrow("owner snapshot");
         await prove(flow, input);
         const launch = await flow.buildPreview(input, selfGate(flow));
         if (!launch.issued) throw new Error("fixture must issue");
-        const origin = flow.session.origins?.get(launch.buildId);
+        const origin = flow.session.origins?.get(launch.buildId.sequence);
         expect(origin?.documentSessionId).toBe(id);
-        expect(origin?.sourceMap).toBe(input.emission?.sourceMap);
+        expect(origin?.sourceMap).toEqual(input.emission?.sourceMap);
         // Gate reads for the new active context cannot relabel pending evidence.
-        flow.buildGate({ ...input, documentSessionId: createDocumentSessionId("same-source-other-document") });
+        flow.buildGate({ ...input, documentOwner: createSession(createDocumentSessionId("same-source-other-document"), provenanceFromImport(), evidenceGraph) });
         boundary.releasePending(launch.buildId);
         await launch.outcome;
-        expect(flow.session.origins?.get(launch.buildId)).toBe(origin);
+        expect(flow.session.origins?.get(launch.buildId.sequence)).toBe(origin);
+        const reconstructed = { ...flow.session, line: { ...flow.session.line, attempts: flow.session.line.attempts.map(record => ({ ...record, buildId: { sequence: record.buildId.sequence } })) } };
+        expect(previewChronology(reconstructed)[0]?.origin).toBe(origin);
     });
 
     it("derives and issues the exact candidate-bound request after the gate", async () => {

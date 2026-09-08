@@ -68,7 +68,10 @@ function hashFile(path: string): { size: number; sha256: string } {
 }
 export const nodeEnvironmentClosureHost: EnvironmentClosureHost = {
     hashAscii: environmentSha256,
-    assertOrdinaryRoot: assertEnvironmentHostPath,
+    assertOrdinaryRoot(root) {
+        assertEnvironmentHostPath(root);
+        return realpathSync.native(root);
+    },
     entries(root) {
         if (!existsSync(root)) return [];
         const result: EnvironmentEntry[] = []; let directories = 0;

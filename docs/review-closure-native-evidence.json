@@ -1,0 +1,232 @@
+{
+  "producerRevision": "aa462d091e46f0cd5412ecc6564ce2cc393c369e",
+  "editorBaseRevision": "3834509b771b57fb9b06607a613902ce5b2a51e5",
+  "editorState": "uncommitted review changes; not clean-revision qualification",
+  "nativeBuildOrigin": "existing deployment binaries; no clean-source rebuild this run",
+  "runs": [
+    {
+      "configuration": "debug",
+      "rawReportSha256": "4db17d57fe070fc3bd263bf87ab97eb34725f573f029029aeeb474529aadda46",
+      "success": true,
+      "executables": {
+        "gglab-shaderc.exe": "24835370b732ce509399e4824b941b56f3c7649ba39f3bba79921414a0668ae4",
+        "GraphicsGadgetLab.exe": "68f05b2d55aa8b564c18016d4694125298bfffbf2df98448c9036759206afa6e"
+      },
+      "vulkanValidation": "enabled",
+      "native": [
+        {
+          "backend": "dx12",
+          "profileVersion": 1,
+          "initialObservation": {
+            "attempt": 1,
+            "observed": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+            "loaded": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+            "status": 1,
+            "rejection": 0
+          },
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "recoveryObservation": {
+            "attempt": 3,
+            "observed": "bc0b1789bb0bf81e805d7bdc358f74ffdeaf50fe8c5ed75e8a8a530d390c506d",
+            "loaded": "bc0b1789bb0bf81e805d7bdc358f74ffdeaf50fe8c5ed75e8a8a530d390c506d",
+            "status": 1,
+            "rejection": 0
+          },
+          "success": true,
+          "immutableClosurePreserved": true
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "initialObservation": {
+            "attempt": 1,
+            "observed": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+            "loaded": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+            "status": 1,
+            "rejection": 0
+          },
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "recoveryObservation": {
+            "attempt": 3,
+            "observed": "ff4ef52c776f92500c0ac491187cd5f6354206ba9e5c9336f4edd432ac616f58",
+            "loaded": "ff4ef52c776f92500c0ac491187cd5f6354206ba9e5c9336f4edd432ac616f58",
+            "status": 1,
+            "rejection": 0
+          },
+          "success": true,
+          "immutableClosurePreserved": true
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "initialObservation": {
+            "attempt": 1,
+            "observed": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+            "loaded": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+            "status": 1,
+            "rejection": 0
+          },
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "recoveryObservation": {
+            "attempt": 3,
+            "observed": "450a94506486e5461cbf2a8e890e374787dc28157fd3ab186ffda0080ed10d87",
+            "loaded": "450a94506486e5461cbf2a8e890e374787dc28157fd3ab186ffda0080ed10d87",
+            "status": 1,
+            "rejection": 0
+          },
+          "success": true,
+          "immutableClosurePreserved": true
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "initialObservation": {
+            "attempt": 1,
+            "observed": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+            "loaded": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+            "status": 1,
+            "rejection": 0
+          },
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "recoveryObservation": {
+            "attempt": 3,
+            "observed": "4b953d7c9ac0f199d749f99f044f1afcab3a81f55d10dc29a3a2067a7aed337a",
+            "loaded": "4b953d7c9ac0f199d749f99f044f1afcab3a81f55d10dc29a3a2067a7aed337a",
+            "status": 1,
+            "rejection": 0
+          },
+          "success": true,
+          "immutableClosurePreserved": true
+        }
+      ]
+    },
+    {
+      "configuration": "release",
+      "rawReportSha256": "7b92c69d6430e28e17a9178a720bdf0fd16514811ab9ba83cfadfaed17b4d320",
+      "success": true,
+      "executables": {
+        "gglab-shaderc.exe": "1e0f4274af1d69b4700285d5fce760df696bb23ae4622d0a47ce2fd3d8972586",
+        "GraphicsGadgetLab.exe": "6798dbb012d2d3c0ac13fedb01f605ddd6ed64cbda3fb4ffa119c0eca569f725"
+      },
+      "vulkanValidation": "disabled",
+      "native": [
+        {
+          "backend": "dx12",
+          "profileVersion": 1,
+          "initialObservation": {
+            "attempt": 1,
+            "observed": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+            "loaded": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+            "status": 1,
+            "rejection": 0
+          },
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "recoveryObservation": {
+            "attempt": 3,
+            "observed": "bc0b1789bb0bf81e805d7bdc358f74ffdeaf50fe8c5ed75e8a8a530d390c506d",
+            "loaded": "bc0b1789bb0bf81e805d7bdc358f74ffdeaf50fe8c5ed75e8a8a530d390c506d",
+            "status": 1,
+            "rejection": 0
+          },
+          "success": true,
+          "immutableClosurePreserved": true
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "initialObservation": {
+            "attempt": 1,
+            "observed": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+            "loaded": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+            "status": 1,
+            "rejection": 0
+          },
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "recoveryObservation": {
+            "attempt": 3,
+            "observed": "ff4ef52c776f92500c0ac491187cd5f6354206ba9e5c9336f4edd432ac616f58",
+            "loaded": "ff4ef52c776f92500c0ac491187cd5f6354206ba9e5c9336f4edd432ac616f58",
+            "status": 1,
+            "rejection": 0
+          },
+          "success": true,
+          "immutableClosurePreserved": true
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "initialObservation": {
+            "attempt": 1,
+            "observed": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+            "loaded": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+            "status": 1,
+            "rejection": 0
+          },
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "recoveryObservation": {
+            "attempt": 3,
+            "observed": "450a94506486e5461cbf2a8e890e374787dc28157fd3ab186ffda0080ed10d87",
+            "loaded": "450a94506486e5461cbf2a8e890e374787dc28157fd3ab186ffda0080ed10d87",
+            "status": 1,
+            "rejection": 0
+          },
+          "success": true,
+          "immutableClosurePreserved": true
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "initialObservation": {
+            "attempt": 1,
+            "observed": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+            "loaded": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+            "status": 1,
+            "rejection": 0
+          },
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "recoveryObservation": {
+            "attempt": 3,
+            "observed": "4b953d7c9ac0f199d749f99f044f1afcab3a81f55d10dc29a3a2067a7aed337a",
+            "loaded": "4b953d7c9ac0f199d749f99f044f1afcab3a81f55d10dc29a3a2067a7aed337a",
+            "status": 1,
+            "rejection": 0
+          },
+          "success": true,
+          "immutableClosurePreserved": true
+        }
+      ]
+    }
+  ]
+}

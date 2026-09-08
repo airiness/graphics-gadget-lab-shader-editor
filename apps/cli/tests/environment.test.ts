@@ -1,12 +1,13 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync, statSync, linkSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { basename, join } from "node:path";
+import { environmentProducerFixtures } from "../../../tests/environment-producer.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { ENVIRONMENT_STATE_ROLES, environmentExecutionLocations, type EnvironmentManifest } from "@gglab/shader-toolchain-client";
 import { verifyEnvironmentDirectory, inspectEnvironmentState } from "../src/environment-host.js";
 import { dispatch } from "../src/index.js";
-const fixtures = process.env.GGLAB_ENVIRONMENT_FIXTURES ?? fileURLToPath(new URL("../../../../GraphicsGadgetLab/Tests/Environment/fixtures/", import.meta.url));
+const fixtures = environmentProducerFixtures();
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function fixture() {
@@ -65,6 +66,16 @@ describe.runIf(process.platform === "win32")("Windows Environment host", () => {
             const envelope = JSON.parse(dispatch("environment-verify", [alias]).sinkText);
             expect(envelope.ok).toBe(false); expect(envelope.diagnostics[0].code).toBe(vectors.expected.verify.errorCode);
         }
+    }, 30000);
+    it("rejects staging through a distinct Windows 8.3 filesystem alias", ({ skip }) => {
+        const f = fixture(), physical = join(f.temp, ".staging-long-review-name"); renameSync(f.root, physical);
+        const script = "import ctypes,sys; b=ctypes.create_unicode_buffer(32768); n=ctypes.windll.kernel32.GetShortPathNameW(sys.argv[1],b,len(b)); assert n; print(b.value)";
+        const alias = execFileSync("python", ["-c", script, physical], { encoding: "utf8", windowsHide: true }).trim();
+        if (basename(alias).toLowerCase() === basename(physical).toLowerCase()) { skip(); return; }
+        const actual = statSync(alias, { bigint: true }), expected = statSync(physical, { bigint: true });
+        expect(actual.ino).toBe(expected.ino); expect(actual.dev).toBe(expected.dev);
+        const result = JSON.parse(dispatch("environment-verify", [alias]).sinkText);
+        expect(result.ok).toBe(false); expect(result.diagnostics[0].code).toBe("incomplete-publication");
     }, 30000);
     it("malformed UTF-8 and extra flags fail explicitly", () => {
         const f = fixture(); writeFileSync(join(f.root, "environment.json"), Buffer.from([0xff]));

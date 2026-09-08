@@ -95,3 +95,5 @@ $RECYCLE.BIN/
 
 # Built Visual Studio Code Extensions
 *.vsix
+# Local review qualification output
+.review-evidence/

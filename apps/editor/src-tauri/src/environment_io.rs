@@ -659,6 +659,16 @@ mod tests {
                 }
                 path.join("GraphicsGadgetLab")
             });
+        let baseline: serde_json::Value = serde_json::from_str(include_str!("../../../../tests/environment-producer-baseline.json")).unwrap();
+        let git = |args: &[&str]| {
+            let output = Command::new("git").arg("-c").arg(format!("safe.directory={}", root.to_string_lossy().replace('\\', "/")))
+                .arg("-C").arg(&root).args(args).output().unwrap();
+            assert!(output.status.success());
+            String::from_utf8(output.stdout).unwrap().trim().to_owned()
+        };
+        assert_eq!(git(&["rev-parse", "HEAD"]), baseline["producerRevision"].as_str().unwrap(), "Producer revision is not the evidence baseline");
+        assert_eq!(git(&["status", "--porcelain", "--untracked-files=no"]), "", "Producer must be clean");
+        println!("producerRevision={}", baseline["producerRevision"]);
         let service = EnvironmentService::new();
         let repository = service.register_selected_repository(root).unwrap();
         let job = service.discover(&repository.repository_id).unwrap();
@@ -674,7 +684,7 @@ mod tests {
                 let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
                 assert_eq!(response["operation"], "discover");
                 assert_eq!(response["success"], true);
-                assert!(response["result"]["candidates"].is_array());
+                assert!(!response["result"]["candidates"].as_array().expect("candidate array").is_empty(), "Real discovery qualification requires a built deployment in the pinned checkout");
                 println!("publisher={publisher_sha256} interpreter={interpreter_sha256} response={response}");
             }
             other => panic!("unexpected settlement: {other:?}"),

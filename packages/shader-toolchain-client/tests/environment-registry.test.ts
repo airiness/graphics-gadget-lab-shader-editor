@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { environmentProducerFixtures } from "../../../tests/environment-producer.js";
 import { describe, expect, it } from "vitest";
 import { EnvironmentRegistry, environmentCanonical, environmentRegistryKey, readEnvironmentManifest, readEnvironmentRegistryRecord, recoverEnvironmentRegistration, prepareEnvironmentImport, withEnvironmentRegistry, type EnvironmentRegistration, type EnvironmentRegistryRecord, type EnvironmentRegistryStorage, type EnvironmentRecoveryHost } from "../src/index.js";
-const fixtures = process.env.GGLAB_ENVIRONMENT_FIXTURES ?? fileURLToPath(new URL("../../../../GraphicsGadgetLab/Tests/Environment/fixtures/", import.meta.url));
+const fixtures = environmentProducerFixtures();
 function example(): EnvironmentRegistration {
     const manifest = readEnvironmentManifest(readFileSync(`${fixtures}/valid.json`, "utf8"), text => createHash("sha256").update(text, "ascii").digest("hex"));
     const root = "D:/final", stateRoot = "D:/state";

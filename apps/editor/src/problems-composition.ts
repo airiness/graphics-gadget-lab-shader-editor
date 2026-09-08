@@ -117,17 +117,7 @@ export function composeProblemSnapshot(
     if (previewRow !== null) {
         entries.push(...problemEntriesFromPreviewAttempt(previewRow));
     }
-    // The snapshot is a SET of current problems: one entry per stable
-    // identity (the same owner fact appears once, first-seen wins).
-    const seen = new Set<string>();
-    const unique: ProblemSnapshotEntry[] = [];
-    for (const entry of entries) {
-        if (!seen.has(entry.identity)) {
-            seen.add(entry.identity);
-            unique.push(entry);
-        }
-    }
-    return createProblemSnapshot(unique);
+    return createProblemSnapshot(entries);
 }
 
 /** Each open document has its own latest settled diagnostic coordinate.
@@ -154,7 +144,7 @@ export function composeWorkspaceProblemSnapshot(
     }
     const buildAnchors = new Map<string | null, AttemptRecord>();
     for (const record of [...(buildSession?.line.attempts ?? [])].sort((a, b) => a.buildId.sequence - b.buildId.sequence)) {
-        const id = buildSession?.origins?.get(record.buildId)?.documentSessionId ?? null;
+        const id = buildSession?.origins?.get(record.buildId.sequence)?.documentSessionId ?? null;
         if (id === null || openIds.has(id)) buildAnchors.set(id, record);
     }
     for (const record of buildAnchors.values()) entries.push(...problemEntriesFromBuildAttempt(record, buildSession ?? undefined));

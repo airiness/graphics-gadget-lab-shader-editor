@@ -1,7 +1,8 @@
+import { graph, descriptor, emission, source } from "./evidence-fixture.js";
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render } from "@testing-library/react";
 import { useSyncExternalStore } from "react";
-import { serializeShaderGraphDocument, type HlslEmission, type ShaderGraphDocument } from "@gglab/shader-graph-core";
+import { serializeShaderGraphDocument } from "@gglab/shader-graph-core";
 import type { AttemptOutcome, BuildIntent } from "@gglab/shader-toolchain-client";
 import { createSession, documentRevision, provenanceFromImport, recordDocumentChange, type DocumentSession } from "../src/document-session.js";
 import { activateWorkspaceDocument, closeWorkspaceDocument, createDocumentSessionId, createWorkspaceSession, openWorkspaceDocument, updateWorkspaceDocument } from "../src/workspace-session.js";
@@ -13,18 +14,10 @@ import { resolveProblemNavigation } from "../src/problem-navigation.js";
 import { composeWorkspaceProblemSnapshot } from "../src/problems-composition.js";
 import { createNativeBuildSession, sessionIssue, sessionSettle } from "../src/native-build-session.js";
 
-const graph: ShaderGraphDocument = {
-    schemaVersion: 1, graphId: "same-graph", profile: "gglab.surface", profileVersion: 1,
-    parameters: [], connections: [],
-    nodes: [{ id: "value", type: "Float", version: 1, properties: { value: 1 }, unknownFields: {} }],
-    editorMetadata: { nodes: {}, unknownFields: {} }, unknownFields: {},
-};
-const source = "a".repeat(64);
-const emission: HlslEmission = { ok: true, diagnostics: [], source: "generated", sourceMap: { generatedSourceIdentity: source, ranges: [] } };
 const a = createSession(createDocumentSessionId("document-a"), provenanceFromImport(), graph);
 const b = createSession(createDocumentSessionId("document-b"), provenanceFromImport(), graph);
 const workspace = openWorkspaceDocument(openWorkspaceDocument(createWorkspaceSession<DocumentSession>(), a).workspace, b).workspace;
-const diagnostic = { code: "INVALID_VALUE", severity: "error" as const, message: "Invalid node value", dataPath: "$.nodes[0].properties.value" };
+const diagnostic = { code: "INVALID_VALUE", severity: "error" as const, message: "Invalid node value", dataPath: "$.nodes[1].properties.value" };
 const graphEntry = problemEntriesFromGraphDiagnostics([diagnostic], { documentSessionId: a.sessionId, documentRevision: documentRevision(a) })[0]!;
 const intent: BuildIntent = {
     sourceIdentity: source, target: "gglab-dx12", stage: "pixel", entry: "main", defines: [], includes: [],
@@ -54,26 +47,43 @@ describe("document-owned diagnostic navigation", () => {
     it("captures source-map and revision at issue and keeps them through late settlements", () => {
         const firstId = { sequence: 1 };
         const secondId = { sequence: 2 };
-        const originA = captureDocumentEvidence(a.sessionId, graph, emission)!;
-        const originB = captureDocumentEvidence(b.sessionId, graph, emission)!;
+        const originA = captureDocumentEvidence(a, descriptor)!;
+        const originB = captureDocumentEvidence(b, descriptor)!;
         let builds = sessionIssue(createNativeBuildSession(), firstId, intent, originA);
         builds = sessionIssue(builds, secondId, intent, originB);
         builds = sessionSettle(builds, secondId, failure);
-        builds = sessionSettle(builds, firstId, failure);
-        const record = builds.line.attempts.find((attempt) => attempt.buildId === firstId)!;
+        builds = sessionSettle(builds, { sequence: firstId.sequence }, failure);
+        const record = builds.line.attempts.find((attempt) => attempt.buildId.sequence === firstId.sequence)!;
         const entry = problemEntriesFromBuildAttempt(record, builds)[0]!;
         expect(entry.origin).toBe(originA);
-        expect(entry.origin?.sourceMap).toBe(emission.sourceMap);
+        expect(entry.origin?.sourceMap).toEqual(emission.sourceMap);
         expect(entry.correlation.documentRevision).toBe(serializeShaderGraphDocument(graph));
         expect(entry.correlation.documentSessionId).toBe(a.sessionId);
         // The tool contract has no line/column: document navigation is useful,
         // but guessing a source-map range would fabricate a node location.
         expect(resolveProblemNavigation(workspace, entry)).toMatchObject({ available: true, document: { sessionId: a.sessionId }, focus: null });
+        builds = { ...builds, line: { ...builds.line, attempts: builds.line.attempts.map(record => ({ ...record, buildId: { sequence: record.buildId.sequence } })) } };
         expect(buildChronology(builds).map((row) => row.correlation.documentSessionId)).toEqual([a.sessionId, b.sessionId]);
     });
 
+    it("refuses hand-built origins and cross-owner session/document splicing", () => {
+        const origin = captureDocumentEvidence(a, descriptor)!;
+        expect(() => sessionIssue(createNativeBuildSession(), { sequence: 1 }, intent, { ...origin } as typeof origin)).toThrow("origin");
+        expect(() => captureDocumentEvidence({ ...b, sessionId: a.sessionId }, descriptor)).toThrow("owner");
+        const changed = recordDocumentChange(b, { ...graph, graphId: "other" }, "Edit");
+        expect(() => captureDocumentEvidence({ ...a, history: changed.history }, descriptor)).toThrow("owner");
+        expect(Object.isFrozen(origin)).toBe(true);
+        expect(Object.isFrozen(origin.sourceMap)).toBe(true);
+    });
+
+    it("deduplicates the entire workspace snapshot while retaining chronology", () => {
+        const result = composeWorkspaceProblemSnapshot(workspace, null, null, null, [graphEntry, graphEntry]);
+        expect(result.entries.filter(entry => entry.identity === graphEntry.identity)).toHaveLength(1);
+        expect(new Set(result.entries.map(entry => entry.identity)).size).toBe(result.entries.length);
+    });
+
     it("rejects a mismatched source origin and a record paired with another owner", () => {
-        const origin = captureDocumentEvidence(a.sessionId, graph, emission)!;
+        const origin = captureDocumentEvidence(a, descriptor)!;
         expect(() => sessionIssue(createNativeBuildSession(), { sequence: 1 }, { ...intent, sourceIdentity: "other" }, origin)).toThrow("origin");
         const id = { sequence: 1 };
         const built = sessionSettle(sessionIssue(createNativeBuildSession(), id, intent, origin), id, failure);
@@ -83,9 +93,9 @@ describe("document-owned diagnostic navigation", () => {
     it("replaces each document's diagnostic coordinate independently and excludes closed documents", () => {
         const firstId = { sequence: 1 };
         const secondId = { sequence: 2 };
-        let builds = sessionIssue(createNativeBuildSession(), firstId, intent, captureDocumentEvidence(a.sessionId, graph, emission));
-        builds = sessionSettle(builds, firstId, failure);
-        builds = sessionIssue(builds, secondId, intent, captureDocumentEvidence(b.sessionId, graph, emission));
+        let builds = sessionIssue(createNativeBuildSession(), firstId, intent, captureDocumentEvidence(a, descriptor));
+        builds = sessionSettle(builds, { sequence: firstId.sequence }, failure);
+        builds = sessionIssue(builds, secondId, intent, captureDocumentEvidence(b, descriptor));
         builds = sessionSettle(builds, secondId, { kind: "canceled" });
         const snapshot = composeWorkspaceProblemSnapshot(workspace, null, builds, null);
         expect(snapshot.entries.filter((entry) => entry.correlation.buildId !== null).map((entry) => entry.correlation.documentSessionId)).toEqual([a.sessionId]);
