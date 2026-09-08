@@ -141,3 +141,8 @@ Surface Profile descriptors through core. Both accept `--pretty` and use the exi
 JSON envelope/exit convention. Windows, PowerShell, and (for discovery) Python
 3.12+ are required. No environment is imported, registered, activated, or
 claimed natively ready. See `../../docs/environment-import-readiness.md`.
+
+`environment-registry <absolute-registry-root>` inspects Editor-owned saved
+Environment/state bindings without creating directories or activating them.
+Every restored record is `unverified`; malformed records produce structured
+CLI failure diagnostics. See `../../docs/environment-registry.md`.

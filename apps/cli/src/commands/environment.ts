@@ -1,13 +1,18 @@
-import { EnvironmentContractError, environmentDiagnostic, ENVIRONMENT_IMPORT_AVAILABILITY } from "@gglab/shader-toolchain-client";
+import { EnvironmentContractError, environmentDiagnostic, projectEnvironmentRegistrySnapshot, ENVIRONMENT_IMPORT_AVAILABILITY } from "@gglab/shader-toolchain-client";
 import { parseSurfaceProfileDescriptor } from "@gglab/shader-graph-core";
 import { inspectEnvironmentProducer, readEnvironmentRoleText, verifyEnvironmentDirectory } from "../environment-host.js";
+import { NodeEnvironmentRegistryStorage } from "../environment-registry-storage.js";
 import type { ParsedArgs } from "../command-grammar.js";
 import { buildEnvelope, type CliEnvelope } from "../envelope.js";
 
-export function runEnvironment(command: "environment-verify" | "environment-discover", args: ParsedArgs): CliEnvelope {
+export function runEnvironment(command: "environment-verify" | "environment-discover" | "environment-registry", args: ParsedArgs): CliEnvelope {
     if (args.diagnostics.length) return buildEnvelope(command, args.diagnostics, null);
     try {
         const root = args.positionals[0]!;
+        if (command === "environment-registry") {
+            const snapshot = projectEnvironmentRegistrySnapshot(new NodeEnvironmentRegistryStorage(root).scanSync());
+            return buildEnvelope(command, snapshot.diagnostics, { ...snapshot, importAvailability: ENVIRONMENT_IMPORT_AVAILABILITY });
+        }
         if (command === "environment-discover") {
             // Undefined search roots are resolved from the producer bootstrap by the host.
             return buildEnvelope(command, [], discoverEnvironmentDeployments(root));

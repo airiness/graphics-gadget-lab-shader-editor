@@ -311,3 +311,17 @@ The main implementation and external contract were not modified here.
 No Tauri desktop build, native DX12/Vulkan compilation, or Runtime qualification
 was performed by this consumer change. The remaining approval gate and producer
 staging defect above prevent treating these checks as completed import readiness.
+
+## Registry persistence follow-up
+
+The next consumer increment implements the Editor-owned durable record, Windows
+Node storage, restart recovery, and read-only CLI registry inspection described
+in [Environment registry persistence and recovery](environment-registry.md).
+This supersedes the earlier statement that all registry tests use only an
+in-memory host interface: actual filesystem persistence and two-process commit
+coverage now exist. Production Tauri wiring, actual import/state creation,
+workspace activation, and native qualification remain outstanding.
+
+Main `cbef1f80` and the publication proposal were rechecked: the staging
+case-alias defect and owner-review gate remain unchanged. Neither sibling
+repository was modified.

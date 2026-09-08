@@ -43,6 +43,10 @@ below), not this one.
 
 ## Integration readiness records
 
+- [Environment registry persistence and recovery](environment-registry.md)
+  defines the Editor-owned location record, atomic host storage, unverified
+  restart behavior, and the still-disabled production import boundary.
+
 - [Environment import readiness and publisher handoff](environment-import-readiness.md)
   records the inspected producer prerequisite, requested publication contract
   deliverables, and Editor acceptance criteria. It does not define an

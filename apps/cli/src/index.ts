@@ -34,7 +34,7 @@ import { runEdit } from "./commands/edit.js";
 import { graphEditCommandCatalog } from "@gglab/shader-graph-core";
 import { CliCode, buildEnvelope, serializeEnvelope, type CliEnvelope } from "./envelope.js";
 
-export const KNOWN_COMMANDS = ["validate", "emit", "descriptor", "edit", "edit-commands", "environment-verify", "environment-discover"] as const;
+export const KNOWN_COMMANDS = ["validate", "emit", "descriptor", "edit", "edit-commands", "environment-verify", "environment-discover", "environment-registry"] as const;
 export type { KnownCommand } from "./command-grammar.js";
 
 export function usageText(): string {
@@ -42,6 +42,7 @@ export function usageText(): string {
         "usage: shader-graph <command> [arguments] [options]",
         "",
         "commands:",
+        "  environment-registry <absolute-registry-root> inspect saved locations; restored entries are unverified",
         "  environment-verify <absolute-environment-root> [--profiles]   verify immutable closure; no import or native readiness claim",
         "  environment-discover <absolute-repository-root> discover publisher deployment candidates; never select implicitly",
         "  edit <document> --commands <commands.json> [--descriptor <descriptor.json>]   apply core edits; return documentText without writing files",
@@ -91,7 +92,7 @@ export function classifyExitCode(envelope: CliEnvelope): number {
 }
 
 export function dispatch(command: string, argv: readonly string[]): { code: number; sinkText: string } {
-    if (command !== "validate" && command !== "emit" && command !== "descriptor" && command !== "edit" && command !== "edit-commands" && command !== "environment-verify" && command !== "environment-discover") {
+    if (command !== "validate" && command !== "emit" && command !== "descriptor" && command !== "edit" && command !== "edit-commands" && command !== "environment-verify" && command !== "environment-discover" && command !== "environment-registry") {
         const envelope = buildEnvelope(command, [
             {
                 code: "INVALID_ARGUMENT",
@@ -111,7 +112,7 @@ export function dispatch(command: string, argv: readonly string[]): { code: numb
         const envelope = buildEnvelope(command, args.diagnostics, null);
         return { code: classifyExitCode(envelope), sinkText: `${serializeEnvelope(envelope, args.flags.has("pretty"))}\n` };
     }
-    const envelope = command === "environment-verify" || command === "environment-discover" ? runEnvironment(command, args) : command === "edit" ? runEdit(args) : command === "edit-commands" ? buildEnvelope(command, [], graphEditCommandCatalog) : command === "validate" ? runValidate(args) : command === "emit" ? runEmit(args) : runDescriptor(args);
+    const envelope = command === "environment-verify" || command === "environment-discover" || command === "environment-registry" ? runEnvironment(command, args) : command === "edit" ? runEdit(args) : command === "edit-commands" ? buildEnvelope(command, [], graphEditCommandCatalog) : command === "validate" ? runValidate(args) : command === "emit" ? runEmit(args) : runDescriptor(args);
     const code = classifyExitCode(envelope);
     return { code, sinkText: `${serializeEnvelope(envelope, args.flags.has("pretty"))}\n` };
 }

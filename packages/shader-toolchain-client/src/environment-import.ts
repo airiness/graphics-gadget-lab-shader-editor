@@ -27,7 +27,7 @@ export interface EnvironmentImportEvent {
 }
 export type EnvironmentImportOutcome =
     | { readonly status: "registered" | "already-registered"; readonly registration: EnvironmentRegistration }
-    | { readonly status: "refused"; readonly diagnostic: EnvironmentDiagnostic; readonly retainedStateRoot: string | null };
+    | { readonly status: "refused"; readonly diagnostic: EnvironmentDiagnostic; readonly retainedStateRoot: string | null; readonly registrationMayHaveCommitted: boolean };
 const normalize = (path: string): string => path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 export function validateEnvironmentStateRoots(environmentRoot: string, stateRoot: string): void {
     environmentAbsolutePath(environmentRoot); environmentAbsolutePath(stateRoot);
@@ -46,6 +46,7 @@ export function validateEnvironmentFinalProof(closure: VerifiedEnvironmentClosur
 /** Reviewable transaction core only. Production composition does not supply this host while approval is pending. */
 export async function prepareEnvironmentImport(host: EnvironmentImportHost, root: string, stateRoot: string, cancelled: () => boolean, emit: (event: EnvironmentImportEvent) => void = () => {}): Promise<EnvironmentImportOutcome> {
     let retainedStateRoot: string | null = null;
+    let registrationMayHaveCommitted = false;
     const event = (phase: EnvironmentImportEvent["phase"], diagnostic?: EnvironmentDiagnostic): void => {
         // Observability failure must not change the result of a committed registration.
         try { emit({ phase, environmentRoot: root, stateRoot, ...(diagnostic ? { diagnostic } : {}) }); } catch { /* The transaction remains authoritative. */ }
@@ -67,13 +68,14 @@ export async function prepareEnvironmentImport(host: EnvironmentImportHost, root
         environmentRequire(current.manifest.environmentId === closure.manifest.environmentId && normalize(current.root) === normalize(root), "source-changed", "Closure changed during final proof");
         const registration = { closure, state, proof };
         event("register"); check();
+        registrationMayHaveCommitted = true;
         const status = await host.register(registration);
         // Once atomic registration commits, late cancellation cannot turn it into a fictitious rollback.
         event("settled");
         return { status, registration };
     } catch (error) {
         const diagnostic = environmentDiagnostic(error); event("settled", diagnostic);
-        return { status: "refused", diagnostic, retainedStateRoot };
+        return { status: "refused", diagnostic, retainedStateRoot, registrationMayHaveCommitted };
     }
 }
 /** The approval boundary is explicit and is not inferred from task authorization or producer success. */
