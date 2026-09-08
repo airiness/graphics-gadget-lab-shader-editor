@@ -54,3 +54,4 @@ export * from "./environment-protocol.js";
 export * from "./environment-import.js";
 export * from "./environment-closure.js";
 export * from "./environment-registry.js";
+export * from "./environment-host-boundary.js";

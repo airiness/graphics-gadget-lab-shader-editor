@@ -325,3 +325,13 @@ workspace activation, and native qualification remain outstanding.
 Main `cbef1f80` and the publication proposal were rechecked: the staging
 case-alias defect and owner-review gate remain unchanged. Neither sibling
 repository was modified.
+
+
+## Guarded discovery follow-up
+
+The main repository working-tree fix now rejects staging case aliases consistently.
+The Editor consumes its new `staging-cases.json`, including three spellings of
+one physical Windows directory. This supersedes the unresolved-defect status
+above; the owner-review gate remains pending. See
+[Guarded Environment discovery](environment-tauri-host.md) for the implemented
+read-only Tauri boundary and its remaining integration limits.

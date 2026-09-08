@@ -43,6 +43,9 @@ below), not this one.
 
 ## Integration readiness records
 
+- [Guarded Environment discovery](environment-tauri-host.md) documents the
+  read-only Tauri bootstrap/publisher boundary and remaining approval gate.
+
 - [Environment registry persistence and recovery](environment-registry.md)
   defines the Editor-owned location record, atomic host storage, unverified
   restart behavior, and the still-disabled production import boundary.

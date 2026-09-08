@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Thin desktop host for the GGLab Shader Graph Editor web frontend, plus the ShaderToolService process boundary."
 edition = "2021"
 
-# Four bounded responsibilities in one crate:
+# Five bounded responsibilities in one crate:
 #
 # - the thin desktop shell (main.rs): it hosts the React/Vite frontend and
 #   owns the official dialog and scoped-fs plugins for auxiliary reads;
@@ -12,6 +12,8 @@ edition = "2021"
 #   URI capabilities, exact revisioned snapshots, and CAS atomic save;
 # - the native Workspace service: host-owned root selection, bounded recursive
 #   discovery, canonical containment, cancellation, and refresh observations;
+# - the Environment service: host-selected repositories and guarded read-only
+#   producer discovery with bounded output, cancellation, and strict IPC decoding;
 # - the ShaderToolService (src/shader_tool/): the host-side implementation
 #   of the toolchain client's declared host boundary — exactly six tool
 #   allowlisted capabilities (discover / handshake / preview-handshake /

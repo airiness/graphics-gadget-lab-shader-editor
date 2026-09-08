@@ -509,7 +509,7 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         );
     });
 
-    it("exposes exactly the bounded Workspace, document, tool, and Preview surface", async () => {
+    it("exposes exactly the bounded Workspace, document, Environment, tool, and Preview surface", async () => {
         const libRs = await readFile(resolve(tauriDir, "src/lib.rs"), "utf8");
         // The document-IO module is split into a shared core plus the two
         // platform-specific save-settlement submodules; the invariants below
@@ -542,7 +542,7 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         expect(libRs).toContain("tauri_plugin_fs");
         // The web-facing command surface is EXACTLY the four document
         // capabilities, six tool operations, and separately declared bounded
-        // Preview surface. Any additional command is a surface violation.
+        // Preview and read-only Environment surfaces. Any additional command is a surface violation.
         // The attribute is `#[tauri::command(rename = "<id>")]` — the
         // `[` sits inside a character class here: a bare `[` in a regex
         // literal would start a class of its own and swallow the rest
@@ -554,6 +554,9 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
             "shader-document-read-snapshot",
             "shader-document-save",
             "shader-document-save-as",
+            "shader-environment-cancel-discovery",
+            "shader-environment-choose-repository",
+            "shader-environment-discover",
             "shader-preview-launch-runtime",
             "shader-preview-read-observation",
             "shader-preview-stop-runtime",

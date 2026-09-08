@@ -1,9 +1,10 @@
 //! GGLab Shader Graph Editor — desktop shell and bounded native services.
 //!
-//! Three bounded service groups in one crate (see the crate-level note in
+//! Bounded service groups in one crate (see the crate-level note in
 //! `Cargo.toml`): the thin shell and scoped auxiliary-file plugins, the
 //! Workspace/revisioned-document boundary, and the six tool commands plus
-//! compiler-free observation and attached Runtime lifecycle commands. The
+//! compiler-free observation and attached Runtime lifecycle commands, plus
+//! read-only Environment repository selection and guarded producer discovery. The
 //! thin layer of commands below owns
 //! no logic of its own: it takes the client's values in, hands them to
 //! the service, and returns the service's values back — the service is
@@ -22,6 +23,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod document_io;
+mod environment_io;
 mod shader_tool;
 mod workspace_io;
 
@@ -36,6 +38,8 @@ use workspace_io::{
     WorkspaceDiscoveryCancelOutcome, WorkspaceDiscoveryId, WorkspaceDiscoveryRequest,
     WorkspaceDiscoverySettlement, WorkspaceFileService, WorkspaceIoError, WorkspaceRoot,
 };
+
+struct EnvironmentShared(Arc<environment_io::EnvironmentService>);
 
 struct ServiceShared(Arc<ShaderToolService>);
 struct DocumentFileShared(Arc<DocumentFileService>);
@@ -386,6 +390,41 @@ fn shader_preview_stop_runtime(
     Ok(state.service().stop_preview_runtime(runtime_id))
 }
 
+/// Selection is the only path admission surface; subsequent calls carry opaque IDs.
+#[tauri::command(rename = "shader-environment-choose-repository")]
+async fn shader_environment_choose_repository(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EnvironmentShared>,
+) -> Result<Option<environment_io::EnvironmentRepository>, environment_io::EnvironmentHostError> {
+    let service = Arc::clone(&state.0);
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(selected) = app.dialog().file().set_title("Select GGLab source repository").blocking_pick_folder() else { return Ok(None); };
+        let path = selected.into_path().map_err(|e| environment_io::EnvironmentHostError { code: "invalid-path".into(), message: e.to_string(), data_path: "$".into() })?;
+        service.register_selected_repository(path).map(Some)
+    }).await.map_err(|e| environment_io::EnvironmentHostError { code: "host-task-failed".into(), message: e.to_string(), data_path: "$".into() })?
+}
+#[tauri::command(rename = "shader-environment-discover")]
+fn shader_environment_discover(
+    state: tauri::State<'_, EnvironmentShared>,
+    repository_id: String,
+    channel: tauri::ipc::Channel<environment_io::EnvironmentDiscoverySettlement>,
+) -> Result<String, environment_io::EnvironmentHostError> {
+    let job = state.0.discover(&repository_id)?;
+    let id = job.id.clone();
+    std::thread::spawn(move || {
+        let result = job.settle.join().unwrap_or_else(|_| environment_io::EnvironmentDiscoverySettlement::Failed {
+            discovery_id: job.id, repository_id,
+            error: environment_io::EnvironmentHostError { code: "host-task-failed".into(), message: "Discovery worker ended unexpectedly".into(), data_path: "$".into() },
+        });
+        let _ = channel.send(result);
+    });
+    Ok(id)
+}
+#[tauri::command(rename = "shader-environment-cancel-discovery")]
+fn shader_environment_cancel_discovery(
+    state: tauri::State<'_, EnvironmentShared>, discovery_id: String,
+) -> Result<bool, environment_io::EnvironmentHostError> { state.0.cancel(&discovery_id) }
+
 /// The boundary's public surface: six tool operations plus compiler-free
 /// observation and attached Runtime lifecycle capabilities. This is the
 /// host-side contract that the toolchain client declares and tests with its
@@ -417,9 +456,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(ServiceShared(Arc::new(ShaderToolService::production())))
+        .manage(EnvironmentShared(Arc::new(environment_io::EnvironmentService::new())))
         .manage(DocumentFileShared(document_files))
         .manage(WorkspaceFileShared(workspace_files))
         .invoke_handler(tauri::generate_handler![
+            shader_environment_choose_repository,
+            shader_environment_discover,
+            shader_environment_cancel_discovery,
             shader_document_open,
             shader_document_read_snapshot,
             shader_document_save,

@@ -76,7 +76,8 @@ describe("producer-owned filesystem vectors through closure verifier", () => {
         const h = closureHost(), first = h.entries[0]!;
         h.entries.push({ ...first, path: first.path.toUpperCase() }); h.files.set(first.path.toUpperCase(), "x");
         rejects("path-conflict", () => verifyEnvironmentClosure(h.host, "D:/environment"));
-        for (const name of [".staging-x", ".STAGING-X"]) rejects("incomplete-publication", () => verifyEnvironmentClosure(closureHost().host, "D:/" + name));
+        const staging = JSON.parse(text("staging-cases.json")) as { pathSpellings: string[]; expected: { verify: { errorCode: string } } };
+        for (const name of staging.pathSpellings) rejects(staging.expected.verify.errorCode, () => verifyEnvironmentClosure(closureHost().host, "D:/" + name));
     });
 });
 describe("producer process protocol", () => {

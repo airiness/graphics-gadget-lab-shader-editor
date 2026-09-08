@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync, linkSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync, statSync, linkSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,10 +55,16 @@ describe.runIf(process.platform === "win32")("Windows Environment host", () => {
         expect(() => inspectEnvironmentState(closure, state)).toThrow("another Environment");
         expect(readFileSync(join(state, "state.json"), "utf8")).toContain("0".repeat(64));
     }, 30000);
-    it("rejects a Windows case alias of an unfinished staging directory", () => {
-        const f = fixture(); renameSync(f.root, join(f.temp, ".staging-review"));
-        const envelope = JSON.parse(dispatch("environment-verify", [join(f.temp, ".STAGING-REVIEW")]).sinkText);
-        expect(envelope.ok).toBe(false); expect(envelope.diagnostics[0].code).toBe("incomplete-publication");
+    it("consumes producer staging vectors using aliases of one real Windows directory", () => {
+        const vectors = JSON.parse(readFileSync(join(fixtures, "staging-cases.json"), "utf8")) as { physicalDirectory: string; pathSpellings: string[]; expected: { verify: { errorCode: string } } };
+        const f = fixture(), physical = join(f.temp, vectors.physicalDirectory); renameSync(f.root, physical);
+        const identity = statSync(physical, { bigint: true });
+        for (const spelling of vectors.pathSpellings) {
+            const alias = join(f.temp, spelling), observed = statSync(alias, { bigint: true });
+            expect(observed.ino).toBe(identity.ino); expect(observed.dev).toBe(identity.dev);
+            const envelope = JSON.parse(dispatch("environment-verify", [alias]).sinkText);
+            expect(envelope.ok).toBe(false); expect(envelope.diagnostics[0].code).toBe(vectors.expected.verify.errorCode);
+        }
     }, 30000);
     it("malformed UTF-8 and extra flags fail explicitly", () => {
         const f = fixture(); writeFileSync(join(f.root, "environment.json"), Buffer.from([0xff]));
