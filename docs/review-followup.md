@@ -1,5 +1,8 @@
 # Review follow-up: diagnostic identity, CI isolation and staging aliases
 
+Historical record: the subsequent [clean replay](environment-clean-replay.md)
+records the committed fixes, updated producer pin and completed verification.
+
 This record describes working-tree fixes on Editor
 `f15cd35e168635ac251073b04565d625d9f270db` and Main
 `aa462d091e46f0cd5412ecc6564ce2cc393c369e`. It is not final clean-revision

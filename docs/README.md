@@ -43,6 +43,10 @@ below), not this one.
 
 ## Integration readiness records
 
+- [Environment clean replay](environment-clean-replay.md) records the exact
+  committed Main/Editor pair, fresh builds, Windows 8.3 and native qualification,
+  and successful GitHub CI after the review fixes.
+
 - [Review follow-up](review-followup.md) records stable diagnostic identities,
   lazy cross-repo qualification, and the Main-owned 8.3 staging fix.
 
