@@ -43,7 +43,7 @@ export function validateEnvironmentFinalProof(closure: VerifiedEnvironmentClosur
     }
     environmentRequire(proof.ordinaryHandshake === "compatible" && proof.previewHandshake === "compatible" && proof.profiles.length === 2 && proof.profiles[0] === 1 && proof.profiles[1] === 2 && proof.runtimeObservation === "loaded", "proof-mismatch", "Final native evidence is incomplete");
 }
-/** Reviewable transaction core only. Production composition does not supply this host while approval is pending. */
+/** Production composition must supply actual native proof before using this transaction. */
 export async function prepareEnvironmentImport(host: EnvironmentImportHost, root: string, stateRoot: string, cancelled: () => boolean, emit: (event: EnvironmentImportEvent) => void = () => {}): Promise<EnvironmentImportOutcome> {
     let retainedStateRoot: string | null = null;
     let registrationMayHaveCommitted = false;
@@ -78,10 +78,10 @@ export async function prepareEnvironmentImport(host: EnvironmentImportHost, root
         return { status: "refused", diagnostic, retainedStateRoot, registrationMayHaveCommitted };
     }
 }
-/** The approval boundary is explicit and is not inferred from task authorization or producer success. */
+/** Owner approved v1 on 2026-09-09; production proof, state and activation wiring remain incomplete. */
 export const ENVIRONMENT_IMPORT_AVAILABILITY = {
     enabled: false,
-    reason: "Environment publication contract is pending owner review before Editor import.",
+    reason: "Environment import is not connected to final native proof and activation services yet.",
 } as const;
 
 /** State metadata is operational binding only. The host also checks all ancestors/entries and designated directories. */

@@ -1,5 +1,12 @@
 # Environment registry persistence and recovery
 
+Current update (2026-09-09): the owner approved the v1 baseline, and the canonical
+staging alias fix was qualified in [clean replay](environment-clean-replay.md).
+[Tauri storage integration](environment-tauri-storage.md) now supplies native
+storage/inspection and recovery composition. Actual native proof, publication,
+state initialization and activation wiring remain outstanding. The dated status
+and executed-check statements below preserve this document's original increment.
+
 Status: implemented Editor-owned persistence substrate. Production Environment
 import remains disabled. The main-owned publication proposal still requires
 owner review, and its Windows staging case-alias defect is still present at

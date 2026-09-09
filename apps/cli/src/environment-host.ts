@@ -103,13 +103,13 @@ export function verifyEnvironmentDirectory(root: string) {
     environmentAbsolutePath(root);
     return verifyEnvironmentClosure(nodeEnvironmentClosureHost, resolve(root));
 }
-/** No mutating producer operation is exposed while the proposal is pending review. */
+/** Mutating operations require the future guarded publication/reconciliation host. */
 export function inspectEnvironmentProducer(repositoryRoot: string, suppliedRequest?: EnvironmentRequest) {
     assertEnvironmentHostPath(repositoryRoot);
     const bootstrapPath = containedPath(repositoryRoot, "Scripts/Environment/bootstrap.json"); assertEnvironmentHostPath(bootstrapPath);
     const bootstrap = readEnvironmentBootstrap(readBounded(bootstrapPath));
     const request = readEnvironmentRequest(suppliedRequest ?? { requestVersion: 1, operation: "discover", repositoryRoot, searchRoots: bootstrap.defaultSearchRoots });
-    environmentRequire(request.operation === "discover" || request.operation === "verify", "approval-required", "Environment publish/init-state require owner review before import");
+    environmentRequire(request.operation === "discover" || request.operation === "verify", "host-not-integrated", "Environment publish/init-state are not connected to guarded publication recovery");
     if (request.operation === "discover") environmentRequire(resolve(request.repositoryRoot).toLowerCase() === resolve(repositoryRoot).toLowerCase(), "invalid-path", "Bootstrap repository mismatch");
     const publisher = containedPath(repositoryRoot, bootstrap.publisher); assertEnvironmentHostPath(publisher);
     const observation = hashFile(publisher);

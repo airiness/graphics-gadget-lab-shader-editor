@@ -1,5 +1,14 @@
 # Environment import readiness and publisher handoff
 
+Current update (2026-09-09): the owner approved the v1 integration baseline in
+`../../GraphicsGadgetLabDocs/GGLab_Environment_Publication_Approval.md`.
+The producer alias defect and evidence baseline were closed by
+[clean replay](environment-clean-replay.md). [Tauri storage integration](environment-tauri-storage.md)
+adds native inspection/storage and recovery composition. Production import stays
+disabled because final native proof, state initialization, guarded publication
+and activation integration remain incomplete. Earlier approval/defect statements
+below describe the historical handoff rather than the current gate.
+
 Status: consumer implementation review, 2026-09-08. Strict readers, read-only
 host verification, and a tested import transaction core are implemented. Actual
 Environment import remains disabled pending owner review of the producer contract.

@@ -4,7 +4,7 @@
 //! `Cargo.toml`): the thin shell and scoped auxiliary-file plugins, the
 //! Workspace/revisioned-document boundary, and the six tool commands plus
 //! compiler-free observation and attached Runtime lifecycle commands, plus
-//! read-only Environment repository selection and guarded producer discovery. The
+//! Environment selection, filesystem observation, registry reads and guarded discovery. The
 //! thin layer of commands below owns
 //! no logic of its own: it takes the client's values in, hands them to
 //! the service, and returns the service's values back — the service is
@@ -24,11 +24,13 @@
 
 mod document_io;
 mod environment_io;
+mod environment_storage;
 mod shader_tool;
 mod workspace_io;
 
 use std::sync::Arc;
 use tauri_plugin_dialog::DialogExt;
+use tauri::Manager;
 
 use document_io::{
     DocumentFileService, DocumentIoError, DocumentSaveOutcome, DocumentSnapshot,
@@ -40,6 +42,7 @@ use workspace_io::{
 };
 
 struct EnvironmentShared(Arc<environment_io::EnvironmentService>);
+struct EnvironmentStorageShared(Arc<environment_storage::EnvironmentStorageService>);
 
 struct ServiceShared(Arc<ShaderToolService>);
 struct DocumentFileShared(Arc<DocumentFileService>);
@@ -391,6 +394,42 @@ fn shader_preview_stop_runtime(
 }
 
 /// Selection is the only path admission surface; subsequent calls carry opaque IDs.
+#[tauri::command(rename = "shader-environment-choose-directory")]
+async fn shader_environment_choose_directory(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EnvironmentStorageShared>,
+    kind: environment_storage::DirectoryKind,
+) -> Result<Option<environment_storage::DirectoryHandle>, environment_io::EnvironmentHostError> {
+    let service = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(selected) = app.dialog().file().blocking_pick_folder() else { return Ok(None); };
+        let path = selected.into_path().map_err(|e| environment_io::error("invalid-path", e))?;
+        service.select(&path, kind).map(Some)
+    }).await.map_err(|e| environment_io::error("host-task-failed", e))?
+}
+#[tauri::command(rename = "shader-environment-observe-directory")]
+async fn shader_environment_observe_directory(
+    state: tauri::State<'_, EnvironmentStorageShared>, directory_id: String,
+) -> Result<environment_storage::DirectoryObservation, environment_io::EnvironmentHostError> {
+    let service = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || service.observe(&directory_id))
+        .await.map_err(|e| environment_io::error("host-task-failed", e))?
+}
+#[tauri::command(rename = "shader-environment-registry-scan")]
+async fn shader_environment_registry_scan(app: tauri::AppHandle) -> Result<environment_storage::RegistryScan, environment_io::EnvironmentHostError> {
+    let root = app.path().app_data_dir().map_err(|e| environment_io::error("io-error", e))?.join("environment-registry");
+    tauri::async_runtime::spawn_blocking(move || environment_storage::RegistryStorage::new(root)?.scan())
+        .await.map_err(|e| environment_io::error("host-task-failed", e))?
+}
+#[tauri::command(rename = "shader-environment-registry-open")]
+async fn shader_environment_registry_open(
+    app: tauri::AppHandle, state: tauri::State<'_, EnvironmentStorageShared>, key: String,
+) -> Result<environment_storage::RecoverySelection, environment_io::EnvironmentHostError> {
+    let root = app.path().app_data_dir().map_err(|e| environment_io::error("io-error", e))?.join("environment-registry");
+    let service = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || service.open_registration(&environment_storage::RegistryStorage::new(root)?, &key))
+        .await.map_err(|e| environment_io::error("host-task-failed", e))?
+}
 #[tauri::command(rename = "shader-environment-choose-repository")]
 async fn shader_environment_choose_repository(
     app: tauri::AppHandle,
@@ -457,9 +496,14 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .manage(ServiceShared(Arc::new(ShaderToolService::production())))
         .manage(EnvironmentShared(Arc::new(environment_io::EnvironmentService::new())))
+        .manage(EnvironmentStorageShared(Arc::new(environment_storage::EnvironmentStorageService::default())))
         .manage(DocumentFileShared(document_files))
         .manage(WorkspaceFileShared(workspace_files))
         .invoke_handler(tauri::generate_handler![
+            shader_environment_choose_directory,
+            shader_environment_observe_directory,
+            shader_environment_registry_scan,
+            shader_environment_registry_open,
             shader_environment_choose_repository,
             shader_environment_discover,
             shader_environment_cancel_discovery,

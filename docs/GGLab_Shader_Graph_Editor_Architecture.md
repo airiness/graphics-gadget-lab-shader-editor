@@ -2466,7 +2466,9 @@ and Surface Profile semantics. The CLI and GUI consume the same Environment
 reader, closure verifier, and import transaction interfaces. OS enumeration,
 reparse/link observation, hashing, and process execution remain host operations.
 
-This separation does not approve the producer proposal or enable actual import.
+The owner approved the v1 integration baseline on 2026-09-09; see
+`../../GraphicsGadgetLabDocs/GGLab_Environment_Publication_Approval.md`.
+Approval permits integration but does not enable unfinished production import.
 See [Environment consumer readiness](environment-import-readiness.md) for the
 implemented read-only commands, tested interface boundaries, approval gate, and
 outstanding production host/registry/native qualification work.

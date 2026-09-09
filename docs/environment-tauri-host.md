@@ -1,5 +1,11 @@
 # Guarded Environment discovery
 
+Current update (2026-09-09): owner review approved the v1 integration baseline.
+See `../../GraphicsGadgetLabDocs/GGLab_Environment_Publication_Approval.md` and
+[Tauri storage integration](environment-tauri-storage.md). The historical
+discovery evidence below remains bound to its original revisions. Approval does
+not enable unfinished publish/init-state, proof or activation services.
+
 This increment connects read-only producer discovery to the desktop host. It
 consumes the publication proposal; it does not approve it or enable import.
 

@@ -43,6 +43,10 @@ below), not this one.
 
 ## Integration readiness records
 
+- [Tauri Environment storage](environment-tauri-storage.md) records the approved
+  v1 integration scope, native filesystem observation, registry and recovery
+  adapters, and the remaining production integration gates.
+
 - [Environment clean replay](environment-clean-replay.md) records the exact
   committed Main/Editor pair, fresh builds, Windows 8.3 and native qualification,
   and successful GitHub CI after the review fixes.

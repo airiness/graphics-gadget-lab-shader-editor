@@ -18,7 +18,7 @@ pub struct EnvironmentHostError {
     pub message: String,
     pub data_path: String,
 }
-fn error(code: &str, message: impl ToString) -> EnvironmentHostError {
+pub(crate) fn error(code: &str, message: impl ToString) -> EnvironmentHostError {
     EnvironmentHostError {
         code: code.into(),
         message: message.to_string(),
@@ -252,7 +252,7 @@ fn locator(value: &str) -> Result<(), EnvironmentHostError> {
     }
     Ok(())
 }
-fn ordinary_path(path: &Path) -> Result<PathBuf, EnvironmentHostError> {
+pub(crate) fn ordinary_path(path: &Path) -> Result<PathBuf, EnvironmentHostError> {
     if !cfg!(windows) {
         return Err(error(
             "unsupported-platform",
