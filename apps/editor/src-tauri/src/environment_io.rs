@@ -37,12 +37,12 @@ pub struct EnvironmentRepository {
     pub publisher_sha256: String,
 }
 #[derive(Clone)]
-struct SelectedRepository {
-    root: PathBuf,
+pub(crate) struct SelectedRepository {
+    pub(crate) root: PathBuf,
     bootstrap: PathBuf,
     bootstrap_sha256: String,
     publisher: PathBuf,
-    publisher_sha256: String,
+    pub(crate) publisher_sha256: String,
     search_roots: Vec<String>,
 }
 #[derive(Deserialize)]
@@ -170,6 +170,9 @@ impl EnvironmentService {
             bootstrap_text,
             publisher_sha256,
         })
+    }
+    pub(crate) fn selected_repository(&self, id: &str) -> Result<SelectedRepository, EnvironmentHostError> {
+        self.selected.lock().map_err(io)?.get(id).cloned().ok_or_else(|| error("invalid-handle", "Select the repository again"))
     }
     pub fn discover(
         &self,
@@ -333,6 +336,10 @@ fn discover_selected(
     selected: &SelectedRepository,
     cancel: &Arc<AtomicBool>,
 ) -> Result<(EnvironmentProcessOutput, String), EnvironmentHostError> {
+    let request = serde_json::json!({ "requestVersion": 1, "operation": "discover", "repositoryRoot": selected.root, "searchRoots": selected.search_roots });
+    request_selected(selected, &request, cancel, Duration::from_secs(120))
+}
+pub(crate) fn request_selected(selected: &SelectedRepository, request: &serde_json::Value, cancel: &Arc<AtomicBool>, budget: Duration) -> Result<(EnvironmentProcessOutput, String), EnvironmentHostError> {
     if cancel.load(Ordering::Acquire) {
         return Err(error("cancelled", "Discovery cancelled before execution"));
     }
@@ -365,7 +372,7 @@ fn discover_selected(
     if probe.exit_code != Some(0) {
         return Err(error("interpreter-unavailable", "Python 3.12+ is required"));
     }
-    let request = serde_json::to_vec(&serde_json::json!({ "requestVersion": 1, "operation": "discover", "repositoryRoot": selected.root, "searchRoots": selected.search_roots })).map_err(io)?;
+    let request = serde_json::to_vec(request).map_err(io)?;
     // Both file guards stay alive until the interpreter exits, including its deferred script open.
     let output = execute(
         &python,
@@ -373,7 +380,7 @@ fn discover_selected(
         &selected.root,
         request,
         cancel,
-        Duration::from_secs(120),
+        budget,
     )?;
     Ok((output, interpreter_hash))
 }
@@ -417,6 +424,11 @@ fn execute(
         command.creation_flags(0x08000000);
     }
     let mut child = command.spawn().map_err(io)?;
+    #[cfg(windows)]
+    let job = match crate::environment_process_job::ProducerJob::attach(&child) {
+        Ok(job) => job,
+        Err(e) => { let _ = child.kill(); let _ = child.wait(); return Err(error("termination-unproven", e)); }
+    };
     let overflow = Arc::new(AtomicBool::new(false));
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
@@ -448,6 +460,9 @@ fn execute(
         }
         std::thread::sleep(Duration::from_millis(10));
     };
+    // Close descendant pipe owners before joining stream threads, even if the parent exited first.
+    #[cfg(windows)]
+    job.terminate_and_join().map_err(|e| error("termination-unproven", e))?;
     let stdout = out
         .join()
         .map_err(|_| io("stdout reader failed"))?
@@ -477,6 +492,20 @@ fn execute(
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+    #[test]
+    fn producer_job_reaps_descendants_that_inherit_output_pipes() {
+        let root = Temp::new();
+        let marker = root.0.join("descendant-survived");
+        let descendant = format!("import time,pathlib;time.sleep(1);pathlib.Path({:?}).write_text('survived')", marker.to_string_lossy());
+        let script = format!("import sys,subprocess,time;sys.stdin.buffer.read();p=subprocess.Popen([sys.executable,'-c',{:?}]);print(p.pid,flush=True);time.sleep(30)", descendant);
+        let start = Instant::now();
+        let result = execute(&python_path().unwrap(), &["-c".into(), script], &root.0, b"request".to_vec(), &Arc::new(AtomicBool::new(false)), Duration::from_millis(400)).unwrap();
+        assert!(result.timed_out);
+        assert!(!result.stdout.is_empty(), "The descendant must actually have been spawned");
+        assert!(start.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(1100));
+        assert!(!marker.exists(), "The descendant escaped the producer job");
+    }
     struct Temp(PathBuf);
     impl Temp {
         fn new() -> Self {

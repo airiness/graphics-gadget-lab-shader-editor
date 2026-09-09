@@ -43,6 +43,9 @@ below), not this one.
 
 ## Integration readiness records
 
+- `environment-producer-mutations.md` — guarded publish/init-state execution,
+  durable operation intents and read-only finalization reconciliation.
+
 - [Tauri Environment storage](environment-tauri-storage.md) records the approved
   v1 integration scope, native filesystem observation, registry and recovery
   adapters, and the remaining production integration gates.

@@ -1,0 +1,112 @@
+{
+  "date": "2026-09-09",
+  "kind": "working-tree-producer-adapter-qualification",
+  "editorBaseRevision": "5ada9d34a8a796c051c53e4f36b368da4dc47a01",
+  "producerRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec",
+  "editorCleanRevision": null,
+  "sourceSha256": {
+    "apps/editor/src-tauri/Cargo.toml": "491f54d808c0807162c44a65527cb43b0a3d2bc822822789eb7b0efdde85a140",
+    "apps/editor/src-tauri/src/environment_io.rs": "2b3306b0926c2179048110e468f15753868dfe268a534c3de5e2bf637ce36602",
+    "apps/editor/src-tauri/src/environment_mutation.rs": "ad9a987a661dcc094fce159ba094c991aa05394b77a3bf1f0856628a4ccda42e",
+    "apps/editor/src-tauri/src/environment_process_job.rs": "6267c4d7965fa1795199e9836a20a47f4eb57efeb59d2b5f0854aa535ec7514d",
+    "apps/editor/src-tauri/src/lib.rs": "048a48201859e66456413107b9f275fc82706c80896fe3ec0a90b3c32b425571",
+    "apps/editor/src/environment-mutation-host.test.ts": "cc02230731abcf6c33ebe059993011f6d9ec56b002f60e74d6021f2c8ac326d3",
+    "apps/editor/src/environment-mutation-host.ts": "6f51161348171f28510a58345f8c2e26f59459280da8c096f87e4f4a9a5aeb82",
+    "apps/editor/tests/host-io.test.ts": "330e40b9fbf5500001c22a0b18d8f3efa9741ab5f7b59a970146b1534dd35a27",
+    "packages/shader-toolchain-client/src/environment-mutation.ts": "8a37c4287989ce44b8923cd926f5a09877682b4ab0c61b144c046f4f467004c1",
+    "packages/shader-toolchain-client/src/index.ts": "b2fda8508d4bb5c7d47b76d2031aca9fe140e75cca41ddeaacb9df2c90d4c913",
+    "packages/shader-toolchain-client/tests/environment-mutation.test.ts": "86baad2ebdb3ce241de6de3a5056ebf23a9c69c69098b93e4bb8bdd18f77e9d5"
+  },
+  "gates": {
+    "typecheck": "passed",
+    "lint": "passed",
+    "typescriptTests": {
+      "passed": 964,
+      "skipped": 8
+    },
+    "rustTests": {
+      "passed": 90,
+      "ignored": 3
+    },
+    "editorWebBuild": "passed",
+    "gitDiffCheck": "passed"
+  },
+  "configurations": {
+    "debug": {
+      "operationId": "0000000018d3a0a15ae0966400000000",
+      "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3a0a15ae0966400000000",
+      "environmentId": "sha256:f16290e99f195e15b368393ffa44b571e34480d3bdc3c3beb1b3f23f44e916ed",
+      "producer": {
+        "deployment": "Build/Output/x64/Debug",
+        "publisherSha256": "cfbe8fa0caf0c0683fa7a010067fb03dd2c50d61a5d09137123793e50e9f7f5b",
+        "publisherVersion": "1.0.0",
+        "sourceDirty": false,
+        "sourceRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec"
+      },
+      "executables": {
+        "tool": {
+          "path": "payload/gglab-shaderc.exe",
+          "sha256": "3ef4ffd5297777f6fe1088fb228f040e0ec95f5df57f1063b8cd312384410cb7",
+          "size": 4325888
+        },
+        "runtime": {
+          "path": "payload/GraphicsGadgetLab.exe",
+          "sha256": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247",
+          "size": 26074112
+        }
+      },
+      "stateOperationId": "0000000018d3a0a744b00af400000001",
+      "state": {
+        "root": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environment-state\\0000000018d3a0a744b00af400000001",
+        "environmentId": "sha256:f16290e99f195e15b368393ffa44b571e34480d3bdc3c3beb1b3f23f44e916ed"
+      },
+      "duplicatePublish": "integrity-verified",
+      "duplicateState": "integrity-verified",
+      "readOnlyRecovery": "integrity-verified",
+      "stateRecoveredAfterInjectedLostReply": true,
+      "nativeReadiness": "unproven"
+    },
+    "release": {
+      "operationId": "0000000018d3a0ada608e10800000000",
+      "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3a0ada608e10800000000",
+      "environmentId": "sha256:641093ddf5acffcfe2c9ae7f0816971658cc39e3a4486c47c46b2c218b3bed91",
+      "producer": {
+        "deployment": "Build/Output/x64/Release",
+        "publisherSha256": "cfbe8fa0caf0c0683fa7a010067fb03dd2c50d61a5d09137123793e50e9f7f5b",
+        "publisherVersion": "1.0.0",
+        "sourceDirty": false,
+        "sourceRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec"
+      },
+      "executables": {
+        "tool": {
+          "path": "payload/gglab-shaderc.exe",
+          "sha256": "421926487ee7290be858077eadc295348d403644856e1ebd56af4840fc2e36e5",
+          "size": 887808
+        },
+        "runtime": {
+          "path": "payload/GraphicsGadgetLab.exe",
+          "sha256": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175",
+          "size": 5634048
+        }
+      },
+      "stateOperationId": "0000000018d3a0b2d850fda800000001",
+      "state": {
+        "root": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environment-state\\0000000018d3a0b2d850fda800000001",
+        "environmentId": "sha256:641093ddf5acffcfe2c9ae7f0816971658cc39e3a4486c47c46b2c218b3bed91"
+      },
+      "duplicatePublish": "integrity-verified",
+      "duplicateState": "integrity-verified",
+      "readOnlyRecovery": "integrity-verified",
+      "stateRecoveredAfterInjectedLostReply": true,
+      "nativeReadiness": "unproven"
+    }
+  },
+  "limitations": [
+    "No new Main C++ rebuild or producer unit suite in this increment.",
+    "Producer publication executes native describe/describe-preview, Runtime host capability and build-runtime for both targets; this is not Editor final-location Preview qualification.",
+    "No Editor Preview launch/Loaded evidence for these new publications.",
+    "Transport loss is deliberately injected after actual init-state settlement.",
+    "Adapter recreation and Rust restart-unit coverage are not a live desktop crash walkthrough.",
+    "Stale running markers block automatic replay; no automatic user state deletion or marker clearance."
+  ]
+}

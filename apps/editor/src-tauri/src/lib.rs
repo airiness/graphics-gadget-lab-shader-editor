@@ -24,6 +24,8 @@
 
 mod document_io;
 mod environment_io;
+mod environment_process_job;
+mod environment_mutation;
 mod environment_storage;
 mod environment_execution;
 mod shader_tool;
@@ -42,6 +44,7 @@ use workspace_io::{
     WorkspaceDiscoverySettlement, WorkspaceFileService, WorkspaceIoError, WorkspaceRoot,
 };
 
+struct EnvironmentMutationShared(Arc<environment_mutation::MutationService>);
 struct EnvironmentShared(Arc<environment_io::EnvironmentService>);
 struct EnvironmentStorageShared(Arc<environment_storage::EnvironmentStorageService>);
 struct EnvironmentExecutionShared(Arc<environment_execution::EnvironmentExecutionService>);
@@ -395,6 +398,30 @@ fn shader_preview_stop_runtime(
     Ok(state.service().stop_preview_runtime(runtime_id))
 }
 
+#[tauri::command(rename = "shader-environment-prepare-mutation")]
+async fn shader_environment_prepare_mutation(app: tauri::AppHandle, state: tauri::State<'_, EnvironmentMutationShared>, producer: tauri::State<'_, EnvironmentShared>, storage: tauri::State<'_, EnvironmentStorageShared>, request: environment_mutation::Prepare) -> Result<environment_mutation::Intent, environment_io::EnvironmentHostError> {
+    let root=app.path().app_data_dir().map_err(|e|environment_io::error("io-error",e))?;
+    let service=state.0.clone(); let producer=producer.0.clone(); let storage=storage.0.clone();
+    tauri::async_runtime::spawn_blocking(move ||service.prepare(&root,&producer,&storage,request)).await.map_err(|e|environment_io::error("host-task-failed",e))?
+}
+#[tauri::command(rename = "shader-environment-run-mutation")]
+async fn shader_environment_run_mutation(app: tauri::AppHandle, state: tauri::State<'_, EnvironmentMutationShared>, producer: tauri::State<'_, EnvironmentShared>, repository_id:String, operation_id:String) -> Result<serde_json::Value, environment_io::EnvironmentHostError> {
+    let root=app.path().app_data_dir().map_err(|e|environment_io::error("io-error",e))?; let service=state.0.clone(); let producer=producer.0.clone();
+    tauri::async_runtime::spawn_blocking(move ||service.run(&root,&producer,&repository_id,&operation_id)).await.map_err(|e|environment_io::error("host-task-failed",e))?
+}
+#[tauri::command(rename = "shader-environment-inspect-mutation")]
+async fn shader_environment_inspect_mutation(app: tauri::AppHandle, state: tauri::State<'_, EnvironmentMutationShared>, storage: tauri::State<'_, EnvironmentStorageShared>, operation_id:String) -> Result<environment_mutation::Inspection, environment_io::EnvironmentHostError> {
+    let root=app.path().app_data_dir().map_err(|e|environment_io::error("io-error",e))?; let service=state.0.clone(); let storage=storage.0.clone();
+    tauri::async_runtime::spawn_blocking(move ||service.inspect(&root,&storage,&operation_id)).await.map_err(|e|environment_io::error("host-task-failed",e))?
+}
+#[tauri::command(rename = "shader-environment-list-mutations")]
+async fn shader_environment_list_mutations(app: tauri::AppHandle, state: tauri::State<'_, EnvironmentMutationShared>) -> Result<Vec<String>, environment_io::EnvironmentHostError> {
+    let root=app.path().app_data_dir().map_err(|e|environment_io::error("io-error",e))?; let service=state.0.clone();
+    tauri::async_runtime::spawn_blocking(move ||service.list(&root)).await.map_err(|e|environment_io::error("host-task-failed",e))?
+}
+#[tauri::command(rename = "shader-environment-cancel-mutation")]
+fn shader_environment_cancel_mutation(state: tauri::State<'_, EnvironmentMutationShared>, operation_id:String) -> Result<bool, environment_io::EnvironmentHostError> { state.0.cancel(&operation_id) }
+
 /// Selection is the only path admission surface; subsequent calls carry opaque IDs.
 #[tauri::command(rename = "shader-environment-open-execution")]
 async fn shader_environment_open_execution(
@@ -517,12 +544,18 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(ServiceShared(Arc::new(ShaderToolService::production())))
+        .manage(EnvironmentMutationShared(Arc::new(environment_mutation::MutationService::default())))
         .manage(EnvironmentShared(Arc::new(environment_io::EnvironmentService::new())))
         .manage(EnvironmentStorageShared(Arc::new(environment_storage::EnvironmentStorageService::default())))
         .manage(EnvironmentExecutionShared(Arc::new(environment_execution::EnvironmentExecutionService::default())))
         .manage(DocumentFileShared(document_files))
         .manage(WorkspaceFileShared(workspace_files))
         .invoke_handler(tauri::generate_handler![
+            shader_environment_prepare_mutation,
+            shader_environment_run_mutation,
+            shader_environment_inspect_mutation,
+            shader_environment_list_mutations,
+            shader_environment_cancel_mutation,
             shader_environment_open_execution,
             shader_environment_execute,
             shader_environment_cancel_execution,

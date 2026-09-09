@@ -57,3 +57,5 @@ export * from "./environment-registry.js";
 export * from "./environment-host-boundary.js";
 export * from "./environment-storage-boundary.js";
 export * from "./environment-proof.js";
+
+export * from "./environment-mutation.js";
