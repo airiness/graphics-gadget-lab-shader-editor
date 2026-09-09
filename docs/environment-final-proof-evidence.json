@@ -1,0 +1,358 @@
+{
+  "date": "2026-09-09",
+  "kind": "editor-working-tree-final-location-proof",
+  "producerRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec",
+  "editorBaseRevision": "70a4cf9e0dbd2c41db992148e96f9e4bb2c1288d",
+  "editorCleanRevision": null,
+  "sourceSha256": {
+    "apps/editor/src-tauri/src/environment_execution.rs": "7779d020f183e78fbc34edaf7e07866b51605b78f2b786408e549a8cbf93d3dc",
+    "apps/editor/src-tauri/src/environment_storage.rs": "a1a7ba5e18688be6a04286a31a0a55c8c5a79b4a9fe255c3588ca29771a477c0",
+    "apps/editor/src-tauri/src/lib.rs": "bc46b1daeb4c94e9fcb674a01d40f411a7e5c5a0a89d80e020ca021252fca4e1",
+    "apps/editor/src-tauri/src/shader_tool/execution.rs": "428502c71051170780866055dce20b20813e3a8f13180bd58fc407a66f9800c1",
+    "apps/editor/src-tauri/src/shader_tool/service.rs": "b3b11cf1ad0f2584cd50b9d3943bcdadb7a5e52c88f29a129caaaa2b037112fa",
+    "apps/editor/src-tauri/src/shader_tool/staging.rs": "28e2c2e75a109045e6b540815e4530f7d8226515b9a46d01332ecf86ba0af495",
+    "apps/editor/src/environment-proof-host.test.ts": "b5c41a1e5a588e77fa930db9f3f716a7e25319ea6bf48256d37f2008b16c2365",
+    "apps/editor/src/environment-proof-host.ts": "7f93bd793475a41981ff08a610bbb9f76da800ac305409bdcf3665a907d7e628",
+    "apps/editor/tests/host-io.test.ts": "49a625b138a59c06f3477a52bae57d1c6b04bb5132a344cb2ff5434e62431739",
+    "packages/shader-toolchain-client/src/environment-proof.ts": "6cea289f0d1af60d5e92d43e078053504fc8fd092d67339b4a2597e6080dd908",
+    "packages/shader-toolchain-client/src/index.ts": "dd480d6629f66a42933220ad9aa3c7599cc8f0ec4a78852c60842742ee34644f",
+    "packages/shader-toolchain-client/tests/environment-proof.test.ts": "23070cef88691700841c9cc6b5e1018c043a8f16e709e63794a590f4e86fcbcf"
+  },
+  "gates": {
+    "pnpmTypecheck": "passed",
+    "pnpmTest": {
+      "passed": 954,
+      "skipped": 7
+    },
+    "pnpmLint": "passed",
+    "editorWebBuild": "passed",
+    "rustTests": {
+      "passed": 86,
+      "ignored": 2
+    },
+    "realProducerDiscovery": "passed",
+    "gitDiffCheck": "passed",
+    "rustDebugBuild": "passed"
+  },
+  "native": {
+    "debug": {
+      "provenance": {
+        "producerRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec",
+        "manifestProducer": {
+          "deployment": "Build/Output/x64/Selected",
+          "publisherSha256": "cfbe8fa0caf0c0683fa7a010067fb03dd2c50d61a5d09137123793e50e9f7f5b",
+          "publisherVersion": "1.0.0",
+          "sourceDirty": true,
+          "sourceRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec"
+        },
+        "editorBaseRevision": "70a4cf9e0dbd2c41db992148e96f9e4bb2c1288d",
+        "qualificationKind": "editor-working-tree-final-location-proof"
+      },
+      "proof": {
+        "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\nd\\environment",
+        "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\proof-debug-state",
+        "environmentId": "sha256:0a94b71069db66e1620f687dcc4e17ad0fc158813ad92af97782f5c3976a80af",
+        "tool": {
+          "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\nd\\environment\\payload\\gglab-shaderc.exe",
+          "sha256": "3ef4ffd5297777f6fe1088fb228f040e0ec95f5df57f1063b8cd312384410cb7"
+        },
+        "runtime": {
+          "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\nd\\environment\\payload\\GraphicsGadgetLab.exe",
+          "sha256": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+        },
+        "ordinaryHandshake": "compatible",
+        "previewHandshake": "compatible",
+        "profiles": [
+          1,
+          2
+        ],
+        "runtimeObservation": "loaded"
+      },
+      "runs": [
+        {
+          "backend": "dx12",
+          "profileVersion": 1,
+          "sessionId": "f05858a78d0b4a9c83fd4b20a58ab5b2",
+          "publicationId": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+          "runtimeIdentity": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "sessionId": "bbb724c49494463cb82b4f090df6f6d7",
+          "publicationId": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+          "runtimeIdentity": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "sessionId": "98a30117c7274ef1ac79162787b57482",
+          "publicationId": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+          "runtimeIdentity": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "sessionId": "9a2f8bb324604691a34f6555f7f0c4df",
+          "publicationId": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+          "runtimeIdentity": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+        }
+      ],
+      "regressions": [
+        {
+          "backend": "dx12",
+          "profileVersion": 1,
+          "sessionId": "42de87f1369a4c329888343b674fd414",
+          "failedAttemptExitCode": 4,
+          "retainedPublication": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+          "recoveredPublication": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50"
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "sessionId": "7c8c8e3cae104532bda89c61168e365a",
+          "failedAttemptExitCode": 4,
+          "retainedPublication": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+          "recoveredPublication": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8"
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "sessionId": "5281bba8f0e649e19c4d34d72b461790",
+          "failedAttemptExitCode": 4,
+          "retainedPublication": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+          "recoveredPublication": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9"
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "sessionId": "f98c9348dd7a44e8b18b0c45c17e4e0e",
+          "failedAttemptExitCode": 4,
+          "retainedPublication": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+          "recoveredPublication": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896"
+        }
+      ],
+      "runtimeLogChecks": [
+        {
+          "sessionId": "f05858a78d0b4a9c83fd4b20a58ab5b2",
+          "backend": "dx12",
+          "profileVersion": 1,
+          "validation": "not-applicable",
+          "warningOrErrorLogLines": []
+        },
+        {
+          "sessionId": "bbb724c49494463cb82b4f090df6f6d7",
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "validation": "enabled",
+          "warningOrErrorLogLines": []
+        },
+        {
+          "sessionId": "98a30117c7274ef1ac79162787b57482",
+          "backend": "dx12",
+          "profileVersion": 2,
+          "validation": "not-applicable",
+          "warningOrErrorLogLines": []
+        },
+        {
+          "sessionId": "9a2f8bb324604691a34f6555f7f0c4df",
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "validation": "enabled",
+          "warningOrErrorLogLines": []
+        },
+        {
+          "sessionId": "42de87f1369a4c329888343b674fd414",
+          "backend": "dx12",
+          "profileVersion": 1,
+          "validation": "not-applicable",
+          "warningOrErrorLogLines": []
+        },
+        {
+          "sessionId": "7c8c8e3cae104532bda89c61168e365a",
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "validation": "enabled",
+          "warningOrErrorLogLines": []
+        },
+        {
+          "sessionId": "5281bba8f0e649e19c4d34d72b461790",
+          "backend": "dx12",
+          "profileVersion": 2,
+          "validation": "not-applicable",
+          "warningOrErrorLogLines": []
+        },
+        {
+          "sessionId": "f98c9348dd7a44e8b18b0c45c17e4e0e",
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "validation": "enabled",
+          "warningOrErrorLogLines": []
+        }
+      ]
+    },
+    "release": {
+      "provenance": {
+        "producerRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec",
+        "manifestProducer": {
+          "deployment": "Build/Output/x64/Selected",
+          "publisherSha256": "cfbe8fa0caf0c0683fa7a010067fb03dd2c50d61a5d09137123793e50e9f7f5b",
+          "publisherVersion": "1.0.0",
+          "sourceDirty": true,
+          "sourceRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec"
+        },
+        "editorBaseRevision": "70a4cf9e0dbd2c41db992148e96f9e4bb2c1288d",
+        "qualificationKind": "editor-working-tree-final-location-proof"
+      },
+      "proof": {
+        "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\nr\\environment",
+        "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\proof-release-state",
+        "environmentId": "sha256:d626e00a120077598e8a6acce8090e5f16211042c246dd7312c2148673155677",
+        "tool": {
+          "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\nr\\environment\\payload\\gglab-shaderc.exe",
+          "sha256": "421926487ee7290be858077eadc295348d403644856e1ebd56af4840fc2e36e5"
+        },
+        "runtime": {
+          "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\nr\\environment\\payload\\GraphicsGadgetLab.exe",
+          "sha256": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175"
+        },
+        "ordinaryHandshake": "compatible",
+        "previewHandshake": "compatible",
+        "profiles": [
+          1,
+          2
+        ],
+        "runtimeObservation": "loaded"
+      },
+      "runs": [
+        {
+          "backend": "dx12",
+          "profileVersion": 1,
+          "sessionId": "c2b9f81a25bd4e9182ab4ea552b47027",
+          "publicationId": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+          "runtimeIdentity": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175"
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "sessionId": "92e4a6f865a14f7bb1762a6dbcf2b61d",
+          "publicationId": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+          "runtimeIdentity": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175"
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "sessionId": "d533502ad1374299b87a9d3d048a6d53",
+          "publicationId": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+          "runtimeIdentity": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175"
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "sessionId": "1e606541f3fc4780a47e40d7cafc2878",
+          "publicationId": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+          "runtimeIdentity": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175"
+        }
+      ],
+      "regressions": [
+        {
+          "backend": "dx12",
+          "profileVersion": 1,
+          "sessionId": "a074df36c0ab4ba9b8831109ae1c89a7",
+          "failedAttemptExitCode": 4,
+          "retainedPublication": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+          "recoveredPublication": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50"
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "sessionId": "e48143a4b2494c4089e0e9d850ac006d",
+          "failedAttemptExitCode": 4,
+          "retainedPublication": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+          "recoveredPublication": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8"
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "sessionId": "edb7ef896f584e4585c21084b6bd1c4a",
+          "failedAttemptExitCode": 4,
+          "retainedPublication": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+          "recoveredPublication": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9"
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "sessionId": "7015eeaccdfc45989e821651a37244bc",
+          "failedAttemptExitCode": 4,
+          "retainedPublication": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+          "recoveredPublication": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896"
+        }
+      ],
+      "runtimeLogChecks": [
+        {
+          "sessionId": "c2b9f81a25bd4e9182ab4ea552b47027",
+          "backend": "dx12",
+          "profileVersion": 1,
+          "validation": "not-applicable",
+          "warningOrErrorLogLines": []
+        },
+        {
+          "sessionId": "92e4a6f865a14f7bb1762a6dbcf2b61d",
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "validation": "disabled",
+          "warningOrErrorLogLines": []
+        },
+        {
+          "sessionId": "d533502ad1374299b87a9d3d048a6d53",
+          "backend": "dx12",
+          "profileVersion": 2,
+          "validation": "not-applicable",
+          "warningOrErrorLogLines": []
+        },
+        {
+          "sessionId": "1e606541f3fc4780a47e40d7cafc2878",
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "validation": "disabled",
+          "warningOrErrorLogLines": []
+        },
+        {
+          "sessionId": "a074df36c0ab4ba9b8831109ae1c89a7",
+          "backend": "dx12",
+          "profileVersion": 1,
+          "validation": "not-applicable",
+          "warningOrErrorLogLines": []
+        },
+        {
+          "sessionId": "e48143a4b2494c4089e0e9d850ac006d",
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "validation": "disabled",
+          "warningOrErrorLogLines": []
+        },
+        {
+          "sessionId": "edb7ef896f584e4585c21084b6bd1c4a",
+          "backend": "dx12",
+          "profileVersion": 2,
+          "validation": "not-applicable",
+          "warningOrErrorLogLines": []
+        },
+        {
+          "sessionId": "7015eeaccdfc45989e821651a37244bc",
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "validation": "disabled",
+          "warningOrErrorLogLines": []
+        }
+      ]
+    }
+  },
+  "limits": [
+    "Editor changes are uncommitted; this is not a clean Editor revision replay.",
+    "No fresh C++ build or producer regression suite was run in this increment.",
+    "Published closures are retained prior-replay outputs; manifest sourceDirty remains true for their temporary source mirror.",
+    "No new source-isolation, syscall-tracing, live WebView/dialog, installer or screenshot/first-frame capture evidence.",
+    "Runtime Loaded observations are binary protocol evidence, not a visual inspection."
+  ]
+}

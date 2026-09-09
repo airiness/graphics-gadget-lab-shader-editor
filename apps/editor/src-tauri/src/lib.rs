@@ -25,6 +25,7 @@
 mod document_io;
 mod environment_io;
 mod environment_storage;
+mod environment_execution;
 mod shader_tool;
 mod workspace_io;
 
@@ -43,6 +44,7 @@ use workspace_io::{
 
 struct EnvironmentShared(Arc<environment_io::EnvironmentService>);
 struct EnvironmentStorageShared(Arc<environment_storage::EnvironmentStorageService>);
+struct EnvironmentExecutionShared(Arc<environment_execution::EnvironmentExecutionService>);
 
 struct ServiceShared(Arc<ShaderToolService>);
 struct DocumentFileShared(Arc<DocumentFileService>);
@@ -394,6 +396,26 @@ fn shader_preview_stop_runtime(
 }
 
 /// Selection is the only path admission surface; subsequent calls carry opaque IDs.
+#[tauri::command(rename = "shader-environment-open-execution")]
+async fn shader_environment_open_execution(
+    state: tauri::State<'_, EnvironmentExecutionShared>, storage: tauri::State<'_, EnvironmentStorageShared>, tools: tauri::State<'_, ServiceShared>,
+    environment_directory_id: String, state_directory_id: String,
+) -> Result<environment_execution::Admission, environment_io::EnvironmentHostError> {
+    let service = state.0.clone(); let storage = storage.0.clone(); let tools = tools.0.clone();
+    tauri::async_runtime::spawn_blocking(move || service.open(&storage, &tools, &environment_directory_id, &state_directory_id)).await.map_err(|e| environment_io::error("host-task-failed", e))?
+}
+#[tauri::command(rename = "shader-environment-execute")]
+async fn shader_environment_execute(state: tauri::State<'_, EnvironmentExecutionShared>, execution_id: String, operation: environment_execution::Operation) -> Result<serde_json::Value, environment_io::EnvironmentHostError> {
+    let service = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || service.execute(&execution_id, operation)).await.map_err(|e| environment_io::error("host-task-failed", e))?
+}
+#[tauri::command(rename = "shader-environment-cancel-execution")]
+fn shader_environment_cancel_execution(state: tauri::State<'_, EnvironmentExecutionShared>, execution_id: String) -> Result<(), environment_io::EnvironmentHostError> { state.0.cancel(&execution_id) }
+#[tauri::command(rename = "shader-environment-close-execution")]
+async fn shader_environment_close_execution(state: tauri::State<'_, EnvironmentExecutionShared>, execution_id: String) -> Result<(), environment_io::EnvironmentHostError> {
+    let service = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || service.close(&execution_id)).await.map_err(|e| environment_io::error("host-task-failed", e))?
+}
 #[tauri::command(rename = "shader-environment-choose-directory")]
 async fn shader_environment_choose_directory(
     app: tauri::AppHandle,
@@ -497,9 +519,14 @@ pub fn run() {
         .manage(ServiceShared(Arc::new(ShaderToolService::production())))
         .manage(EnvironmentShared(Arc::new(environment_io::EnvironmentService::new())))
         .manage(EnvironmentStorageShared(Arc::new(environment_storage::EnvironmentStorageService::default())))
+        .manage(EnvironmentExecutionShared(Arc::new(environment_execution::EnvironmentExecutionService::default())))
         .manage(DocumentFileShared(document_files))
         .manage(WorkspaceFileShared(workspace_files))
         .invoke_handler(tauri::generate_handler![
+            shader_environment_open_execution,
+            shader_environment_execute,
+            shader_environment_cancel_execution,
+            shader_environment_close_execution,
             shader_environment_choose_directory,
             shader_environment_observe_directory,
             shader_environment_registry_scan,

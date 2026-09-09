@@ -88,8 +88,9 @@ are refused for explicit reselection, not silently rebound to proof.
 ## Remaining integration
 
 Production import remains disabled for implementation reasons, not missing
-owner approval. The next work connects exact executable/profile/Runtime proof,
-formal writable-state routing, guarded publish/init-state and lost-finalization
+owner approval. Exact executable/profile/Runtime proof and formal writable-state
+routing are now implemented in [environment-final-proof.md](environment-final-proof.md).
+The next work connects guarded publish/init-state and lost-finalization
 reconciliation, then Workspace activation through PreviewCoordinator. Neither
 the native internal storage insert nor injected test proof enables production
 registration. Main production code and its pinned bootstrap bytes are unchanged.

@@ -21,6 +21,16 @@ use std::path::{Path, PathBuf};
 #[derive(Clone)]
 pub struct ToolchainRoots {
     private: PathBuf,
+    pub(crate) environment: Option<EnvironmentRoots>,
+}
+
+/// Host-selected, validated v1 execution locations. Never deserialized from IPC.
+#[derive(Clone)]
+pub(crate) struct EnvironmentRoots {
+    pub source: PathBuf,
+    pub state: PathBuf,
+    pub runtime_identity: String,
+    pub vulkan_layers: PathBuf,
 }
 
 impl ToolchainRoots {
@@ -31,13 +41,17 @@ impl ToolchainRoots {
             .join("io.gglab")
             .join("shadergraph")
             .join("toolchain-service");
-        Self { private }
+        Self { private, environment: None }
     }
 
     /// A private area under a caller-chosen root — the test seam; same
     /// layout, no host-environment assumptions.
     pub fn under(root: PathBuf) -> Self {
-        Self { private: root.join("toolchain-service") }
+        Self { private: root.join("toolchain-service"), environment: None }
+    }
+
+    pub(crate) fn for_environment(environment: EnvironmentRoots, nonce: &str) -> Self {
+        Self { private: environment.state.join("Generated").join(nonce), environment: Some(environment) }
     }
 
     /// The full private area; every service-owned location derives from it.
@@ -53,11 +67,13 @@ impl ToolchainRoots {
     /// The tool's shared cache root — shared BY DESIGN (the tool's own
     /// cache), service-owned (its private area).
     pub fn cache_root(&self) -> PathBuf {
+        if let Some(e) = &self.environment { return e.state.join("ShaderCache"); }
         self.private.join("cache")
     }
 
     /// The per-attempt artifact publication area.
     pub fn attempt_artifacts(&self, sequence: u64) -> PathBuf {
+        if let Some(e) = &self.environment { return e.state.join("ShaderArtifacts"); }
         self.private.join("artifacts").join(sequence.to_string())
     }
 
@@ -73,7 +89,10 @@ impl ToolchainRoots {
         let dir = self.attempt_staging(sequence);
         std::fs::create_dir_all(&dir)?;
         let path = dir.join(format!("{source_identity}.hlsl"));
-        std::fs::write(&path, source)?;
+        if self.environment.is_some() {
+            use std::io::Write;
+            std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?.write_all(source)?;
+        } else { std::fs::write(&path, source)?; }
         Ok(path)
     }
 
@@ -81,6 +100,7 @@ impl ToolchainRoots {
     /// DELIBERATELY kept — it is the attempt's evidence — and the shared
     /// cache root is the tool's own to manage.
     pub fn clean_attempt_staging(&self, sequence: u64) {
+        if self.environment.is_some() { return; } // Retain Environment attempt evidence; no user-state cleanup policy.
         let _ = std::fs::remove_dir_all(self.attempt_staging(sequence));
     }
 }
@@ -104,6 +124,22 @@ fn host_data_directory() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn environment_staging_is_create_only_and_retained_under_writable_state() {
+        let root = std::env::temp_dir().join(format!("gglab-environment-staging-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let state = root.join("state");
+        let roots = ToolchainRoots::for_environment(EnvironmentRoots { source: root.join("immutable/Shaders"), state: state.clone(), runtime_identity: "a".repeat(64), vulkan_layers: root.join("immutable/VulkanLayers") }, "unique");
+        let source = roots.write_attempt_source(1, "aa", b"original").unwrap();
+        assert!(source.starts_with(state.join("Generated")));
+        assert_eq!(roots.cache_root(), state.join("ShaderCache"));
+        assert_eq!(roots.attempt_artifacts(1), state.join("ShaderArtifacts"));
+        assert!(roots.write_attempt_source(1, "aa", b"replacement").is_err());
+        roots.clean_attempt_staging(1);
+        assert_eq!(std::fs::read(source).unwrap(), b"original");
+        assert!(!root.join("immutable").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn per_attempt_areas_are_isolated_and_cleanable() {

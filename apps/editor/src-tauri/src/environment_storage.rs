@@ -220,6 +220,11 @@ fn inventory(root: &Path, hashes: bool) -> Result<Vec<Entry>, Error> {
     Ok(entries)
 }
 impl EnvironmentStorageService {
+    pub(crate) fn selected_path(&self, id: &str, kind: DirectoryKind) -> Result<PathBuf, Error> {
+        let selected = self.selected.lock().map_err(io)?.get(id).cloned().ok_or_else(|| error("invalid-handle", "Unknown directory"))?;
+        if selected.kind != kind { return Err(error("invalid-handle", "Wrong directory kind")); }
+        finalized_directory(&selected.path)
+    }
     pub fn open_registration(
         &self,
         registry: &RegistryStorage,
