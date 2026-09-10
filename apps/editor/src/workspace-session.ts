@@ -85,11 +85,22 @@ export interface WorkspacePreviewTargetState {
     readonly targetDocumentId: DocumentSessionId | null;
 }
 
+/** Session selection only: persisted registration and native readiness remain separate. */
+export interface WorkspaceEnvironmentSelection {
+    readonly environmentId: string;
+    readonly environmentRoot: string;
+    readonly stateRoot: string;
+    readonly activationSequence: number;
+    readonly tool: { readonly path: string; readonly sha256: string };
+    readonly runtime: { readonly path: string; readonly sha256: string };
+}
+
 export interface WorkspaceSession<
     TDocument extends WorkspaceDocumentHandle = WorkspaceDocumentHandle,
 > {
     /** Null until the host admits one directory as this Workspace's root. */
     readonly workspaceRoot: WorkspaceRootHandle | null;
+    readonly activeEnvironment: WorkspaceEnvironmentSelection | null;
     /** The complete open-document records owned by this Workspace. */
     readonly documents: readonly TDocument[];
     readonly activeDocumentId: DocumentSessionId | null;
@@ -101,6 +112,7 @@ export function createWorkspaceSession<
 >(): WorkspaceSession<TDocument> {
     return {
         workspaceRoot: null,
+        activeEnvironment: null,
         documents: [],
         activeDocumentId: null,
         preview: { targetDocumentId: null },

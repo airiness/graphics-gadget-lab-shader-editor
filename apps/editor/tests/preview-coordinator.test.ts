@@ -401,7 +401,7 @@ describe("PreviewCoordinator — commit-time CURRENT revalidation", () => {
         const world = makeWorld(
             {
                 session: {
-                    workspaceRoot: null,
+                    workspaceRoot: null, activeEnvironment: null,
                     documents: [A, B],
                     activeDocumentId: B.sessionId,
                     preview: { targetDocumentId: A.sessionId },
@@ -451,7 +451,7 @@ describe("PreviewCoordinator — commit-time CURRENT revalidation", () => {
         const world = makeWorld(
             {
                 session: {
-                    workspaceRoot: null,
+                    workspaceRoot: null, activeEnvironment: null,
                     documents: [A, C],
                     activeDocumentId: C.sessionId,
                     preview: { targetDocumentId: A.sessionId },
@@ -484,7 +484,7 @@ describe("PreviewCoordinator — commit-time CURRENT revalidation", () => {
         const world = makeWorld(
             {
                 session: {
-                    workspaceRoot: null,
+                    workspaceRoot: null, activeEnvironment: null,
                     documents: [A, B],
                     activeDocumentId: B.sessionId,
                     preview: { targetDocumentId: A.sessionId },
@@ -506,7 +506,7 @@ describe("PreviewCoordinator — commit-time CURRENT revalidation", () => {
         const world = makeWorld(
             {
                 session: {
-                    workspaceRoot: null,
+                    workspaceRoot: null, activeEnvironment: null,
                     documents: [A, B],
                     activeDocumentId: B.sessionId,
                     preview: { targetDocumentId: B.sessionId },
@@ -544,7 +544,7 @@ describe("PreviewCoordinator — commit-time CURRENT revalidation", () => {
         const world = makeWorld(
             {
                 session: {
-                    workspaceRoot: null,
+                    workspaceRoot: null, activeEnvironment: null,
                     documents: [A, B, C],
                     activeDocumentId: C.sessionId,
                     preview: { targetDocumentId: A.sessionId },
@@ -603,7 +603,7 @@ describe("PreviewCoordinator — target-close transition", () => {
         const world = makeWorld(
             {
                 session: {
-                    workspaceRoot: null,
+                    workspaceRoot: null, activeEnvironment: null,
                     documents: [A, B],
                     activeDocumentId: B.sessionId,
                     preview: { targetDocumentId: A.sessionId },
@@ -633,7 +633,7 @@ describe("PreviewCoordinator — target-close transition", () => {
         const world = makeWorld(
             {
                 session: {
-                    workspaceRoot: null,
+                    workspaceRoot: null, activeEnvironment: null,
                     documents: [A, B],
                     activeDocumentId: B.sessionId,
                     preview: { targetDocumentId: A.sessionId },
@@ -665,7 +665,7 @@ describe("PreviewCoordinator — target-close transition", () => {
         const world = makeWorld(
             {
                 session: {
-                    workspaceRoot: null,
+                    workspaceRoot: null, activeEnvironment: null,
                     documents: [A, B],
                     activeDocumentId: B.sessionId,
                     preview: { targetDocumentId: A.sessionId },
@@ -691,7 +691,7 @@ describe("PreviewCoordinator — target-close transition", () => {
         const world = makeWorld(
             {
                 session: {
-                    workspaceRoot: null,
+                    workspaceRoot: null, activeEnvironment: null,
                     documents: [A],
                     activeDocumentId: A.sessionId,
                     preview: { targetDocumentId: A.sessionId },
@@ -721,7 +721,7 @@ describe("PreviewCoordinator — target-close transition", () => {
         const world = makeWorld(
             {
                 session: {
-                    workspaceRoot: null,
+                    workspaceRoot: null, activeEnvironment: null,
                     documents: [A, B],
                     activeDocumentId: B.sessionId,
                     preview: { targetDocumentId: A.sessionId },
@@ -772,7 +772,7 @@ describe("PreviewCoordinator — build / transition mutual exclusion", () => {
         const world = makeWorld(
             {
                 session: {
-                    workspaceRoot: null,
+                    workspaceRoot: null, activeEnvironment: null,
                     documents: [A, B],
                     activeDocumentId: B.sessionId,
                     preview: { targetDocumentId: A.sessionId },
@@ -811,7 +811,7 @@ describe("PreviewCoordinator — build / transition mutual exclusion", () => {
         const world = makeWorld(
             {
                 session: {
-                    workspaceRoot: null,
+                    workspaceRoot: null, activeEnvironment: null,
                     documents: [A, B],
                     activeDocumentId: B.sessionId,
                     preview: { targetDocumentId: A.sessionId },
@@ -844,7 +844,7 @@ describe("PreviewCoordinator — build / transition mutual exclusion", () => {
         const world = makeWorld(
             {
                 session: {
-                    workspaceRoot: null,
+                    workspaceRoot: null, activeEnvironment: null,
                     documents: [A, B],
                     activeDocumentId: B.sessionId,
                     preview: { targetDocumentId: A.sessionId },
@@ -900,7 +900,7 @@ describe("PreviewCoordinator — proven no Runtime (no host) still commits Works
 
     const twoDocs = (targetDoc: DocumentSession, otherDoc: DocumentSession) => ({
         session: {
-            workspaceRoot: null,
+            workspaceRoot: null, activeEnvironment: null,
             documents: [targetDoc, otherDoc],
             activeDocumentId: otherDoc.sessionId,
             preview: { targetDocumentId: targetDoc.sessionId },
@@ -938,7 +938,7 @@ describe("PreviewCoordinator — proven no Runtime (no host) still commits Works
     it("is a STRUCTURAL refusal for the build and the gate (preview-host-unavailable), and a neutral projection", async () => {
         const A = docSession("A", V1_GRAPH);
         const { coordinator } = hostless({
-            session: { workspaceRoot: null, documents: [A], activeDocumentId: A.sessionId, preview: { targetDocumentId: A.sessionId } },
+            session: { workspaceRoot: null, activeEnvironment: null, documents: [A], activeDocumentId: A.sessionId, preview: { targetDocumentId: A.sessionId } },
             profileDescriptor: D1,
         });
 
@@ -962,7 +962,7 @@ describe("PreviewCoordinator — gate composition and safety-state transitions",
         const world = makeWorld(
             {
                 session: {
-                    workspaceRoot: null,
+                    workspaceRoot: null, activeEnvironment: null,
                     documents: [A],
                     activeDocumentId: A.sessionId,
                     preview: { targetDocumentId: A.sessionId },
@@ -989,7 +989,7 @@ describe("PreviewCoordinator — gate composition and safety-state transitions",
         const world = makeWorld(
             {
                 session: {
-                    workspaceRoot: null,
+                    workspaceRoot: null, activeEnvironment: null,
                     documents: [A],
                     activeDocumentId: A.sessionId,
                     preview: { targetDocumentId: A.sessionId },
@@ -1013,7 +1013,7 @@ describe("PreviewCoordinator — gate composition and safety-state transitions",
         const world = makeWorld(
             {
                 session: {
-                    workspaceRoot: null,
+                    workspaceRoot: null, activeEnvironment: null,
                     documents: [A, B],
                     activeDocumentId: B.sessionId,
                     preview: { targetDocumentId: A.sessionId },
@@ -1041,7 +1041,7 @@ describe("PreviewCoordinator — gate composition and safety-state transitions",
         const world = makeWorld(
             {
                 session: {
-                    workspaceRoot: null,
+                    workspaceRoot: null, activeEnvironment: null,
                     documents: [A],
                     activeDocumentId: A.sessionId,
                     preview: { targetDocumentId: A.sessionId },

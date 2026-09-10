@@ -30,6 +30,7 @@
  *
  * A retarget transition itself never auto-launches a Runtime.
  */
+import { consumeEnvironmentActivation, type PreparedEnvironmentActivation } from "./environment-activation-host.js";
 import {
     checkProfileDescriptorCompatibility,
     emitHlsl,
@@ -87,18 +88,19 @@ export function hasExplicitPreviewTarget(
     return workspace.preview.targetDocumentId !== null;
 }
 
-export type PreviewTransitionKind = "retarget" | "close-target";
+export type PreviewTransitionKind = "retarget" | "close-target" | "environment";
 
 /** Identity of one ownership transition (evidence / display only — the
  * sequence is NOT a latest-intent-wins protocol; transitions are not
  * queued or superseded). */
 export interface PreviewTransitionIdentity {
     readonly kind: PreviewTransitionKind;
-    readonly targetDocumentId: DocumentSession["sessionId"];
+    readonly targetDocumentId: DocumentSession["sessionId"] | null;
     readonly sequence: number;
 }
 
 export type PreviewTransitionRefusal =
+    | { readonly reason: "environment-activation-refused"; readonly detail: string }
     | { readonly reason: "transition-in-flight"; readonly inFlight: PreviewTransitionIdentity }
     | { readonly reason: "build-in-flight" }
     | { readonly reason: "target-not-open"; readonly targetDocumentId: DocumentSession["sessionId"] }
@@ -115,6 +117,7 @@ export type PreviewTransitionResult =
 /** One human-facing note for a structured transition refusal. */
 export function describeTransitionRefusal(refusal: PreviewTransitionRefusal): string {
     switch (refusal.reason) {
+        case "environment-activation-refused": return refusal.detail;
         case "transition-in-flight":
             return `another Preview transition (#${refusal.inFlight.sequence}) is in flight — transitions are not queued; retry once it settles`;
         case "build-in-flight":
@@ -187,6 +190,11 @@ export class PreviewCoordinator {
         return this.flowSource();
     }
 
+    /** Ownership admission only; this is not native compatibility or build readiness. */
+    get legacyHostAdmitted(): boolean {
+        return this.inFlight === null && this.store.getSnapshot().session.activeEnvironment === null;
+    }
+
     /** Build / Runtime gate composition. The STRUCTURAL refusals come
      * FIRST, before any host or tool fact:
      *   1) a transition owns the single-flight slot -> preview-transition-in-flight
@@ -206,7 +214,7 @@ export class PreviewCoordinator {
             return { admitted: false, reasons: [{ reason: "preview-transition-in-flight" }], request: null, eligibility: null };
         }
         const flow = this.flow;
-        if (flow === null) {
+        if (flow === null || this.store.getSnapshot().session.activeEnvironment !== null) {
             return { admitted: false, reasons: [{ reason: "preview-host-unavailable" }], request: null, eligibility: null };
         }
         const refusal = this.attachedRuntimeRefusal(flow);
@@ -280,7 +288,7 @@ export class PreviewCoordinator {
      * Ready/current for a build line we cannot actually admit. */
     runtimeProjection(input: PreviewCompositionInput): PreviewRuntimeProjection {
         const flow = this.flow;
-        if (flow === null || this.inFlight !== null) {
+        if (flow === null || this.inFlight !== null || this.store.getSnapshot().session.activeEnvironment !== null) {
             return {
                 freshness: "idle",
                 latestBuildState: null,
@@ -291,6 +299,42 @@ export class PreviewCoordinator {
             };
         }
         return flow.runtimeProjection(input, (candidate) => this.gate(candidate));
+    }
+
+    /** Prepare under the same transition lease, then join the old Runtime before
+     * one synchronous commit. Import/registry success alone never changes selection. */
+    async activateEnvironment(
+        prepare: () => Promise<PreparedEnvironmentActivation>,
+        cancelled: () => boolean = () => false,
+    ): Promise<PreviewTransitionResult> {
+        if (this.inFlight !== null) return { ok: false, refusal: { reason: "transition-in-flight", inFlight: this.inFlight } };
+        if (this.flow?.buildInFlight) return { ok: false, refusal: { reason: "build-in-flight" } };
+        const initial = this.store.getSnapshot().session;
+        const identity: PreviewTransitionIdentity = { kind: "environment", targetDocumentId: initial.preview.targetDocumentId, sequence: ++this.sequence };
+        const refused = (detail: string): PreviewTransitionResult => ({ ok: false, refusal: { reason: "environment-activation-refused", detail } });
+        const stillOwned = () => {
+            const current = this.store.getSnapshot().session;
+            return current.workspaceRoot?.canonicalWorkspaceUri === initial.workspaceRoot?.canonicalWorkspaceUri && current.activeEnvironment === initial.activeEnvironment;
+        };
+        this.inFlight = identity;
+        try {
+            if (cancelled()) return refused("Environment activation cancelled");
+            let candidate: ReturnType<typeof consumeEnvironmentActivation>;
+            try { candidate = consumeEnvironmentActivation(await prepare()); }
+            catch (error) { return refused(error instanceof Error ? error.message : String(error)); }
+            if (cancelled() || !stillOwned()) return refused("Environment activation cancelled or Workspace changed during preparation");
+            if (this.flow?.buildInFlight) return { ok: false, refusal: { reason: "build-in-flight" } };
+            const teardown = await this.teardownProof(); // Last await before the atomic selection commit.
+            if (teardown !== null) return teardown;
+            return this.store.apply<PreviewTransitionResult>(state => {
+                if (cancelled() || !stillOwned()) return { next: state, result: refused("Environment activation cancelled or Workspace changed during teardown") };
+                const activeEnvironment = Object.freeze({ ...candidate, activationSequence: identity.sequence });
+                // Preserve current edits, history, selection and tab/Preview target identities.
+                // Descriptor/emission facts from the previous Environment cannot become current.
+                const documents = state.session.documents.map(document => ({ ...document, presentation: { ...document.presentation, emission: null, focus: null } }));
+                return { next: { ...state, profileDescriptor: null, session: { ...state.session, documents, activeEnvironment } }, result: { ok: true, identity, targetChanged: false } };
+            });
+        } finally { this.release(identity); }
     }
 
     /** `retargetTo(targetDocumentId)` — the ONLY path that moves the

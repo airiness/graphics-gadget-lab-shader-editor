@@ -61,3 +61,6 @@ execution. The 90/91-unit and supplementary-Unicode boundary tests are unit test
 not native evidence at those exact path lengths. A transient CLI Windows rename
 `EPERM` disappeared when the unchanged complete test suite was rerun. Existing
 web build and Rust fixture warnings remain. Main was neither modified nor rebuilt.
+
+The next ownership transaction is implemented in
+[Workspace Environment activation](environment-workspace-activation.md).

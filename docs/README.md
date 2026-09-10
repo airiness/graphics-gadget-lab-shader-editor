@@ -78,6 +78,9 @@ below), not this one.
 - [Managed Environment state paths](environment-managed-state.md) documents compact
   state allocation, legacy intent recovery and the Windows host path limit.
 
+- [Workspace Environment activation](environment-workspace-activation.md) documents
+  the coordinator-owned selection transaction and remaining native host binding.
+
 ## Documents owned by other repositories (referenced, not copied)
 
 GGLab docs repository:

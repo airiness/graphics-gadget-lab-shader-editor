@@ -170,7 +170,7 @@ describe("WorkspaceStore — the synchronous authoring-store authority", () => {
     it("projects the Workspace authoring state shape (session + the single descriptor fact)", () => {
         const state: WorkspaceAuthoringState = {
             session: {
-                workspaceRoot: null,
+                workspaceRoot: null, activeEnvironment: null,
                 documents: [],
                 activeDocumentId: null,
                 preview: { targetDocumentId: null },
@@ -225,7 +225,7 @@ function twoDocumentState(): WorkspaceAuthoringState {
     const B = sessionWith("B", EMISSION_B_D1); // the active tab
     return {
         session: {
-            workspaceRoot: null,
+            workspaceRoot: null, activeEnvironment: null,
             documents: [A, B],
             activeDocumentId: B.sessionId,
             preview: { targetDocumentId: A.sessionId },
@@ -263,7 +263,7 @@ describe("descriptorCommit — one synchronous Workspace transaction", () => {
         const single = sessionWith("A", null);
         const state: WorkspaceAuthoringState = {
             session: {
-                workspaceRoot: null,
+                workspaceRoot: null, activeEnvironment: null,
                 documents: [single],
                 activeDocumentId: single.sessionId,
                 preview: { targetDocumentId: null },

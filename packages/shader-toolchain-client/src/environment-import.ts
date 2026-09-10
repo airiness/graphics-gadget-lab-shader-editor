@@ -21,7 +21,7 @@ export interface EnvironmentImportHost {
     register(registration: EnvironmentRegistration): Promise<"registered" | "already-registered">;
 }
 export interface EnvironmentImportEvent {
-    readonly phase: "verify" | "state" | "proof" | "register" | "settled";
+    readonly phase: "verify" | "state" | "proof" | "register" | "activate" | "settled";
     readonly environmentRoot: string; readonly stateRoot: string;
     readonly diagnostic?: EnvironmentDiagnostic;
 }

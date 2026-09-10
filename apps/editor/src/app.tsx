@@ -1920,7 +1920,7 @@ export function App() {
 
     // Recompose the Workspace snapshot on every render. Owner objects retain
     // identity across settlements, so their identity is not a freshness token.
-    const problemsSnapshot = composeWorkspaceProblemSnapshot(workspace, descriptor, native.flow?.buildSession ?? null, preview.flow?.session ?? null, environmentProblems);
+    const problemsSnapshot = composeWorkspaceProblemSnapshot(workspace, descriptor, workspace.activeEnvironment === null ? native.flow?.buildSession ?? null : null, workspace.activeEnvironment === null ? preview.flow?.session ?? null : null, environmentProblems);
     const problemNavigation = (entry: ProblemSnapshotEntry) => {
         const navigation = resolveProblemNavigation(authoringStore.getSnapshot().session, entry);
         return { available: navigation.available, detail: navigation.available ? `${sessionTitle(navigation.document, isDirty(navigation.document))}: ${navigation.detail}` : navigation.reason };

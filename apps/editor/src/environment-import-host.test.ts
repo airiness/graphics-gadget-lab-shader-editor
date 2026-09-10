@@ -7,6 +7,10 @@ import { describe, expect, it } from "vitest";
 import { readEnvironmentDirectoryHandle } from "@gglab/shader-toolchain-client";
 import { environmentProducerFixtures } from "../../../tests/environment-producer.js";
 import { graph } from "../tests/environment-probe-documents.js";
+import { createEnvironmentActivationHost } from "./environment-activation-host.js";
+import { PreviewCoordinator } from "./preview-coordinator.js";
+import { WorkspaceStore, type WorkspaceAuthoringState } from "./workspace-store.js";
+import { createWorkspaceSession } from "./workspace-session.js";
 import { createEnvironmentImportHost } from "./environment-import-host.js";
 
 describe("Environment import composition", () => {
@@ -63,10 +67,21 @@ describe("Environment import composition", () => {
             const cancelled = await restarted.importSelected(env, writable, [graph(1), graph(2)], () => true);
             expect(cancelled).toMatchObject({ status: "refused", diagnostic: { code: "cancelled" } });
             expect(await restarted.snapshot()).toEqual(snapshot);
+            let activationEvidence: unknown = null;
+            if (process.env.GGLAB_ENVIRONMENT_ACTIVATION_QUALIFICATION === "1") {
+                const workspace = new WorkspaceStore<WorkspaceAuthoringState>({ session: createWorkspaceSession(), profileDescriptor: null });
+                const coordinator = new PreviewCoordinator(() => null, () => null, workspace);
+                const activation = createEnvironmentActivationHost(invoke);
+                const result = await activation.activate(coordinator, env, writable, [graph(1), graph(2)]);
+                expect(result).toMatchObject({ ok: true, identity: { kind: "environment" } });
+                expect(workspace.getSnapshot().session.activeEnvironment).toMatchObject({ environmentId: first.registration.closure.manifest.environmentId, environmentRoot: env.root, stateRoot: writable.root });
+                expect(requests).toHaveLength(12);
+                activationEvidence = { result, selection: workspace.getSnapshot().session.activeEnvironment, previousRuntime: "absent", nativeAuthoringBinding: "unavailable" };
+            }
             if (process.env.GGLAB_IMPORT_REPORT) writeFileSync(process.env.GGLAB_IMPORT_REPORT, JSON.stringify({
                 producerRevision: baseline.producerRevision,
                 editorBaseRevision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8", windowsHide: true }).trim(),
-                kind: "working-tree-import-qualification", first, retry, snapshot, phases,
+                kind: "working-tree-import-qualification", first, retry, snapshot, phases, activationEvidence,
                 nativePreviewRuns: requests.map(r => ({ targetProfile: r.targetProfile, profileVersion: r.profileVersion, sessionId: r.sessionId })),
                 failedProof: failed, cancellation: cancelled, lostAcknowledgementRecovered: true,
             }, null, 2) + "\n");

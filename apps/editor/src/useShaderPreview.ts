@@ -172,6 +172,10 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
     };
 
     const previewHandshake = useCallback(async (): Promise<void> => {
+        if (!coordinator.legacyHostAdmitted) {
+            note("refusal", "Preview handshake requires a host bound to the current Workspace Environment.");
+            return;
+        }
         if (flow === null) {
             note("refusal", "Preview handshake is unavailable: no desktop Preview host.");
             return;
@@ -189,9 +193,13 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             note("refusal", `Preview handshake failed: ${describeError(error)}`);
         }
         bump((value) => value + 1);
-    }, [flow, composition, note]);
+    }, [flow, composition, note, coordinator]);
 
     const launchPreview = useCallback(async (): Promise<void> => {
+        if (!coordinator.legacyHostAdmitted) {
+            note("refusal", "Attached Preview launch requires a host bound to the current Workspace Environment.");
+            return;
+        }
         const current = flowRef.current;
         const manager = managerRef.current;
         if (current === null || manager === null) {
@@ -221,7 +229,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             setLaunchInFlight(false);
             bump((value) => value + 1);
         }
-    }, [note]);
+    }, [note, coordinator]);
 
     const buildPreview = useCallback(async (): Promise<void> => {
         const current = flowRef.current;
@@ -343,11 +351,11 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
         gate: flow !== null ? coordinator.gate(composition) : null,
         runtime: flow !== null && managerState !== null ? managerState.state : { kind: "idle" },
         projection: flow !== null ? coordinator.runtimeProjection(composition) : null,
-        lastObservationRefresh: flow?.lastObservationRefresh ?? null,
+        lastObservationRefresh: coordinator.legacyHostAdmitted ? flow?.lastObservationRefresh ?? null : null,
         handshakeInFlight: flow?.previewHandshakeInFlight ?? false,
         buildInFlight,
         launchInFlight,
-        initialPublicationAvailable: flow?.initialPublicationAvailable ?? false,
+        initialPublicationAvailable: coordinator.legacyHostAdmitted && (flow?.initialPublicationAvailable ?? false),
         previewHandshake,
         buildPreview,
         launchPreview,
