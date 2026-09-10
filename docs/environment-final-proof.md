@@ -139,7 +139,8 @@ and the Rust conformance fixture's unused-field warning remain.
 
 Guarded publisher/init-state operations and lost-finalization recovery are now
 connected in [environment-producer-mutations.md](environment-producer-mutations.md).
-Next connect transactional registry insertion and Workspace activation through the
-existing PreviewCoordinator. This proof primitive does not yet restore Current
+Transactional registry insertion is now connected in
+[environment-import-transaction.md](environment-import-transaction.md). Next connect
+Workspace activation through the existing PreviewCoordinator. This proof primitive does not yet restore Current
 after restart or enable production import. No additional contract approval is
 requested for this increment.

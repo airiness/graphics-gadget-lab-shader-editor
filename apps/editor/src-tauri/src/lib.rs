@@ -27,6 +27,7 @@ mod environment_io;
 mod environment_process_job;
 mod environment_mutation;
 mod environment_storage;
+mod environment_registration;
 mod environment_execution;
 mod shader_tool;
 mod workspace_io;
@@ -45,6 +46,7 @@ use workspace_io::{
 };
 
 struct EnvironmentMutationShared(Arc<environment_mutation::MutationService>);
+struct EnvironmentRegistrationShared(Arc<environment_registration::RegistrationService>);
 struct EnvironmentShared(Arc<environment_io::EnvironmentService>);
 struct EnvironmentStorageShared(Arc<environment_storage::EnvironmentStorageService>);
 struct EnvironmentExecutionShared(Arc<environment_execution::EnvironmentExecutionService>);
@@ -422,6 +424,20 @@ async fn shader_environment_list_mutations(app: tauri::AppHandle, state: tauri::
 #[tauri::command(rename = "shader-environment-cancel-mutation")]
 fn shader_environment_cancel_mutation(state: tauri::State<'_, EnvironmentMutationShared>, operation_id:String) -> Result<bool, environment_io::EnvironmentHostError> { state.0.cancel(&operation_id) }
 
+#[tauri::command(rename = "shader-environment-prepare-registration")]
+async fn shader_environment_prepare_registration(state: tauri::State<'_, EnvironmentRegistrationShared>, storage: tauri::State<'_, EnvironmentStorageShared>, environment_directory_id:String, state_directory_id:String) -> Result<environment_registration::Admission, environment_io::EnvironmentHostError> {
+    let service=state.0.clone(); let storage=storage.0.clone();
+    tauri::async_runtime::spawn_blocking(move || service.prepare(&storage,&environment_directory_id,&state_directory_id)).await.map_err(|e|environment_io::error("host-task-failed",e))?
+}
+#[tauri::command(rename = "shader-environment-commit-registration")]
+async fn shader_environment_commit_registration(app:tauri::AppHandle, state:tauri::State<'_,EnvironmentRegistrationShared>, storage:tauri::State<'_,EnvironmentStorageShared>, registration_id:String) -> Result<environment_registration::Settlement,environment_io::EnvironmentHostError> {
+    let root=app.path().app_data_dir().map_err(|e|environment_io::error("io-error",e))?.join("environment-registry");
+    let service=state.0.clone(); let storage=storage.0.clone();
+    tauri::async_runtime::spawn_blocking(move ||service.commit(&storage,&environment_storage::RegistryStorage::new(root)?,&registration_id)).await.map_err(|e|environment_io::error("host-task-failed",e))?
+}
+#[tauri::command(rename = "shader-environment-discard-registration")]
+fn shader_environment_discard_registration(state:tauri::State<'_,EnvironmentRegistrationShared>,registration_id:String) -> Result<(),environment_io::EnvironmentHostError> { state.0.discard(&registration_id) }
+
 /// Selection is the only path admission surface; subsequent calls carry opaque IDs.
 #[tauri::command(rename = "shader-environment-open-execution")]
 async fn shader_environment_open_execution(
@@ -545,6 +561,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .manage(ServiceShared(Arc::new(ShaderToolService::production())))
         .manage(EnvironmentMutationShared(Arc::new(environment_mutation::MutationService::default())))
+        .manage(EnvironmentRegistrationShared(Arc::new(environment_registration::RegistrationService::default())))
         .manage(EnvironmentShared(Arc::new(environment_io::EnvironmentService::new())))
         .manage(EnvironmentStorageShared(Arc::new(environment_storage::EnvironmentStorageService::default())))
         .manage(EnvironmentExecutionShared(Arc::new(environment_execution::EnvironmentExecutionService::default())))
@@ -556,6 +573,9 @@ pub fn run() {
             shader_environment_inspect_mutation,
             shader_environment_list_mutations,
             shader_environment_cancel_mutation,
+            shader_environment_prepare_registration,
+            shader_environment_commit_registration,
+            shader_environment_discard_registration,
             shader_environment_open_execution,
             shader_environment_execute,
             shader_environment_cancel_execution,

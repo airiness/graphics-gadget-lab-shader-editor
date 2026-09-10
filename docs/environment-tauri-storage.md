@@ -46,7 +46,8 @@ Inspection does not create a missing registry. Records retain the established
 is host-internal, uses flushed private stage files and a no-replace Windows
 directory rename, and returns an existing winner for shared-core comparison.
 It requires canonical, existing, disjoint Environment/state roots. Insert has
-no WebView command: future native proof composition must invoke it internally.
+no generic WebView insert command: guarded registration admission invokes it
+internally after application proof composition.
 Abandoned pending directories and invalid records are retained and reported.
 
 Handles expire at process restart. Up to 64 selections are retained, and at most
@@ -90,10 +91,11 @@ are refused for explicit reselection, not silently rebound to proof.
 Production import remains disabled for implementation reasons, not missing
 owner approval. Exact executable/profile/Runtime proof and formal writable-state
 routing are now implemented in [environment-final-proof.md](environment-final-proof.md).
-The next work connects guarded publish/init-state and lost-finalization
-reconciliation, then Workspace activation through PreviewCoordinator. Neither
-the native internal storage insert nor injected test proof enables production
-registration. Main production code and its pinned bootstrap bytes are unchanged.
+Guarded publish/init-state and lost-finalization reconciliation are connected in
+[producer mutations](environment-producer-mutations.md); actual proof to registry
+registration is connected in [the import transaction](environment-import-transaction.md).
+Next connect Workspace activation through PreviewCoordinator. Main production
+code and its pinned bootstrap bytes are unchanged.
 
 ## Verification
 

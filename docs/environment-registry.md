@@ -4,7 +4,9 @@ Current update (2026-09-09): the owner approved the v1 baseline, and the canonic
 staging alias fix was qualified in [clean replay](environment-clean-replay.md).
 [Tauri storage integration](environment-tauri-storage.md) now supplies native
 storage/inspection and recovery composition. Actual native proof, publication,
-state initialization and activation wiring remain outstanding. The dated status
+state initialization and guarded registration are connected through
+[the import transaction](environment-import-transaction.md). Workspace activation
+remains outstanding. The dated status
 and executed-check statements below preserve this document's original increment.
 
 Status: implemented Editor-owned persistence substrate. Production Environment

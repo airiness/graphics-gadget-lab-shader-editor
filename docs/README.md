@@ -72,6 +72,9 @@ below), not this one.
   deliverables, and Editor acceptance criteria. It does not define an
   approved Environment manifest or claim that import is implemented.
 
+- [Environment import transaction](environment-import-transaction.md) connects actual
+  final proof to guarded registry registration and documents recovery boundaries.
+
 ## Documents owned by other repositories (referenced, not copied)
 
 GGLab docs repository:

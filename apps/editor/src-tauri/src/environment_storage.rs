@@ -423,8 +423,7 @@ impl RegistryStorage {
         }
         Ok(RegistryScan { entries, pending })
     }
-    /// Host-internal only: future native proof composition calls this; there is no insert IPC.
-    #[allow(dead_code)]
+    /// Host-internal only: registration admission calls this; there is no generic insert IPC.
     pub fn insert(&self, key: &str, content: &str) -> Result<(String, bool), Error> {
         if content.len() > RECORD_LIMIT {
             return Err(error("limit-exceeded", "Registry record exceeds 64 KiB"));

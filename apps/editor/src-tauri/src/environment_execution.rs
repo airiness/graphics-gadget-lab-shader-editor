@@ -179,11 +179,19 @@ mod tests {
             .unwrap();
         let tools = ShaderToolService::production();
         let execution = EnvironmentExecutionService::default();
+        let registration = crate::environment_registration::RegistrationService::default();
         for line in std::io::stdin().lock().lines() {
             let request: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
             let args = &request["args"];
             let result: Result<serde_json::Value, Error> = (|| {
                 Ok(match request["command"].as_str().unwrap() {
+                    "shader-environment-prepare-registration" => serde_json::to_value(registration.prepare(&storage, args["environmentDirectoryId"].as_str().unwrap(), args["stateDirectoryId"].as_str().unwrap())?).unwrap(),
+                    "shader-environment-discard-registration" => { registration.discard(args["registrationId"].as_str().unwrap())?; serde_json::Value::Null },
+                    "shader-environment-commit-registration" | "shader-environment-registry-scan" => {
+                        let registry = crate::environment_storage::RegistryStorage::new(PathBuf::from(std::env::var("GGLAB_REGISTRATION_ROOT").expect("Test registry root")))?;
+                        if request["command"] == "shader-environment-registry-scan" { serde_json::to_value(registry.scan()?).unwrap() }
+                        else { serde_json::to_value(registration.commit(&storage, &registry, args["registrationId"].as_str().unwrap())?).unwrap() }
+                    }
                     "selections" => serde_json::json!({"environment":environment,"state":state}),
                     "shader-environment-observe-directory" => serde_json::to_value(
                         storage.observe(args["directoryId"].as_str().unwrap())?,

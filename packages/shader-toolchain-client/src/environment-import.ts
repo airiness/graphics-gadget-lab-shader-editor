@@ -78,10 +78,10 @@ export async function prepareEnvironmentImport(host: EnvironmentImportHost, root
         return { status: "refused", diagnostic, retainedStateRoot, registrationMayHaveCommitted };
     }
 }
-/** Owner approved v1 on 2026-09-09; production proof, state and activation wiring remain incomplete. */
+/** Owner approved v1 on 2026-09-09; the Workspace import/activation flow remains incomplete. */
 export const ENVIRONMENT_IMPORT_AVAILABILITY = {
     enabled: false,
-    reason: "Environment import is not connected to final native proof and activation services yet.",
+    reason: "Environment import is not connected to the Workspace activation flow yet.",
 } as const;
 
 /** State metadata is operational binding only. The host also checks all ancestors/entries and designated directories. */
