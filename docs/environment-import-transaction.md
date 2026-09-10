@@ -116,3 +116,7 @@ Debug/Release import qualifications passed all eight backend/profile/configurati
 combinations, then repeated actual proof for duplicate import. Existing web build
 warnings and the Rust unused fixture-field warning remain. Both sibling repositories
 were clean and unchanged at handoff.
+
+The managed-path follow-up is recorded in
+[environment-managed-state.md](environment-managed-state.md). The failed long-state
+evidence above remains historical; new allocation uses a compact layout.

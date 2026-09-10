@@ -10,6 +10,11 @@ function fixture() {
     return { intent, host, observed, closure };
 }
 describe("producer mutation reconciliation (synthetic integrity evidence only)", () => {
+    it("reads legacy and compact-layout intents and refuses unknown versions", () => {
+        const f = fixture();
+        for (const intentVersion of [1, 2]) expect(readEnvironmentMutationIntent({ ...f.intent, intentVersion }).intentVersion).toBe(intentVersion);
+        expect(() => readEnvironmentMutationIntent({ ...f.intent, intentVersion: 3 })).toThrow();
+    });
     it("recovers finalization from lost stdout only by independent closure verification", async () => {
         const f = fixture(); const result = await settleEnvironmentMutation(f.intent, f.host, () => false);
         expect(result.status).toBe("integrity-verified"); if (result.status === "integrity-verified") { expect(result.recovered).toBe(true); expect(result.nativeReadiness).toBe("unproven"); }
@@ -50,6 +55,6 @@ describe("producer mutation reconciliation (synthetic integrity evidence only)",
     });
     it("strictly rejects versions, extra fields and unsafe locators", () => {
         const { intent } = fixture();
-        for (const bad of [{ ...intent, intentVersion: 2 }, { ...intent, args: [] }, { ...intent, candidate: { ...intent.candidate, deployment: "../escape" } }]) expect(() => readEnvironmentMutationIntent(bad)).toThrow();
+        for (const bad of [{ ...intent, intentVersion: 3 }, { ...intent, args: [] }, { ...intent, candidate: { ...intent.candidate, deployment: "../escape" } }]) expect(() => readEnvironmentMutationIntent(bad)).toThrow();
     });
 });

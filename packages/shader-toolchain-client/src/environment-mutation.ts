@@ -5,7 +5,7 @@ import { utf8Decode } from "./utf8.js";
 import type { EnvironmentStateBinding, VerifiedEnvironmentClosure } from "./environment-import.js";
 
 export interface EnvironmentMutationIntent {
-    readonly intentVersion: 1; readonly operationId: string; readonly operation: "publish" | "init-state";
+    readonly intentVersion: 1 | 2; readonly operationId: string; readonly operation: "publish" | "init-state";
     readonly repositoryRoot: string; readonly publisherSha256: string; readonly candidate: EnvironmentCandidate | null;
     readonly environmentRoot: string | null; readonly environmentId: string | null; readonly targetRoot: string;
 }
@@ -14,7 +14,7 @@ export function readEnvironmentMutationId(raw: unknown): string {
 }
 export function readEnvironmentMutationIntent(raw: unknown): EnvironmentMutationIntent {
     const r = environmentExact(raw, ["intentVersion", "operationId", "operation", "repositoryRoot", "publisherSha256", "candidate", "environmentRoot", "environmentId", "targetRoot"]);
-    environmentRequire(r.intentVersion === 1, "unsupported-version", "Unsupported operation intent version"); readEnvironmentMutationId(r.operationId);
+    environmentRequire(r.intentVersion === 1 || r.intentVersion === 2, "unsupported-version", "Unsupported operation intent version"); readEnvironmentMutationId(r.operationId);
     environmentAbsolutePath(r.repositoryRoot); environmentAbsolutePath(r.targetRoot);
     environmentRequire(isEnvironmentHash(r.publisherSha256), "invalid-shape", "Invalid publisher identity");
     if (r.operation === "publish") {

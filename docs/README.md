@@ -75,6 +75,9 @@ below), not this one.
 - [Environment import transaction](environment-import-transaction.md) connects actual
   final proof to guarded registry registration and documents recovery boundaries.
 
+- [Managed Environment state paths](environment-managed-state.md) documents compact
+  state allocation, legacy intent recovery and the Windows host path limit.
+
 ## Documents owned by other repositories (referenced, not copied)
 
 GGLab docs repository:

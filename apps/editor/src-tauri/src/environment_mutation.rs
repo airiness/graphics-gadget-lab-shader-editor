@@ -128,13 +128,24 @@ fn journal(root: &Path, key: &str) -> PathBuf {
     root.join("environment-operations")
         .join(format!("{key}.json"))
 }
+// A reversible base-36 spelling of the full operation ID, not a truncated identity.
+fn compact_id(key: &str) -> String {
+    let mut value = u128::from_str_radix(key, 16).expect("validated operation ID");
+    let mut digits = Vec::new();
+    loop {
+        digits.push(b"0123456789abcdefghijklmnopqrstuvwxyz"[(value % 36) as usize]);
+        value /= 36;
+        if value == 0 { break; }
+    }
+    digits.reverse(); String::from_utf8(digits).unwrap()
+}
 fn destination(root: &Path, key: &str, operation: &str) -> PathBuf {
-    root.join(if operation == "publish" {
-        "environments"
-    } else {
-        "environment-state"
-    })
-    .join(key)
+    if operation == "publish" { root.join("environments").join(key) }
+    else { root.join("s").join(compact_id(key)) }
+}
+fn saved_destination(root: &Path, key: &str, operation: &str, version: u32) -> PathBuf {
+    if version == 1 && operation == "init-state" { root.join("environment-state").join(key) }
+    else { destination(root, key, operation) }
 }
 fn load(root: &Path, key: &str) -> Result<Intent, Error> {
     id(key)?;
@@ -145,10 +156,10 @@ fn load(root: &Path, key: &str) -> Result<Intent, Error> {
     let (_guard, _) = crate::shader_tool::provenance::observe_and_hold(&path.to_string_lossy())
         .map_err(|e| error("source-changed", format!("{e:?}")))?;
     let intent: Intent = serde_json::from_slice(&std::fs::read(path).map_err(io)?).map_err(io)?;
-    if intent.intent_version != 1
+    if ![1, 2].contains(&intent.intent_version)
         || intent.operation_id != key
         || !["publish", "init-state"].contains(&intent.operation.as_str())
-        || intent.target_root != destination(root, key, &intent.operation)
+        || intent.target_root != saved_destination(root, key, &intent.operation, intent.intent_version)
         || !hash(&intent.publisher_sha256)
     {
         return Err(error("invalid-shape", "Invalid saved operation intent"));
@@ -222,6 +233,7 @@ impl MutationService {
             self.sequence.fetch_add(1, Ordering::SeqCst)
         );
         let target_root = destination(&root, &key, operation);
+        if operation == "init-state" { crate::environment_execution::validate_state_path(&target_root)?; }
         if environment_root.as_ref().is_some_and(|environment| {
             target_root.starts_with(environment) || environment.starts_with(&target_root)
                 || root.join("environment-operations").starts_with(environment)
@@ -231,7 +243,7 @@ impl MutationService {
         ensure(target_root.parent().unwrap())?;
         ensure(&root.join("environment-operations"))?;
         let intent = Intent {
-            intent_version: 1,
+            intent_version: 2,
             operation_id: key.clone(),
             operation: operation.into(),
             repository_root: selected.root,
@@ -578,6 +590,35 @@ mod tests {
         assert!(journal(&root, &saved.operation_id).exists());
         assert!(root.starts_with(std::env::temp_dir()));
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn compact_state_paths_preserve_identity_and_legacy_recovery() {
+        let root = temporary();
+        let mut saved = intent(&root);
+        saved.operation = "init-state".into(); saved.candidate = None;
+        saved.environment_root = Some(root.join("environment"));
+        saved.environment_id = Some(format!("sha256:{}", "a".repeat(64)));
+        for version in [1, 2] {
+            saved.intent_version = version;
+            saved.target_root = saved_destination(&root, &saved.operation_id, "init-state", version);
+            std::fs::write(journal(&root, &saved.operation_id), serde_json::to_vec(&saved).unwrap()).unwrap();
+            assert_eq!(load(&root, &saved.operation_id).unwrap().target_root, saved.target_root);
+        }
+        for key in ["0".repeat(32), "f".repeat(32), saved.operation_id.clone()] {
+            assert_eq!(u128::from_str_radix(&compact_id(&key), 36).unwrap(), u128::from_str_radix(&key, 16).unwrap());
+        }
+        saved.target_root = root.join("s/other");
+        std::fs::write(journal(&root, &saved.operation_id), serde_json::to_vec(&saved).unwrap()).unwrap();
+        assert!(load(&root, &saved.operation_id).is_err());
+        assert!(root.starts_with(std::env::temp_dir())); std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn state_path_limit_counts_windows_utf16_units() {
+        use crate::environment_execution::validate_state_path;
+        assert!(validate_state_path(Path::new(&"a".repeat(90))).is_ok());
+        assert_eq!(validate_state_path(Path::new(&"a".repeat(91))).unwrap_err().code, "path-too-long");
+        let supplementary = char::from_u32(0x1f600).unwrap().to_string().repeat(46);
+        assert!(validate_state_path(Path::new(&supplementary)).is_err());
     }
     #[test]
     fn edited_journals_cannot_redirect_mutation_destinations() {

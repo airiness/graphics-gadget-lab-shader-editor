@@ -231,6 +231,14 @@ mod tests {
         }
     }
 }
+/// Qualified Windows host limit, not an Environment manifest or native wire field.
+/// Reserve room for native cache/publication temporary names below writable state.
+pub(crate) fn validate_state_path(path: &std::path::Path) -> Result<(), Error> {
+    if path.as_os_str().to_string_lossy().encode_utf16().count() > 90 {
+        return Err(error("path-too-long", "Environment state root exceeds the qualified 90 UTF-16 unit limit; select a shorter independent state root. Existing state is retained."));
+    }
+    Ok(())
+}
 impl EnvironmentExecutionService {
     pub fn open(
         &self,
@@ -241,6 +249,7 @@ impl EnvironmentExecutionService {
     ) -> Result<Admission, Error> {
         let root = storage.selected_path(environment, DirectoryKind::Environment)?;
         let state_root = storage.selected_path(state, DirectoryKind::State)?;
+        validate_state_path(&state_root)?;
         if root.starts_with(&state_root) || state_root.starts_with(&root) {
             return Err(error("invalid-path", "Overlapping execution roots"));
         }
