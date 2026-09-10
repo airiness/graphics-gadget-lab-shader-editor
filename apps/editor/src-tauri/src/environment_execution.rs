@@ -22,6 +22,12 @@ use std::sync::{
     deny_unknown_fields
 )]
 pub enum Operation {
+    StartCompile { request: NativeCompileRequest },
+    StartPreview { request: NativePreviewBuildRequest },
+    BuildResult { build_id: BuildId },
+    CancelBuild { build_id: BuildId },
+    RuntimeExit { runtime_id: PreviewRuntimeId },
+    StopRuntime { runtime_id: PreviewRuntimeId },
     Handshake,
     PreviewHandshake,
     CompileProbe {
@@ -55,6 +61,8 @@ pub struct Admission {
 }
 struct Context {
     service: ShaderToolService,
+    builds: Mutex<HashMap<u64, std::thread::JoinHandle<BoundaryResult>>>,
+    last_exit: Mutex<Option<PreviewRuntimeExit>>,
     candidate: ToolCandidate,
     state: PathBuf,
     busy: Mutex<()>,
@@ -110,6 +118,45 @@ fn held_text(path: &std::path::Path) -> Result<String, Error> {
 mod tests {
     use super::*;
     #[test]
+    fn asynchronous_results_are_owned_by_execution_and_sequence() {
+        let executions = EnvironmentExecutionService::default();
+        let candidate = ToolCandidate {
+            rule: DiscoveryRule::ExplicitConfig,
+            tool_path: "unused".into(),
+            observation_identity: "a".repeat(64),
+            resolved_at: 1,
+        };
+        let runtime_id = PreviewRuntimeId { sequence: 9 };
+        let runtime_join = std::thread::spawn(move || PreviewRuntimeExit {
+            runtime_id, kind: PreviewRuntimeExitKind::Exited, exit_code: Some(0),
+        });
+        while !runtime_join.is_finished() { std::thread::yield_now(); }
+        let build_candidate = candidate.clone();
+        let build_join = std::thread::spawn(move || BoundaryResult::LaunchFailed { candidate: build_candidate });
+        while !build_join.is_finished() { std::thread::yield_now(); }
+        executions.contexts.lock().unwrap().insert("owned".into(), Arc::new(Context {
+            service: ShaderToolService::production(),
+            builds: Mutex::new(HashMap::from([(7, build_join)])),
+            last_exit: Mutex::new(None), candidate, state: "unused".into(),
+            busy: Mutex::new(()), cancelled: Arc::new(AtomicBool::new(false)),
+            termination_unproven: AtomicBool::new(false),
+            runtime: Mutex::new(Some(("session".into(), runtime_id, runtime_join))),
+            sequence: AtomicU64::new(1), nonce: "unused".into(),
+        }));
+        let foreign = PreviewRuntimeId { sequence: 10 };
+        assert_eq!(executions.execute("owned", Operation::StopRuntime { runtime_id: foreign }).unwrap_err().code, "invalid-handle");
+        assert_eq!(executions.execute("owned", Operation::RuntimeExit { runtime_id: foreign }).unwrap_err().code, "invalid-handle");
+        assert_eq!(executions.execute("owned", Operation::BuildResult { build_id: BuildId { sequence: 8 } }).unwrap_err().code, "invalid-handle");
+        assert_eq!(executions.execute("owned", Operation::CancelBuild { build_id: BuildId { sequence: 8 } }).unwrap()["canceled"], false);
+        assert_eq!(executions.execute("owned", Operation::BuildResult { build_id: BuildId { sequence: 7 } }).unwrap()["kind"], "launch-failed");
+        assert_eq!(executions.execute("owned", Operation::BuildResult { build_id: BuildId { sequence: 7 } }).unwrap_err().code, "invalid-handle");
+        assert_eq!(executions.execute("owned", Operation::RuntimeExit { runtime_id }).unwrap()["kind"], "exited");
+        assert_eq!(executions.execute("owned", Operation::StopRuntime { runtime_id }).unwrap()["alreadySettled"], true);
+        executions.close("owned").unwrap();
+        assert!(executions.contexts.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn unproven_runtime_exit_remains_a_refusal_on_close_retry() {
         let executions = EnvironmentExecutionService::default();
         let parent = ShaderToolService::production();
@@ -122,6 +169,7 @@ mod tests {
         executions.contexts.lock().unwrap().insert(
             "test".into(),
             Arc::new(Context {
+                builds: Mutex::new(HashMap::new()), last_exit: Mutex::new(None),
                 service: parent.for_environment(ToolchainRoots::under(PathBuf::from("unused"))),
                 candidate: ToolCandidate {
                     rule: DiscoveryRule::ExplicitConfig,
@@ -340,6 +388,7 @@ impl EnvironmentExecutionService {
             execution_id.clone(),
             Arc::new(Context {
                 service,
+                builds: Mutex::new(HashMap::new()), last_exit: Mutex::new(None),
                 candidate: candidate.clone(),
                 state: state_root.clone(),
                 busy: Mutex::new(()),
@@ -385,10 +434,10 @@ impl EnvironmentExecutionService {
             .busy
             .try_lock()
             .map_err(|_| error("host-busy", "Execution already running"))?;
-        if context.cancelled.load(Ordering::SeqCst) && !matches!(operation, Operation::Stop) {
+        if context.cancelled.load(Ordering::SeqCst) && !matches!(operation, Operation::Stop | Operation::BuildResult { .. } | Operation::RuntimeExit { .. } | Operation::CancelBuild { .. } | Operation::StopRuntime { .. }) {
             return Err(error("cancelled", "Execution cancelled"));
         }
-        if !matches!(operation, Operation::Stop) {
+        if !matches!(operation, Operation::Stop | Operation::BuildResult { .. } | Operation::RuntimeExit { .. } | Operation::CancelBuild { .. } | Operation::StopRuntime { .. }) {
             for role in [
                 "",
                 "Generated",
@@ -405,6 +454,60 @@ impl EnvironmentExecutionService {
         }
         let candidate = &context.candidate;
         let result = match operation {
+            Operation::StartCompile { request } => {
+                let mut builds = context.builds.lock().map_err(io)?;
+                if builds.len() >= 16 { return Err(error("host-busy", "Too many uncollected builds")); }
+                let attempt = context.service.compile(candidate, &request).map_err(io)?;
+                let id = attempt.build_id;
+                if context.cancelled.load(Ordering::SeqCst) { context.service.cancel(id); }
+                builds.insert(id.sequence, attempt.settle);
+                serde_json::to_value(id).map_err(io)?
+            }
+            Operation::StartPreview { request } => {
+                let mut builds = context.builds.lock().map_err(io)?;
+                if builds.len() >= 16 { return Err(error("host-busy", "Too many uncollected builds")); }
+                let attempt = context.service.build_preview(candidate, &request).map_err(io)?;
+                let id = attempt.build_id;
+                if context.cancelled.load(Ordering::SeqCst) { context.service.cancel(id); }
+                builds.insert(id.sequence, attempt.settle);
+                serde_json::to_value(id).map_err(io)?
+            }
+            Operation::BuildResult { build_id } => {
+                let mut builds = context.builds.lock().map_err(io)?;
+                let join = builds.get(&build_id.sequence).ok_or_else(|| error("invalid-handle", "Unknown or collected build"))?;
+                if !join.is_finished() { serde_json::Value::Null }
+                else { serde_json::to_value(builds.remove(&build_id.sequence).unwrap().join().map_err(|_|error("host-task-failed", "Build worker failed"))?).map_err(io)? }
+            }
+            Operation::CancelBuild { build_id } => {
+                let owned = context.builds.lock().map_err(io)?.contains_key(&build_id.sequence);
+                let result = if owned { context.service.cancel(build_id) } else { CancelOutcome { build_id, canceled: false, already_settled: true } };
+                serde_json::to_value(result).map_err(io)?
+            },
+            Operation::StopRuntime { runtime_id } => {
+                if !context.runtime.lock().map_err(io)?.as_ref().is_some_and(|(_, id, _)| *id == runtime_id) {
+                    if context.last_exit.lock().map_err(io)?.as_ref().is_some_and(|e|e.runtime_id == runtime_id) {
+                        return serde_json::to_value(PreviewRuntimeStopOutcome { runtime_id, stop_requested: false, already_settled: true }).map_err(io);
+                    }
+                    return Err(error("invalid-handle", "Runtime does not belong to this execution"));
+                }
+                serde_json::to_value(context.service.stop_preview_runtime(runtime_id)).map_err(io)?
+            }
+            Operation::RuntimeExit { runtime_id } => {
+                let mut runtime = context.runtime.lock().map_err(io)?;
+                if runtime.as_ref().is_some_and(|(_, id, join)| *id == runtime_id && join.is_finished()) {
+                    let (_, _, join) = runtime.take().unwrap();
+                    context.termination_unproven.store(true, Ordering::SeqCst);
+                    let exit = join.join().map_err(|_|error("host-task-failed", "Runtime monitor failed"))?;
+                    context.termination_unproven.store(exit.kind == PreviewRuntimeExitKind::WaitFailed, Ordering::SeqCst);
+                    *context.last_exit.lock().map_err(io)? = Some(exit);
+                }
+                if runtime.as_ref().is_some_and(|(_, id, _)| *id == runtime_id) { serde_json::Value::Null }
+                else {
+                    let exit = context.last_exit.lock().map_err(io)?;
+                    if !exit.as_ref().is_some_and(|e|e.runtime_id == runtime_id) { return Err(error("invalid-handle", "Unknown Runtime exit")); }
+                    serde_json::to_value(exit.as_ref()).map_err(io)?
+                }
+            }
             Operation::Handshake => {
                 serde_json::to_value(context.service.handshake(candidate)).map_err(io)?
             }
@@ -447,6 +550,7 @@ impl EnvironmentExecutionService {
                 backend,
             } => {
                 let mut runtime = context.runtime.lock().map_err(io)?;
+                if context.termination_unproven.load(Ordering::SeqCst) { return Err(error("runtime-unavailable", "Previous Runtime exit is unproven")); }
                 if runtime.is_some() {
                     return Err(error("host-busy", "Stop and join previous Runtime first"));
                 }
@@ -516,6 +620,7 @@ impl EnvironmentExecutionService {
                     return Err(error("runtime-unavailable", "Runtime exit is unproven"));
                 }
                 context.termination_unproven.store(false, Ordering::SeqCst);
+                if exit.is_some() { *context.last_exit.lock().map_err(io)? = exit.clone(); }
                 serde_json::to_value(exit).map_err(io)?
             }
         };
@@ -538,6 +643,16 @@ impl EnvironmentExecutionService {
     }
     pub fn close(&self, id: &str) -> Result<(), Error> {
         self.cancel(id)?;
+        let context = self.get(id)?;
+        {
+            // Wait for any admitted start before draining its worker. Cancellation
+            // prevents subsequent admissions from creating new work.
+            let _busy = context.busy.lock().map_err(io)?;
+            let workers: Vec<_> = context.builds.lock().map_err(io)?.drain().collect();
+            let mut failed = false;
+            for (_, join) in workers { failed |= join.join().is_err(); }
+            if failed { return Err(error("host-task-failed", "Build cleanup failed")); }
+        }
         self.execute(id, Operation::Stop)?;
         self.contexts.lock().map_err(io)?.remove(id);
         Ok(())

@@ -358,6 +358,9 @@ impl ShaderToolService {
         if let Some(e) = &self.roots.environment {
             if runtime_identity != e.runtime_identity { return Err(request_shape("runtimeIdentity", "Environment Runtime bytes changed")); }
         }
+        let runtime_id = PreviewRuntimeId {
+            sequence: self.next_runtime_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+        };
         let mut command = std::process::Command::new(&runtime_path);
         command.args(["--lab", "gglab.lab.shader_graph_preview", "--shader-preview-session", session_id, "--absolute-mouse"])
             .stdin(std::process::Stdio::null());
@@ -365,7 +368,7 @@ impl ShaderToolService {
             command.arg("--state-root").arg(&e.state).args(["--rhi", backend.unwrap_or("dx12")])
                 .current_dir(&e.state).env("VK_LAYER_PATH", &e.vulkan_layers);
             for (suffix, stdout) in [("stdout", true), ("stderr", false)] {
-                let file = std::fs::OpenOptions::new().create_new(true).write(true).open(e.state.join("Logs").join(format!("runtime-{session_id}.{suffix}.log")))
+                let file = std::fs::OpenOptions::new().create_new(true).write(true).open(e.state.join("Logs").join(format!("runtime-{session_id}-{}-{}.{suffix}.log", self.roots.private().file_name().unwrap_or_default().to_string_lossy(), runtime_id.sequence)))
                     .map_err(|e| ServiceError::Host { detail: e.to_string() })?;
                 if stdout { command.stdout(file); } else { command.stderr(file); }
             }
@@ -384,11 +387,6 @@ impl ShaderToolService {
         drop(runtime_guard);
         drop(candidate_guard);
 
-        let runtime_id = PreviewRuntimeId {
-            sequence: self
-                .next_runtime_id
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-        };
         let stop = Arc::new(AtomicBool::new(false));
         runtimes.insert(session_id.to_string(), (runtime_id, Arc::clone(&stop)));
         drop(runtimes);

@@ -5,10 +5,11 @@ import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { sha256Hex } from "@gglab/shader-graph-core";
-import { readEnvironmentDirectoryHandle, readEnvironmentNativeOutput, readPreviewBuildOutput, readEnvironmentBytes, readPreviewObservation } from "@gglab/shader-toolchain-client";
+import { readEnvironmentDirectoryHandle, readPreviewBuildOutput, readPreviewObservation } from "@gglab/shader-toolchain-client";
 import { environmentProducerFixtures } from "../../../tests/environment-producer.js";
 import { createEnvironmentStorageHost } from "./environment-storage-host.js";
 import { graph } from "../tests/environment-probe-documents.js";
+import { createEnvironmentAuthoringHost } from "./environment-authoring-host.js";
 import { createEnvironmentProofHost } from "./environment-proof-host.js";
 
 describe("Environment final native proof", () => {
@@ -39,14 +40,25 @@ describe("Environment final native proof", () => {
             const result = await host.prove(readEnvironmentDirectoryHandle(selection.environment), readEnvironmentDirectoryHandle(selection.state), [graph(1), graph(2)]);
             expect(result.runs).toHaveLength(4);
             const templates = requests.slice();
-            const admission = await invoke("shader-environment-open-execution", { environmentDirectoryId: readEnvironmentDirectoryHandle(selection.environment).directoryId, stateDirectoryId: readEnvironmentDirectoryHandle(selection.state).directoryId }) as { executionId: string };
-            const execute = (operation: Record<string, unknown>) => invoke("shader-environment-execute", { executionId: admission.executionId, operation });
             const regressions = [];
-            try {
-                for (const template of templates) {
+            for (const template of templates) {
+                const backend = template.targetProfile === "gglab-dx12" ? "dx12" : "vulkan";
+                const authoring = createEnvironmentAuthoringHost(invoke);
+                await authoring.open(readEnvironmentDirectoryHandle(selection.environment), readEnvironmentDirectoryHandle(selection.state), { ...result.proof, activationSequence: 1 }, backend);
+                try {
+                    const candidate = (await authoring.boundary.discover({ bundled: false })).candidate!;
+                    expect(authoring.resolveProfile(graph(template.profileVersion as 1 | 2)).profileVersion).toBe(template.profileVersion);
+                    expect((await authoring.boundary.handshake(candidate)).kind).toBe("spawned");
+                    expect((await authoring.boundary.previewHandshake(candidate)).kind).toBe("spawned");
                     const sessionId = crypto.randomUUID().replaceAll("-", "");
                     const sessionRoot = `${process.env.GGLAB_PROOF_STATE}/ShaderArtifacts/shader-preview-sessions/${sessionId}`;
-                    const build = async (attemptSequence: number, bytes: number[]) => readPreviewBuildOutput(readEnvironmentNativeOutput(await execute({ operation: "build-preview", request: { ...template, sessionId, attemptSequence, generatedSourceBytes: bytes, generatedSourceIdentity: sha256Hex(Uint8Array.from(bytes)) } })));
+                    const request = (attemptSequence: number, bytes: number[]) => ({ ...template, sessionId, attemptSequence, generatedSourceBytes: Uint8Array.from(bytes), generatedSourceIdentity: sha256Hex(Uint8Array.from(bytes)) }) as unknown as import("@gglab/shader-toolchain-client").NativePreviewBuildRequest;
+                    const build = async (attemptSequence: number, bytes: number[]) => {
+                        const attempt = await authoring.boundary.buildPreview(candidate, request(attemptSequence, bytes));
+                        const settled = await attempt.result;
+                        if (settled.kind !== "spawned") throw new Error("Authoring build did not spawn");
+                        return readPreviewBuildOutput(settled.output);
+                    };
                     const bytes = template.generatedSourceBytes as number[];
                     const first = await build(1, bytes); expect(first.kind === "read" && first.document.success).toBe(true);
                     if (first.kind !== "read" || !first.document.success) throw new Error("Initial publication failed");
@@ -54,32 +66,46 @@ describe("Environment final native proof", () => {
                     const waitLoaded = async (attempt: number, publication: string) => {
                         const until = Date.now() + 30000;
                         while (Date.now() < until) {
-                            const raw = await execute({ operation: "observe", sessionId }) as { kind: string; bytes?: unknown };
+                            const raw = await authoring.observation.readPreviewObservation(candidate, sessionId);
                             if (raw.kind === "read") {
-                                const o = readPreviewObservation(readEnvironmentBytes(raw.bytes));
+                                const o = readPreviewObservation(raw.bytes);
                                 if (o.status === "read" && o.observation.status === "loaded" && o.observation.observedAttemptSequence === attempt && o.observation.loadedPublicationRef === publication && o.observation.observedPublicationRef === publication) return;
                             }
                             await new Promise(resolve => setTimeout(resolve, 100));
                         }
                         throw new Error("Regression Loaded observation timed out");
                     };
-                    const backend = template.targetProfile === "gglab-dx12" ? "dx12" : "vulkan";
-                    const launch = await execute({ operation: "launch", sessionId, backend }) as { kind: string }; expect(launch.kind).toBe("launched");
-                    try {
-                        await waitLoaded(1, firstPublication);
-                        const pointer = readFileSync(`${sessionRoot}/active.ggsh.preview-active`);
-                        const bad = await build(2, [...new TextEncoder().encode("invalid hlsl probe\n")]);
-                        expect(bad.kind === "read" && !bad.document.success && bad.document.exitCode === 4).toBe(true);
-                        expect(readFileSync(`${sessionRoot}/active.ggsh.preview-active`)).toEqual(pointer);
-                        await waitLoaded(1, firstPublication);
-                        const recovered = await build(3, bytes);
-                        expect(recovered.kind === "read" && recovered.document.success).toBe(true);
-                        if (recovered.kind !== "read" || !recovered.document.success) throw new Error("Recovery publication failed");
-                        await waitLoaded(3, recovered.document.publicationId);
-                        regressions.push({ backend, profileVersion: template.profileVersion, sessionId, failedAttemptExitCode: 4, retainedPublication: firstPublication, recoveredPublication: recovered.document.publicationId });
-                    } finally { await execute({ operation: "stop" }); }
-                }
-            } finally { await invoke("shader-environment-close-execution", { executionId: admission.executionId }); }
+                    const launch = await authoring.runtime.launchAttachedPreview(candidate, sessionId); expect(launch.kind).toBe("launched");
+                    if (launch.kind !== "launched") throw new Error("Authoring Runtime did not launch");
+                    await waitLoaded(1, firstPublication);
+                    const pointer = readFileSync(`${sessionRoot}/active.ggsh.preview-active`);
+                    const bad = await build(2, [...new TextEncoder().encode("invalid hlsl probe\n")]);
+                    expect(bad.kind === "read" && !bad.document.success && bad.document.exitCode === 4).toBe(true);
+                    expect(readFileSync(`${sessionRoot}/active.ggsh.preview-active`)).toEqual(pointer);
+                    await waitLoaded(1, firstPublication);
+                    const recovered = await build(3, bytes);
+                    expect(recovered.kind === "read" && recovered.document.success).toBe(true);
+                    if (recovered.kind !== "read" || !recovered.document.success) throw new Error("Recovery publication failed");
+                    await waitLoaded(3, recovered.document.publicationId);
+                    await authoring.runtime.stopAttachedPreview({ sequence: launch.runtimeId.sequence });
+                    expect((await launch.exited).kind).toBe("stopped");
+                    const relaunched = await authoring.runtime.launchAttachedPreview(candidate, sessionId);
+                    if (relaunched.kind !== "launched") throw new Error("Same-session relaunch failed");
+                    // A new publication requires the new process to write an observation;
+                    // the previous process's retained record cannot satisfy this check.
+                    const afterRelaunch = await build(4, bytes);
+                    if (afterRelaunch.kind !== "read" || !afterRelaunch.document.success) throw new Error("Relaunch publication failed");
+                    await waitLoaded(4, afterRelaunch.document.publicationId);
+                    await authoring.runtime.stopAttachedPreview(relaunched.runtimeId);
+                    expect((await relaunched.exited).kind).toBe("stopped");
+                    const cancelAttempt = await authoring.boundary.buildPreview(candidate, request(5, bytes));
+                    await authoring.boundary.cancel({ sequence: cancelAttempt.buildId.sequence });
+                    await cancelAttempt.result;
+                    const afterCancel = await build(6, bytes);
+                    expect(afterCancel.kind === "read" && afterCancel.document.success).toBe(true);
+                    regressions.push({ authoringBoundary: true, sameSessionRelaunch: true, cancelThenBuild: true, backend, profileVersion: template.profileVersion, sessionId, failedAttemptExitCode: 4, retainedPublication: firstPublication, recoveredPublication: recovered.document.publicationId });
+                } finally { await authoring.close(); }
+            }
             const final = await createEnvironmentStorageHost(invoke).verify(readEnvironmentDirectoryHandle(selection.environment));
             expect(final.manifest.environmentId).toBe(result.proof.environmentId);
             expect(final.manifest.producer.sourceRevision).toBe(baseline.producerRevision);

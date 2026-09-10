@@ -81,6 +81,9 @@ below), not this one.
 - [Workspace Environment activation](environment-workspace-activation.md) documents
   the coordinator-owned selection transaction and remaining native host binding.
 
+- [Environment authoring host](environment-authoring-host.md) documents persistent
+  build/process boundaries, final-location profile resolution and native regressions.
+
 ## Documents owned by other repositories (referenced, not copied)
 
 GGLab docs repository:

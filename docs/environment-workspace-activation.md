@@ -1,5 +1,10 @@
 # Workspace Environment activation transaction
 
+Follow-up: [Environment authoring host](environment-authoring-host.md) implements
+the persistent boundary service and its native regression gate. Hook/menu binding
+remains outstanding. The implementation/evidence below describes the activation
+transaction increment at its recorded revision.
+
 The application service now connects actual final-location import/proof to
 Workspace Environment selection through the existing PreviewCoordinator. This
 increment implements the ownership transaction, not the complete interactive

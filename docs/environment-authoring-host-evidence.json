@@ -1,0 +1,251 @@
+{
+  "date": "2026-09-10",
+  "kind": "working-tree-environment-authoring-qualification",
+  "editorBaseRevision": "3955673b4c61d9113be612aacdd929b558d67642",
+  "editorCleanRevision": null,
+  "producerRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec",
+  "sourceSha256": {
+    "apps/editor/src/environment-authoring-host.ts": "a3c41e6534521e5ba8ef7da1e83550714a968dcfb87bf1ea787ecf0824869802",
+    "apps/editor/src/environment-authoring-host.test.ts": "7822c8885d2322a2b336988e6d98bbf4b41887cf0c68e0d4ebc8c57b71a7eac2",
+    "apps/editor/src/environment-proof-host.test.ts": "72a5baf9cf3a284d6fbdb2efc6cb9c42f8ad0dc05437b4b2c6c3940fb94c5cc9",
+    "apps/editor/src-tauri/src/environment_execution.rs": "f040ea06ec1d2ca076b1b24745fcb8fb8c2caffb2de4bfb624745cda3cda0abd",
+    "apps/editor/src-tauri/src/shader_tool/service.rs": "65b678e17fd51c3d769ab8d9045cb6d99e904260150fd4444988536d29ac171c"
+  },
+  "gates": {
+    "typecheck": "passed",
+    "typescriptTests": {
+      "passed": 979,
+      "skipped": 9
+    },
+    "lint": "passed",
+    "rustTests": {
+      "passed": 94,
+      "ignored": 3
+    },
+    "editorWebBuild": "passed (existing large-chunk warning)",
+    "realProducerDiscovery": "passed; Debug and Release candidates retained",
+    "gitDiffCheck": "passed"
+  },
+  "configurations": {
+    "debug": {
+      "manifestProducer": {
+        "deployment": "Build/Output/x64/Debug",
+        "publisherSha256": "cfbe8fa0caf0c0683fa7a010067fb03dd2c50d61a5d09137123793e50e9f7f5b",
+        "publisherVersion": "1.0.0",
+        "sourceDirty": false,
+        "sourceRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec"
+      },
+      "proof": {
+        "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000",
+        "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\s\\qtg81elcv6egsl1wjl",
+        "environmentId": "sha256:f16290e99f195e15b368393ffa44b571e34480d3bdc3c3beb1b3f23f44e916ed",
+        "tool": {
+          "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000\\payload\\gglab-shaderc.exe",
+          "sha256": "3ef4ffd5297777f6fe1088fb228f040e0ec95f5df57f1063b8cd312384410cb7"
+        },
+        "runtime": {
+          "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000\\payload\\GraphicsGadgetLab.exe",
+          "sha256": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+        },
+        "ordinaryHandshake": "compatible",
+        "previewHandshake": "compatible",
+        "profiles": [
+          1,
+          2
+        ],
+        "runtimeObservation": "loaded"
+      },
+      "finalProofRuns": [
+        {
+          "backend": "dx12",
+          "profileVersion": 1,
+          "sessionId": "c6011a2c495346069101f3d91dfa6e2c",
+          "publicationId": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+          "runtimeIdentity": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "sessionId": "79820f95296842aeb9b2b5f65a855a84",
+          "publicationId": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+          "runtimeIdentity": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "sessionId": "ce2af09043954bb788718bbb2b788074",
+          "publicationId": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+          "runtimeIdentity": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "sessionId": "6c262db861bd4245931bb4c384c26c83",
+          "publicationId": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+          "runtimeIdentity": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+        }
+      ],
+      "authoringRegressions": [
+        {
+          "authoringBoundary": true,
+          "sameSessionRelaunch": true,
+          "cancelThenBuild": true,
+          "backend": "dx12",
+          "profileVersion": 1,
+          "sessionId": "97d14a819e764bb6a7ea1d33123df191",
+          "failedAttemptExitCode": 4,
+          "retainedPublication": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+          "recoveredPublication": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50"
+        },
+        {
+          "authoringBoundary": true,
+          "sameSessionRelaunch": true,
+          "cancelThenBuild": true,
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "sessionId": "1183becfcf6d463eb9b09ff4e337539d",
+          "failedAttemptExitCode": 4,
+          "retainedPublication": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+          "recoveredPublication": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8"
+        },
+        {
+          "authoringBoundary": true,
+          "sameSessionRelaunch": true,
+          "cancelThenBuild": true,
+          "backend": "dx12",
+          "profileVersion": 2,
+          "sessionId": "1fb8c7e8fed3487787580ca2d842bc67",
+          "failedAttemptExitCode": 4,
+          "retainedPublication": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+          "recoveredPublication": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9"
+        },
+        {
+          "authoringBoundary": true,
+          "sameSessionRelaunch": true,
+          "cancelThenBuild": true,
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "sessionId": "83735c9862ae41b4a0effa5774a48421",
+          "failedAttemptExitCode": 4,
+          "retainedPublication": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+          "recoveredPublication": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896"
+        }
+      ],
+      "closureReverified": true
+    },
+    "release": {
+      "manifestProducer": {
+        "deployment": "Build/Output/x64/Release",
+        "publisherSha256": "cfbe8fa0caf0c0683fa7a010067fb03dd2c50d61a5d09137123793e50e9f7f5b",
+        "publisherVersion": "1.0.0",
+        "sourceDirty": false,
+        "sourceRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec"
+      },
+      "proof": {
+        "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000",
+        "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\s\\qtg8294qbvl8bv2ebl",
+        "environmentId": "sha256:641093ddf5acffcfe2c9ae7f0816971658cc39e3a4486c47c46b2c218b3bed91",
+        "tool": {
+          "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000\\payload\\gglab-shaderc.exe",
+          "sha256": "421926487ee7290be858077eadc295348d403644856e1ebd56af4840fc2e36e5"
+        },
+        "runtime": {
+          "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000\\payload\\GraphicsGadgetLab.exe",
+          "sha256": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175"
+        },
+        "ordinaryHandshake": "compatible",
+        "previewHandshake": "compatible",
+        "profiles": [
+          1,
+          2
+        ],
+        "runtimeObservation": "loaded"
+      },
+      "finalProofRuns": [
+        {
+          "backend": "dx12",
+          "profileVersion": 1,
+          "sessionId": "68ec678da9f64ceaae4752f218f9bb13",
+          "publicationId": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+          "runtimeIdentity": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175"
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "sessionId": "3154da942e6c4d98a50bac871f0ccffc",
+          "publicationId": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+          "runtimeIdentity": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175"
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "sessionId": "2a6d4878e9c44fe9bc906be261c035e2",
+          "publicationId": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+          "runtimeIdentity": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175"
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "sessionId": "c25f145e0ef0426f934f7fb9c2172497",
+          "publicationId": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+          "runtimeIdentity": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175"
+        }
+      ],
+      "authoringRegressions": [
+        {
+          "authoringBoundary": true,
+          "sameSessionRelaunch": true,
+          "cancelThenBuild": true,
+          "backend": "dx12",
+          "profileVersion": 1,
+          "sessionId": "956199f8855945219e7c66d4792789a5",
+          "failedAttemptExitCode": 4,
+          "retainedPublication": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+          "recoveredPublication": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50"
+        },
+        {
+          "authoringBoundary": true,
+          "sameSessionRelaunch": true,
+          "cancelThenBuild": true,
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "sessionId": "f820478b10da4129a1a9612f31e060ac",
+          "failedAttemptExitCode": 4,
+          "retainedPublication": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+          "recoveredPublication": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8"
+        },
+        {
+          "authoringBoundary": true,
+          "sameSessionRelaunch": true,
+          "cancelThenBuild": true,
+          "backend": "dx12",
+          "profileVersion": 2,
+          "sessionId": "4008730042e84ac5b03e45e6463a1178",
+          "failedAttemptExitCode": 4,
+          "retainedPublication": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+          "recoveredPublication": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9"
+        },
+        {
+          "authoringBoundary": true,
+          "sameSessionRelaunch": true,
+          "cancelThenBuild": true,
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "sessionId": "cbfdb3a343174175869d14aebaee454a",
+          "failedAttemptExitCode": 4,
+          "retainedPublication": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+          "recoveredPublication": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896"
+        }
+      ],
+      "closureReverified": true
+    }
+  },
+  "limits": [
+    "Main was read-only; existing pinned builds and final published Environments were reused.",
+    "Editor evidence is for uncommitted changes over the stated base revision, not a clean committed replay.",
+    "Native qualification consumes the persistent boundaries directly; desktop hooks, menu workflow and native old-to-new Environment transitions remain untested.",
+    "Cancellation request can race with build completion; the subsequent build is required to succeed.",
+    "Relaunch requires a new publication Loaded observation, not acceptance of the prior process record.",
+    "No additional Vulkan validation-layer log qualification or fresh Main self-test suite was run."
+  ]
+}
