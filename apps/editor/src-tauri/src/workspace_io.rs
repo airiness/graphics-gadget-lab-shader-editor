@@ -684,6 +684,38 @@ mod tests {
     }
 
     #[test]
+    fn golden_fixture_directory_is_a_workspace_with_readable_documents() {
+        // Exercise the same checked-in scenes used by core and GUI tests through native authority.
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../packages/shader-graph-core/tests/fixtures");
+        let documents = Arc::new(DocumentFileService::new());
+        let service = WorkspaceFileService::new(Arc::clone(&documents));
+        let root = service.register_selected_root(directory).unwrap();
+        let WorkspaceDiscoverySettlement::Changed { snapshot, .. } = settle(&service, &root, None)
+        else {
+            panic!("the golden fixture directory must be discoverable without a project manifest");
+        };
+        assert_eq!(
+            snapshot.documents.iter().map(|entry| entry.relative_path.as_str()).collect::<Vec<_>>(),
+            ["SurfaceDiagnostics.shadergraph", "SurfaceTextureGolden.shadergraph"]
+        );
+        for entry in &snapshot.documents {
+            let opened = documents.read_snapshot(&entry.canonical_document_uri).unwrap();
+            assert_eq!(opened.canonical_document_uri, entry.canonical_document_uri);
+            let expected = if entry.relative_path == "SurfaceTextureGolden.shadergraph" {
+                include_str!("../../../../packages/shader-graph-core/tests/fixtures/SurfaceTextureGolden.shadergraph")
+            } else {
+                include_str!("../../../../packages/shader-graph-core/tests/fixtures/SurfaceDiagnostics.shadergraph")
+            };
+            assert_eq!(opened.text, expected);
+        }
+        assert!(matches!(
+            settle(&service, &root, Some(snapshot.discovery_revision_token)),
+            WorkspaceDiscoverySettlement::Unchanged { .. }
+        ));
+    }
+
+    #[test]
     fn discovery_is_recursive_deterministic_and_registers_document_authority() {
         let directory = test_directory("recursive");
         std::fs::create_dir_all(directory.join("Materials/Water")).unwrap();

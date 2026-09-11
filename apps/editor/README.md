@@ -149,7 +149,11 @@ those inputs is a main-repository obligation.
   honest consequence (the in-memory session was lost with the broken
   render tree), shows the error's first line verbatim in a mono
   slot, and offers the single action: **Reload the window**.
-- **Golden graphs — the fixed smoke scenes** — `…/tests/fixtures/
+- **Golden graphs — the fixed smoke scenes** —
+  See the [golden Workspace guide](../../packages/shader-graph-core/tests/fixtures/README.md)
+  for opening the shared fixture directory through Explorer and selecting an
+  Environment for native Build/Preview.
+  `…/tests/fixtures/
   SurfaceTextureGolden.shadergraph` (fully legal v2 surface, and a
   true `SurfaceTexture` scene: the sample's TYPED channels consumed
   for what they are — RGB (float3) driving BOTH the BaseColor and the
