@@ -2147,3 +2147,18 @@ button.gglab-diagnostics-item:hover {
 .gglab-view-severity-info {
     color: var(--muted);
 }
+.gglab-environment-dialog {
+    width: min(760px, 90vw);
+    max-height: 85vh;
+    overflow: auto;
+    padding: 24px;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--border-hi);
+    border-radius: 8px;
+    overflow-wrap: anywhere;
+}
+.gglab-environment-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+.gglab-environment-dialog fieldset { margin: 16px 0; padding: 12px; border: 1px solid var(--border-hi); }
+.gglab-environment-dialog p { margin: 12px 0; }
+.gglab-environment-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0; }

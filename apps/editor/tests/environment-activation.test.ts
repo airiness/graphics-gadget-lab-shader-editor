@@ -34,6 +34,7 @@ describe("Workspace Environment ownership transitions (synthetic proof)", () => 
     it("joins the old Runtime and commits current edits once without inheriting Preview readiness", async () => {
         const w = setup(); await w.manager.launch(candidate);
         const pending = w.activate(); await reachTeardown();
+        expect(mocks.importSelected).not.toHaveBeenCalled();
         expect(w.store.getSnapshot().session.activeEnvironment).toBeNull();
         expect(w.coordinator.legacyHostAdmitted).toBe(false);
         expect(await w.coordinator.retargetTo(w.document.sessionId)).toMatchObject({ ok: false, refusal: { reason: "transition-in-flight" } });
@@ -63,11 +64,12 @@ describe("Workspace Environment ownership transitions (synthetic proof)", () => 
         mocks.importSelected.mockResolvedValue({ status: "refused", diagnostic: { code: "hash-mismatch", message: "Changed closure" } });
         expect(await w.activate()).toMatchObject({ ok: false }); expect(w.store.getSnapshot()).toBe(before);
     });
-    it("honors cancellation after import while teardown is pending", async () => {
+    it("honors cancellation before import while teardown is pending", async () => {
         const w = setup(); await w.manager.launch(candidate); const before = w.store.getSnapshot();
         const pending = w.activate(); await reachTeardown(); await w.host.cancel();
         expect(w.runtime.releaseStop()).toBe(true); expect(await pending).toMatchObject({ ok: false });
         expect(w.store.getSnapshot()).toBe(before);
+        expect(mocks.importSelected).not.toHaveBeenCalled();
     });
     it("refuses a Workspace replacement during teardown and preserves its newer state", async () => {
         const w = setup(); await w.manager.launch(candidate);
@@ -84,11 +86,12 @@ describe("Workspace Environment ownership transitions (synthetic proof)", () => 
         vi.spyOn(w.manager, "terminateAndJoin").mockResolvedValue({ outcome: "already-exited" });
         expect(await w.activate()).toMatchObject({ ok: true });
     });
-    it("reports activation refusal after import success and ignores evidence sink exceptions", async () => {
+    it("reports unproven exit before importing and ignores evidence sink exceptions", async () => {
         const w = setup(), events: EnvironmentImportEvent[] = [];
         vi.spyOn(w.manager, "terminateAndJoin").mockResolvedValue({ outcome: "exit-unproven", runtimeId: { sequence: 7 } });
         expect(await w.host.activate(w.coordinator, environment, state, [graph(1), graph(2)], () => false, e => events.push(e))).toMatchObject({ ok: false });
-        expect(events.map(e => e.phase)).toEqual(["activate", "settled"]);
+        expect(events.map(e => e.phase)).toEqual(["settled"]);
+        expect(mocks.importSelected).not.toHaveBeenCalled();
         expect(events.at(-1)?.diagnostic?.code).toBe("exit-unproven");
         vi.spyOn(w.manager, "terminateAndJoin").mockResolvedValue({ outcome: "already-exited" });
         expect(await w.host.activate(w.coordinator, environment, state, [graph(1), graph(2)], () => false, () => { throw new Error("Sink unavailable"); })).toMatchObject({ ok: true });
@@ -97,7 +100,8 @@ describe("Workspace Environment ownership transitions (synthetic proof)", () => 
         const w = setup(); await w.manager.launch(candidate);
         const pending = w.activate(); await reachTeardown();
         expect(await w.activate()).toMatchObject({ ok: false, refusal: { reason: "transition-in-flight" } });
-        expect(mocks.importSelected).toHaveBeenCalledTimes(1);
+        expect(mocks.importSelected).not.toHaveBeenCalled();
         expect(w.runtime.releaseStop()).toBe(true); expect(await pending).toMatchObject({ ok: true });
+        expect(mocks.importSelected).toHaveBeenCalledTimes(1);
     });
 });

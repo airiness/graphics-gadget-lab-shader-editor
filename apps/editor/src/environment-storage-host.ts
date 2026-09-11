@@ -19,8 +19,16 @@ export function createEnvironmentStorageHost(invoke: Invoke) {
         const selected = { ...readEnvironmentDirectoryHandle(handle) };
         return inspectEnvironmentStateObservation(selected, await call("shader-environment-observe-directory", { directoryId: selected.directoryId }), closure);
     }
+    async function openRegistered(record: EnvironmentRegistryRecord) {
+        const saved = readEnvironmentRegistryRecord(JSON.stringify(record));
+        const raw = environmentExact(await call("shader-environment-registry-open", { key: environmentRegistryKey(saved.environmentId) }), ["recordText", "environment", "state"]);
+        environmentRequire(typeof raw.recordText === "string" && sameEnvironmentRegistration(readEnvironmentRegistryRecord(raw.recordText), saved), "registry-conflict", "Saved binding changed");
+        const environment = readEnvironmentDirectoryHandle(raw.environment), state = readEnvironmentDirectoryHandle(raw.state);
+        environmentRequire(environment.root === saved.environmentRoot && state.root === saved.stateRoot, "registry-conflict", "Saved roots require canonical reselection");
+        return { environment, state };
+    }
     return {
-        snapshot: () => registry.snapshot(), verify, inspectState,
+        snapshot: () => registry.snapshot(), verify, inspectState, openRegistered,
         async choose(kind: EnvironmentDirectoryHandle["kind"]) {
             const raw = await call("shader-environment-choose-directory", { kind });
             if (raw === null) return null;
@@ -31,11 +39,7 @@ export function createEnvironmentStorageHost(invoke: Invoke) {
         async recover(record: EnvironmentRegistryRecord, proveFinal: EnvironmentRecoveryHost["proveFinal"], cancelled: () => boolean) {
             environmentRequire(!cancelled(), "cancelled", "Recovery cancelled");
             const saved = readEnvironmentRegistryRecord(JSON.stringify(record));
-            const raw = environmentExact(await call("shader-environment-registry-open", { key: environmentRegistryKey(saved.environmentId) }), ["recordText", "environment", "state"]);
-            environmentRequire(typeof raw.recordText === "string" && sameEnvironmentRegistration(readEnvironmentRegistryRecord(raw.recordText), saved), "registry-conflict", "Saved binding changed");
-            const environment = readEnvironmentDirectoryHandle(raw.environment), state = readEnvironmentDirectoryHandle(raw.state);
-            // Registry records written by this host use canonical roots. Never rebind a supplied proof.
-            environmentRequire(environment.root === saved.environmentRoot && state.root === saved.stateRoot, "registry-conflict", "Saved roots require canonical reselection");
+            const { environment, state } = await openRegistered(saved);
             return recoverEnvironmentRegistration(registry, saved, { verifyFinal: () => verify(environment), recoverExistingState: closure => inspectState(state, closure), proveFinal }, cancelled);
         },
     };

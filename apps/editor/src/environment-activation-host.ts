@@ -37,7 +37,7 @@ export function createEnvironmentActivationHost(invoke: (command: string, args?:
                 const selection = Object.freeze({ environmentId: r.closure.manifest.environmentId, environmentRoot: r.closure.root, stateRoot: r.state.root, tool: Object.freeze({ ...r.proof.tool }), runtime: Object.freeze({ ...r.proof.runtime }) });
                 const token = Object.freeze({}) as PreparedEnvironmentActivation;
                 prepared.set(token, selection); return token;
-            }, isCancelled);
+            }, isCancelled, true);
             event("settled", outcome.ok ? undefined : { code: outcome.refusal.reason, severity: "error", message: describeTransitionRefusal(outcome.refusal), dataPath: "$.activeEnvironment" });
             return outcome;
         },

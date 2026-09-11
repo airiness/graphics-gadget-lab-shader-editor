@@ -312,6 +312,7 @@ export class PreviewCoordinator {
     async activateEnvironment(
         prepare: () => Promise<PreparedEnvironmentActivation>,
         cancelled: () => boolean = () => false,
+        requiresExclusiveRuntime = false,
     ): Promise<PreviewTransitionResult> {
         if (this.inFlight !== null) return { ok: false, refusal: { reason: "transition-in-flight", inFlight: this.inFlight } };
         if (this.flow?.buildInFlight) return { ok: false, refusal: { reason: "build-in-flight" } };
@@ -325,6 +326,12 @@ export class PreviewCoordinator {
         this.inFlight = identity;
         try {
             if (cancelled()) return refused("Environment activation cancelled");
+            if (requiresExclusiveRuntime) {
+                // Final-location proof launches its own Runtime; the previous Preview must exit first.
+                const pause = await this.teardownProof();
+                if (pause !== null) return pause;
+                if (cancelled() || !stillOwned()) return refused("Environment activation cancelled or Workspace changed while pausing Preview");
+            }
             let candidate: ReturnType<typeof consumeEnvironmentActivation>;
             try { candidate = consumeEnvironmentActivation(await prepare()); }
             catch (error) { return refused(error instanceof Error ? error.message : String(error)); }

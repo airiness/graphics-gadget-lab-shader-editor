@@ -9,7 +9,10 @@ state, guarded publication/registration and Workspace activation now have callab
 implementations. The [persistent authoring host](environment-authoring-host.md)
 adds final-location profile resolution and existing build/process boundaries.
 [Workspace authoring integration](environment-workspace-authoring.md) connects the
-desktop hooks; the menu import workflow remains incomplete. Earlier
+desktop hooks. The [desktop import workflow](environment-desktop-workflow.md)
+adds explicit deployment selection, published-environment import, registered
+reuse and durable-operation recovery. Full desktop manual acceptance remains
+outstanding. Earlier
 approval/defect statements below describe the historical handoff rather than the
 current gate.
 

@@ -13,6 +13,7 @@ import { WorkspaceStore, type WorkspaceAuthoringState } from "./workspace-store.
 import { createWorkspaceSession } from "./workspace-session.js";
 import { emitHlsl } from "@gglab/shader-graph-core";
 import { createWorkspaceEnvironmentBinding } from "./use-environment-authoring.js";
+import { createEnvironmentWorkflow } from "./environment-workflow.js";
 import { createSession, provenanceFromImport } from "./document-session.js";
 import { createDocumentSessionId } from "./workspace-session.js";
 import { previewProgramDescriptorIdentity } from "./preview-program-contract.js";
@@ -105,9 +106,17 @@ describe("Environment import composition", () => {
                         }
                         expect(owner.preview.acceptedObservation?.status).toBe("loaded");
                         authoringRuns.push({ backend, profileVersion: version, sessionId: owner.preview.session.sessionId, observation: owner.preview.acceptedObservation });
+                        if (backend === "vulkan" && version === 2) {
+                            const workflow = createEnvironmentWorkflow(async (command, args) => command === "shader-environment-list-mutations" ? [] : invoke(command, args), () => { throw new Error("Registered reuse must not discover a producer"); }, {
+                                coordinator: () => bound, capture: () => () => workspace.getSnapshot().session.activeEnvironment === selection, begin: () => () => {},
+                            });
+                            await workflow.useRegistered(snapshot.records[0]!.record);
+                            expect(workflow.getSnapshot(), workflow.getSnapshot().message).toMatchObject({ busy: false, canRetry: false });
+                            expect(workspace.getSnapshot().session.activeEnvironment).not.toBe(selection);
+                        }
                     } finally { await owner.close(); }
                 }
-                activationEvidence = { result, selection, previousRuntime: "absent", nativeAuthoringBinding: "qualified", authoringRuns };
+                activationEvidence = { result, selection, previousRuntime: "loaded-vulkan-preview-joined-before-workflow-reverification", nativeAuthoringBinding: "qualified", registeredWorkflowReuse: "qualified", mutationJournalListing: "synthetic-empty", authoringRuns };
             }
             if (process.env.GGLAB_IMPORT_REPORT) writeFileSync(process.env.GGLAB_IMPORT_REPORT, JSON.stringify({
                 producerRevision: baseline.producerRevision,
@@ -122,4 +131,3 @@ describe("Environment import composition", () => {
         }
     }, 300000);
 });
-

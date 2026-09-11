@@ -140,6 +140,7 @@ import { BuildPanelView, PreviewPanelView, ProblemsPanelView, OutputPanelView } 
 import { EMPTY_EVIDENCE_CORRELATION, emptyProblemSnapshot, type ProblemSnapshotEntry } from "./panel-vocabulary.js";
 import { EditorOutput } from "./editor-output.js";
 import { EnvironmentEvidence } from "./environment-evidence.js";
+import { EnvironmentPanel } from "./environment-panel.js";
 import { resolveProblemNavigation } from "./problem-navigation.js";
 import { composeWorkspaceProblemSnapshot } from "./problems-composition.js";
 // Type-only (erased at compile time): the official dialog option shapes,
@@ -2067,6 +2068,13 @@ export function App() {
                     <span className="gglab-brand-sub">gglab.surface authoring</span>
                 </div>
                 <div className="gglab-header-group">
+                    <EnvironmentPanel coordinator={preview.coordinator} begin={environmentEvidence.begin} activeRoot={workspace.activeEnvironment?.environmentRoot ?? null} capture={() => {
+                        const session = authoringStore.getSnapshot().session;
+                        return () => {
+                            const current = authoringStore.getSnapshot().session;
+                            return current.workspaceRoot?.canonicalWorkspaceUri === session.workspaceRoot?.canonicalWorkspaceUri && current.activeEnvironment === session.activeEnvironment;
+                        };
+                    }} />
                     <Badge variant="outline" className="font-mono">
                         {descriptor !== null ? `${descriptor.profileId} v${descriptor.profileVersion}` : "no profile contract"}
                     </Badge>

@@ -2468,7 +2468,9 @@ reparse/link observation, hashing, and process execution remain host operations.
 
 The owner approved the v1 integration baseline on 2026-09-09; see
 `../../GraphicsGadgetLabDocs/GGLab_Environment_Publication_Approval.md`.
-Approval permits integration but does not enable unfinished production import.
+Runtime use remains subject to implemented verification and ownership gates.
 See [Environment consumer readiness](environment-import-readiness.md) for the
 implemented read-only commands, tested interface boundaries, approval gate, and
-outstanding production host/registry/native qualification work.
+production host/registry/native qualification work. The
+[desktop Environment workflow](environment-desktop-workflow.md) documents the
+import entry points, recovery behavior and remaining manual acceptance gates.
