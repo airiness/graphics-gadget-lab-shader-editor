@@ -141,6 +141,7 @@ import { EMPTY_EVIDENCE_CORRELATION, emptyProblemSnapshot, type ProblemSnapshotE
 import { EditorOutput } from "./editor-output.js";
 import { EnvironmentEvidence } from "./environment-evidence.js";
 import { EnvironmentPanel } from "./environment-panel.js";
+import { isCurrentWorkspaceDiscovery } from "./workspace-discovery.js";
 import { resolveProblemNavigation } from "./problem-navigation.js";
 import { composeWorkspaceProblemSnapshot } from "./problems-composition.js";
 // Type-only (erased at compile time): the official dialog option shapes,
@@ -907,17 +908,14 @@ export function App() {
             // superseded discovery (root switched) is dropped — its stale
             // entries must not overwrite the new root's Explorer.
             const watching = discoveryRef.current;
-            const stillCurrent =
-                watching !== null &&
-                watching.discoveryId === settlement.discoveryId &&
-                watching.uri === expectedUri;
+            const stillCurrent = isCurrentWorkspaceDiscovery(watching, expectedUri, settlement.discoveryId);
             const settlementUri =
                 settlement.kind === "changed"
                     ? settlement.snapshot.root.canonicalWorkspaceUri
                     : settlement.kind === "unchanged"
                       ? settlement.canonicalWorkspaceUri
                       : expectedUri;
-            output.append("workspace", "info", `Discovery ${settlement.discoveryId} for ${expectedUri}: ${settlement.kind}${stillCurrent ? "" : " (superseded)"}.`);
+            output.append("workspace", "info", `Discovery ${settlement.discoveryId.sequence} for ${expectedUri}: ${settlement.kind}${stillCurrent ? "" : " (superseded)"}.`);
             if (stillCurrent && settlementUri === expectedUri) {
                 if (settlement.kind === "changed") {
                     setExplorerEntries(settlement.snapshot.documents);
@@ -936,7 +934,7 @@ export function App() {
             }
             // Clear the binding only if it still points at THIS discovery — a
             // newer discovery may already own it.
-            if (discoveryRef.current !== null && discoveryRef.current.discoveryId === settlement.discoveryId) {
+            if (isCurrentWorkspaceDiscovery(discoveryRef.current, expectedUri, settlement.discoveryId)) {
                 discoveryRef.current = null;
             }
         } catch (error) {

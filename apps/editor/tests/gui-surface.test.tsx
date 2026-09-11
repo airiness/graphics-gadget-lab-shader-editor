@@ -2364,8 +2364,8 @@ describe("primary sidebar (activity bar + workspace explorer)", () => {
         // The UI's watched discovery is bound to BOTH its id and the root it ran against.
         expect(app).toMatch(/discoveryRef\.current = \{ uri: expectedUri, discoveryId: attempt\.discoveryId \}/);
         // A settlement applies ONLY if it is still the current one (same id + root).
-        expect(app).toMatch(/watching\.discoveryId === settlement\.discoveryId/);
-        expect(app).toMatch(/watching\.uri === expectedUri/);
+        expect(app).toContain("isCurrentWorkspaceDiscovery(watching, expectedUri, settlement.discoveryId)");
+        expect(app).toContain("isCurrentWorkspaceDiscovery(discoveryRef.current, expectedUri, settlement.discoveryId)");
         expect(app).toMatch(/settlementUri === expectedUri/);
     });
 
