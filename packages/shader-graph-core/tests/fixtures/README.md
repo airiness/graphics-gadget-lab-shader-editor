@@ -14,8 +14,12 @@ These are tool-owned regression scenes, not product material assets.
    Environment. The golden requests `gglab.surface` profile v2; its descriptor
    is resolved from that Environment. Choosing a Workspace alone does not
    configure native compilation or Preview.
-4. Select the golden document as the Preview target before building Preview.
-   The active editing tab and the Preview target are separate selections.
+4. Click **Preview this graph**. It selects the golden as the Preview target,
+   proves Preview compatibility, builds, and starts Runtime after successful
+   publication. The bottom Preview panel shows progress and refusals. Native
+   tool readiness must already be established for the selected Environment.
+   The active editing tab and the Preview target remain separate selections;
+   switching tabs alone does not change the target.
 
 The directory picker selects `fixtures`, not the `.shadergraph` file.
 Explorer lists the two graph documents; this README and the TypeScript

@@ -18,6 +18,8 @@ import type { NativeBuildFlow } from "../src/native-build-flow.js";
 import { useShaderPreview } from "../src/useShaderPreview.js";
 import { WorkspaceStore, type WorkspaceAuthoringState } from "../src/workspace-store.js";
 import { createWorkspaceSession } from "../src/workspace-session.js";
+import { createDocumentSessionId } from "../src/workspace-session.js";
+import { createSession, provenanceFromImport } from "../src/document-session.js";
 
 const workspaceStore = new WorkspaceStore<WorkspaceAuthoringState>({
     session: createWorkspaceSession(),
@@ -197,6 +199,47 @@ beforeEach(() => {
 });
 
 describe("attached Shader Preview React surface", () => {
+    it("starts the committed target in one action even before React receives its new props", async () => {
+        const initial = createSession(createDocumentSessionId("selected-golden"), provenanceFromImport(), document);
+        const owner = { ...initial, presentation: { ...initial.presentation, emission } };
+        const store = new WorkspaceStore<WorkspaceAuthoringState>({ session: { ...createWorkspaceSession(), documents: [owner], activeDocumentId: owner.sessionId, preview: { targetDocumentId: owner.sessionId } }, profileDescriptor: descriptor });
+        const hook = renderHook(() => useShaderPreview({ document: { ...document, graphId: "previous-tab" }, descriptor, descriptorCompatible: true, emission: null, configuredTarget: "gglab-dx12", nativeFlow, workspaceStore: store }));
+        await waitFor(() => expect(hook.result.current.flow).not.toBeNull());
+        await act(async () => hook.result.current.startPreview(owner.sessionId));
+        expect((previewWorld.tool as FakeHostBoundary).previewBuildCalls).toBe(1);
+        expect((previewWorld.runtime as FakePreviewRuntimeBoundary).launchCalls).toBe(1);
+        hook.unmount();
+    });
+    it("does not build or launch when the requested graph is no longer the target", async () => {
+        const hook = renderHook(() => useShaderPreview({ document, descriptor, descriptorCompatible: true, emission, configuredTarget: "gglab-dx12", nativeFlow, workspaceStore }));
+        await waitFor(() => expect(hook.result.current.flow).not.toBeNull());
+        await act(async () => hook.result.current.startPreview(createDocumentSessionId("closed-target")));
+        expect((previewWorld.tool as FakeHostBoundary).previewBuildCalls).toBe(0);
+        expect((previewWorld.runtime as FakePreviewRuntimeBoundary).launchCalls).toBe(0);
+        expect(hook.result.current.notes.at(-1)?.level).toBe("refusal");
+        hook.unmount();
+    });
+    it("drops a start request when its target changes during the handshake", async () => {
+        const initial = createSession(createDocumentSessionId("pending-target"), provenanceFromImport(), document);
+        const owner = { ...initial, presentation: { ...initial.presentation, emission } };
+        const store = new WorkspaceStore<WorkspaceAuthoringState>({ session: { ...createWorkspaceSession(), documents: [owner], activeDocumentId: owner.sessionId, preview: { targetDocumentId: owner.sessionId } }, profileDescriptor: descriptor });
+        const hook = renderHook(() => useShaderPreview({ document, descriptor, descriptorCompatible: true, emission, configuredTarget: "gglab-dx12", nativeFlow, workspaceStore: store }));
+        await waitFor(() => expect(hook.result.current.flow).not.toBeNull());
+        const flow = hook.result.current.flow!;
+        const handshake = flow.previewHandshake.bind(flow);
+        let release!: () => void;
+        const delayed = new Promise<void>(resolve => { release = resolve; });
+        const spy = vi.spyOn(flow, "previewHandshake").mockImplementation(async input => { const record = await handshake(input); await delayed; return record; });
+        let pending!: Promise<void>;
+        act(() => { pending = hook.result.current.startPreview(owner.sessionId); });
+        await waitFor(() => expect(spy).toHaveBeenCalledOnce());
+        store.apply(state => ({ next: { ...state, session: { ...state.session, preview: { targetDocumentId: null } } }, result: null }));
+        await act(async () => { release(); await pending; });
+        expect((previewWorld.tool as FakeHostBoundary).previewBuildCalls).toBe(0);
+        expect((previewWorld.runtime as FakePreviewRuntimeBoundary).launchCalls).toBe(0);
+        expect(hook.result.current.notes.at(-1)?.text).toMatch(/changed during compatibility/);
+        hook.unmount();
+    });
     it("proves, publishes, launches, polls Current, and observes process exit", async () => {
         const hook = renderHook(() =>
             useShaderPreview({

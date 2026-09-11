@@ -820,22 +820,34 @@ export function App() {
      * against the CURRENT descriptor, and moves the target in ONE
      * synchronous store transaction. A refusal leaves the snapshot
      * untouched. */
+    const [startingGraphPreview, setStartingGraphPreview] = useState(false);
     const onPreviewThisGraph = async (): Promise<void> => {
-        const target = session;
-        const name = tabNameFor(target);
-        // The coordinator is always present for a mounted editor: with no
-        // desktop host the retarget is a pure Workspace commit (proven no
-        // Runtime); it blocks only when a host's old-Runtime teardown /
-        // ownership is unresolved. No null check — that would re-introduce
-        // the "host unavailable blocks Workspace transition" coupling.
-        const result = await preview.coordinator.retargetTo(target.sessionId);
-        if (result.ok === false) {
-            reportOperation(`Cannot retarget the Preview yet: ${describeTransitionRefusal(result.refusal)}.`);
-            return;
-        }
-        reportOperation(result.targetChanged
-                ? `Preview target set to "${name}" — switching tabs keeps it until you choose another.`
-                : `Preview target remains "${name}" — its emission was refreshed against the current descriptor.`);
+        if (startingGraphPreview) return;
+        setStartingGraphPreview(true);
+        setBottomPanelOpen(true);
+        setBottomPanelTab("output");
+        try {
+            const target = session;
+            const name = tabNameFor(target);
+            // The coordinator is always present for a mounted editor: with no
+            // desktop host the retarget is a pure Workspace commit (proven no
+            // Runtime); it blocks only when a host's old-Runtime teardown /
+            // ownership is unresolved. No null check — that would re-introduce
+            // the "host unavailable blocks Workspace transition" coupling.
+            const result = await preview.coordinator.retargetTo(target.sessionId);
+            if (result.ok === false) {
+                reportOperation(`Cannot retarget the Preview yet: ${describeTransitionRefusal(result.refusal)}.`, "refusal");
+                return;
+            }
+            reportOperation(result.targetChanged
+                    ? `Preview target set to "${name}" — switching tabs keeps it until you choose another.`
+                    : `Preview target remains "${name}" — its emission was refreshed against the current descriptor.`);
+            setBottomPanelTab("preview");
+            await preview.startPreview(target.sessionId);
+        } catch (error) {
+            setBottomPanelTab("output");
+            reportOperation(`Preview failed: ${error instanceof Error ? error.message : String(error)}`, "refusal");
+        } finally { setStartingGraphPreview(false); }
     };
 
     // ---- Workspace Explorer. The host owns the root dialog, discovery,
@@ -2129,9 +2141,10 @@ export function App() {
                     <Button
                         variant="toolbar"
                         onClick={() => void onPreviewThisGraph()}
-                        title="Attach the active document to the Runtime Preview. Explicit intent: switching tabs keeps the target."
+                        disabled={startingGraphPreview || preview.buildInFlight || preview.launchInFlight}
+                        title="Select this graph, prove Preview compatibility, and build. Launch Runtime only after successful publication."
                     >
-                        ▶ Preview this graph
+                        {startingGraphPreview ? "Starting Preview…" : "▶ Preview this graph"}
                     </Button>
                 </div>
             </div>

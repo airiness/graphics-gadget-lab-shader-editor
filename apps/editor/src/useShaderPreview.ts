@@ -14,6 +14,7 @@ import type {
     SurfaceProfileDescriptor,
 } from "@gglab/shader-graph-core";
 import type { NativeBuildFlow } from "./native-build-flow.js";
+import { checkProfileDescriptorCompatibility } from "@gglab/shader-graph-core";
 import {
     PreviewBuildController,
     type PreviewBuildGate,
@@ -72,6 +73,7 @@ export interface ShaderPreviewSurface {
     readonly initialPublicationAvailable: boolean;
     readonly previewHandshake: () => Promise<void>;
     readonly buildPreview: () => Promise<void>;
+    readonly startPreview: (documentId: import("./workspace-session.js").DocumentSessionId) => Promise<void>;
     readonly launchPreview: () => Promise<void>;
     readonly stopPreview: () => Promise<void>;
     readonly notes: readonly { readonly level: "ok" | "info" | "refusal"; readonly text: string }[];
@@ -248,7 +250,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
         }
     }, [note, coordinator]);
 
-    const buildPreview = useCallback(async (): Promise<void> => {
+    const buildPreviewFor = useCallback(async (requested: PreviewCompositionInput): Promise<void> => {
         const current = flowRef.current;
         const manager = managerRef.current;
         if (current === null || manager === null) {
@@ -257,7 +259,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
         }
         setBuildInFlight(true);
         try {
-            const launch = await coordinator.buildPreview(composition);
+            const launch = await coordinator.buildPreview(requested);
             if (!launch.issued) {
                 note("refusal", `Preview build was not issued (${launch.reason}).`);
                 return;
@@ -295,7 +297,44 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             setBuildInFlight(false);
             bump((value) => value + 1);
         }
-    }, [composition, launchPreview, note]);
+    }, [coordinator, launchPreview, note]);
+
+    const buildPreview = useCallback(() => buildPreviewFor(composition), [buildPreviewFor, composition]);
+    const starting = useRef(false);
+    const startPreview = useCallback(async (documentId: import("./workspace-session.js").DocumentSessionId): Promise<void> => {
+        if (starting.current) return;
+        starting.current = true;
+        try {
+            const currentInput = inputRef.current;
+            const state = currentInput.workspaceStore.getSnapshot();
+            const owner = state.session.documents.find(document => document.sessionId === documentId);
+            const currentFlow = flowRef.current;
+            if (!owner || state.session.preview.targetDocumentId !== documentId || !currentFlow || !coordinator.hostAdmitted) {
+                note("refusal", "Preview requires a selected target and a ready host for the current Environment.");
+                return;
+            }
+            // Retarget committed synchronously; React may still expose the previous target's props.
+            const descriptor = state.session.activeEnvironment === null ? state.profileDescriptor : currentInput.environment?.resolveProfile(owner.history.present) ?? null;
+            const requested: PreviewCompositionInput = { documentOwner: owner, document: owner.history.present, descriptor, descriptorCompatible: descriptor !== null && checkProfileDescriptorCompatibility(owner.history.present, descriptor).ok, emission: owner.presentation.emission, configuredTarget: currentInput.configuredTarget, previewProgramDescriptorIdentity };
+            note("info", "Proving Preview compatibility for the selected graph…");
+            const record = await currentFlow.previewHandshake(requested);
+            bump(value => value + 1);
+            if (flowRef.current !== currentFlow || !coordinator.hostAdmitted) return;
+            const latest = inputRef.current.workspaceStore.getSnapshot().session;
+            if (latest.preview.targetDocumentId !== documentId || latest.activeEnvironment !== state.session.activeEnvironment || latest.workspaceRoot?.canonicalWorkspaceUri !== state.session.workspaceRoot?.canonicalWorkspaceUri || latest.documents.find(document => document.sessionId === documentId)?.history.present !== owner.history.present || inputRef.current.configuredTarget !== requested.configuredTarget) {
+                note("refusal", "Preview target, document or Environment changed during compatibility checks. Retry the current graph.");
+                return;
+            }
+            if (record.kind !== "settled" || record.stale || record.eligibility.status !== "eligible") {
+                note("refusal", `Preview compatibility refused: ${JSON.stringify(record)}. Check native tool readiness and the Preview target contract.`);
+                return;
+            }
+            note("info", "Building Preview; Runtime will start only after successful publication…");
+            await buildPreviewFor(requested);
+        } catch (error) {
+            note("refusal", `Preview failed: ${describeError(error)}`);
+        } finally { starting.current = false; bump(value => value + 1); }
+    }, [buildPreviewFor, coordinator, note]);
 
     const stopPreview = useCallback(async (): Promise<void> => {
         const manager = managerRef.current;
@@ -376,6 +415,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
         initialPublicationAvailable: coordinator.hostAdmitted && (flow?.initialPublicationAvailable ?? false),
         previewHandshake,
         buildPreview,
+        startPreview,
         launchPreview,
         stopPreview,
         notes,
