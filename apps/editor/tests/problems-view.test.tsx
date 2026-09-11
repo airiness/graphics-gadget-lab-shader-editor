@@ -364,7 +364,7 @@ describe("the problems wiring and boundary", () => {
         expect(app).toContain("composeWorkspaceProblemSnapshot");
         const composition = read("../src/problems-composition.ts");
         expect(composition).toContain("validateShaderGraph(graph).diagnostics");
-        expect(composition).toContain("checkProfileConformance(graph, descriptor).diagnostics");
+        expect(composition).toContain("checkProfileConformance(graph, selectedDescriptor).diagnostics");
         expect(composition).toContain("document.presentation.emission?.ok === false");
         // THE LOAD-RESULT PIN: kept on its own surface, never composed
         // under the current document's identity:

@@ -180,6 +180,8 @@ export class PreviewCoordinator {
         private readonly managerSource: () => AttachedPreviewRuntimeManager | null,
         private readonly flowSource: () => PreviewBuildController | null,
         private readonly store: WorkspaceStore<WorkspaceAuthoringState>,
+        private readonly environmentHostAdmitted: () => boolean | null = () => null,
+        private readonly environmentDescriptor: (document: import("@gglab/shader-graph-core").ShaderGraphDocument) => import("@gglab/shader-graph-core").SurfaceProfileDescriptor | null = () => null,
     ) {}
 
     private get manager(): AttachedPreviewRuntimeManager | null {
@@ -193,6 +195,10 @@ export class PreviewCoordinator {
     /** Ownership admission only; this is not native compatibility or build readiness. */
     get legacyHostAdmitted(): boolean {
         return this.inFlight === null && this.store.getSnapshot().session.activeEnvironment === null;
+    }
+
+    get hostAdmitted(): boolean {
+        return this.inFlight === null && (this.environmentHostAdmitted() ?? (this.store.getSnapshot().session.activeEnvironment === null));
     }
 
     /** Build / Runtime gate composition. The STRUCTURAL refusals come
@@ -214,7 +220,7 @@ export class PreviewCoordinator {
             return { admitted: false, reasons: [{ reason: "preview-transition-in-flight" }], request: null, eligibility: null };
         }
         const flow = this.flow;
-        if (flow === null || this.store.getSnapshot().session.activeEnvironment !== null) {
+        if (flow === null || !this.hostAdmitted) {
             return { admitted: false, reasons: [{ reason: "preview-host-unavailable" }], request: null, eligibility: null };
         }
         const refusal = this.attachedRuntimeRefusal(flow);
@@ -288,7 +294,7 @@ export class PreviewCoordinator {
      * Ready/current for a build line we cannot actually admit. */
     runtimeProjection(input: PreviewCompositionInput): PreviewRuntimeProjection {
         const flow = this.flow;
-        if (flow === null || this.inFlight !== null || this.store.getSnapshot().session.activeEnvironment !== null) {
+        if (flow === null || this.inFlight !== null || !this.hostAdmitted) {
             return {
                 freshness: "idle",
                 latestBuildState: null,
@@ -522,7 +528,7 @@ export class PreviewCoordinator {
         if (target === undefined) {
             return { refused: { reason: "target-not-open", targetDocumentId }, next: state, targetChanged: false };
         }
-        const descriptor = state.profileDescriptor;
+        const descriptor = state.session.activeEnvironment === null ? state.profileDescriptor : this.environmentDescriptor(target.history.present);
         if (descriptor === null) {
             return {
                 refused: {

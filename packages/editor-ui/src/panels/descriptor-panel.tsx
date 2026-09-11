@@ -53,6 +53,8 @@ export interface PickedText {
 
 export interface DescriptorPanelProps {
     readonly state: DescriptorPanelState;
+    /** The authoring context supplies this instance; file loading is unavailable. */
+    readonly readOnly?: boolean;
     readonly onStateChange: (state: DescriptorPanelState) => void;
     /**
      * Optional host file-open injection (desktop slice): resolve with
@@ -68,6 +70,7 @@ export function DescriptorPanel(props: DescriptorPanelProps) {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const state = props.state;
     const onOpenClicked = async (): Promise<void> => {
+        if (props.readOnly) return;
         const nativeOpen = props.openDescriptorFile;
         if (nativeOpen === undefined) {
             fileInputRef.current?.click();
@@ -101,18 +104,20 @@ export function DescriptorPanel(props: DescriptorPanelProps) {
                 hover/pressed/focus states from the button design language.
                 Desktop hosts inject a native open; the web build keeps
                 the hidden file input fallback. */}
-            <Button variant="secondary" className="self-start" onClick={() => void onOpenClicked()}>
+            <Button disabled={props.readOnly} variant="secondary" className="self-start" onClick={() => void onOpenClicked()}>
                 <FileIcon />
                 Open descriptor file…
             </Button>
             <input
                 ref={fileInputRef}
+                disabled={props.readOnly}
                 type="file"
                 accept="application/json,.json"
                 className="gglab-visually-hidden"
                 tabIndex={-1}
                 aria-hidden
                 onChange={async (event) => {
+                    if (props.readOnly) return;
                     const file = event.currentTarget.files?.[0];
                     if (file === undefined) {
                         return;

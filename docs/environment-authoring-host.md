@@ -3,8 +3,11 @@
 The persistent host in `apps/editor/src/environment-authoring-host.ts` adapts a
 selected final Environment and separate writable state to the existing
 `HostToolBoundary`, `PreviewObservationBoundary` and `PreviewRuntimeBoundary`.
-It is a callable desktop composition service. The application hooks and menu
-workflow do not consume it yet; one-click import is not ready for user acceptance.
+It is a callable desktop composition service. The
+[Workspace authoring integration](environment-workspace-authoring.md) now connects
+application hooks to this host. The import menu remains outstanding; one-click
+import is not ready for user acceptance. Verification below records this service's
+original boundary qualification.
 
 ## Calling the host
 

@@ -73,6 +73,7 @@ import {
     type WorkspaceDocumentEntry,
     type WorkspaceDiscoveryId,
 } from "./host-io.js";
+import { useEnvironmentAuthoring } from "./use-environment-authoring.js";
 import { useNativeBuild } from "./useNativeBuild.js";
 import { useShaderPreview } from "./useShaderPreview.js";
 import { describeTransitionRefusal, resolvePreviewTarget } from "./preview-coordinator.js";
@@ -1446,7 +1447,12 @@ export function App() {
 
     // The single current descriptor authority: the store's committed fact
     // (never a capture from a render that could stale across an await).
-    const descriptor: SurfaceProfileDescriptor | null = authoring.profileDescriptor;
+    const environmentAuthoring = useEnvironmentAuthoring(authoringStore, workspace.activeEnvironment, environmentEvidence.begin);
+    const environmentBinding = environmentAuthoring.legacyAdmitted ? undefined : environmentAuthoring.binding;
+    const descriptor: SurfaceProfileDescriptor | null = useMemo(() => {
+        if (workspace.activeEnvironment === null) return authoring.profileDescriptor;
+        try { return environmentBinding?.resolveProfile(document) ?? null; } catch { return null; }
+    }, [workspace.activeEnvironment, authoring.profileDescriptor, environmentBinding, document]);
 
     const flow = useMemo(() => documentToFlow(document, focus, selectedConnectionId, selectedNodeId), [document, focus, selectedConnectionId, selectedNodeId]);
     const selectedNode = useMemo(
@@ -1849,6 +1855,7 @@ export function App() {
     };
 
     const onDescriptorStateChange = (next: DescriptorPanelState): void => {
+        if (authoringStore.getSnapshot().session.activeEnvironment !== null) return;
         // The descriptor is a WORKSPACE-scoped authority: every open
         // document's emission snapshot is f(document, D-old) and must never
         // survive the commit as "current" when the descriptor moves. One
@@ -1892,6 +1899,8 @@ export function App() {
     // the session store, the inspector projection); the app owns only
     // which facts feed them and the actions the user can take.
     const native = useNativeBuild({
+        ...(environmentBinding === undefined ? {} : { environment: environmentBinding, retryHost: environmentAuthoring.retry }),
+        admitTarget: environmentAuthoring.setTarget,
         onOutputEvent: nativeOutput,
         descriptor,
         descriptorCompatible: profileCompatibility !== null && profileCompatibility.verdict.ok,
@@ -1907,20 +1916,40 @@ export function App() {
     const previewTargetSession = resolvePreviewTarget(workspace) ?? session;
     const previewDocument = previewTargetSession.history.present;
     const previewEmission = previewTargetSession.presentation.emission;
+    const previewDescriptor = useMemo(() => {
+        if (workspace.activeEnvironment === null) return descriptor;
+        try { return environmentBinding?.resolveProfile(previewDocument) ?? null; } catch { return null; }
+    }, [workspace.activeEnvironment, descriptor, environmentBinding, previewDocument]);
     const preview = useShaderPreview({
+        ...(environmentBinding === undefined ? {} : { environment: environmentBinding }),
         documentOwner: previewTargetSession,
         document: previewDocument,
-        descriptor,
-        descriptorCompatible: profileCompatibility !== null && profileCompatibility.verdict.ok,
+        descriptor: previewDescriptor,
+        descriptorCompatible: previewDescriptor !== null && checkProfileDescriptorCompatibility(previewDocument, previewDescriptor).ok,
         emission: previewEmission,
         configuredTarget: native.target.target,
         nativeFlow: native.flow,
         workspaceStore: authoringStore,
     });
 
+    // Retain owner sessions for chronology only; Problems consumes current bindings.
+    const [buildHistory, setBuildHistory] = useState<readonly import("./native-build-session.js").NativeBuildSession[]>([]);
+    const [previewHistory, setPreviewHistory] = useState<readonly import("./preview-build-session.js").PreviewBuildSession[]>([]);
+    useEffect(() => {
+        const owner = native.flow?.buildSession;
+        if (owner) setBuildHistory(previous => previous.includes(owner) ? previous : [...previous, owner]);
+    }, [native.flow]);
+    useEffect(() => {
+        const owner = preview.flow?.session;
+        if (owner) setPreviewHistory(previous => previous.includes(owner) ? previous : [...previous, owner]);
+    }, [preview.flow]);
+
     // Recompose the Workspace snapshot on every render. Owner objects retain
     // identity across settlements, so their identity is not a freshness token.
-    const problemsSnapshot = composeWorkspaceProblemSnapshot(workspace, descriptor, workspace.activeEnvironment === null ? native.flow?.buildSession ?? null : null, workspace.activeEnvironment === null ? preview.flow?.session ?? null : null, environmentProblems);
+    const problemsSnapshot = composeWorkspaceProblemSnapshot(workspace, descriptor, native.flow?.buildSession ?? null, preview.coordinator.hostAdmitted ? preview.flow?.session ?? null : null, environmentProblems, graph => {
+        if (workspace.activeEnvironment === null) return descriptor;
+        try { return environmentBinding?.resolveProfile(graph) ?? null; } catch { return null; }
+    });
     const problemNavigation = (entry: ProblemSnapshotEntry) => {
         const navigation = resolveProblemNavigation(authoringStore.getSnapshot().session, entry);
         return { available: navigation.available, detail: navigation.available ? `${sessionTitle(navigation.document, isDirty(navigation.document))}: ${navigation.detail}` : navigation.reason };
@@ -2344,7 +2373,7 @@ export function App() {
                         )}
                         {inspectorZone === "contract" && (
                             <>
-                            <DescriptorPanel state={descriptorState} onStateChange={onDescriptorStateChange} openDescriptorFile={openDescriptorFile} />
+                            <DescriptorPanel readOnly={workspace.activeEnvironment !== null} state={workspace.activeEnvironment === null ? descriptorState : descriptor === null ? { kind: "empty" } : { kind: "ready", descriptor }} onStateChange={onDescriptorStateChange} openDescriptorFile={openDescriptorFile} />
                     {graphSets.map((set) => (
                         <DiagnosticsPanel key={set.title} title={set.title} diagnostics={set.diagnostics} ok={set.ok} passedText={set.passedText} onSelect={selectDiagnostic} />
                     ))}
@@ -2455,6 +2484,7 @@ export function App() {
                             <div className="gglab-native-path-row">
                                 <Input
                                     id="native-tool-path"
+                                    disabled={workspace.activeEnvironment !== null}
                                     className="gglab-native-path-input"
                                     placeholder="C:\…\gglab-shaderc.exe"
                                     title={native.discoveryConfig.explicitConfig === "" ? undefined : native.discoveryConfig.explicitConfig}
@@ -2463,7 +2493,7 @@ export function App() {
                                     aria-label="Explicit tool path (discovery rule 1)"
                                 />
                                 {fileChannel !== null && (
-                                    <Button variant="ghost" className="gglab-native-path-browse" onClick={() => void browseToolPath()}>
+                                    <Button variant="ghost" className="gglab-native-path-browse" disabled={workspace.activeEnvironment !== null} onClick={() => void browseToolPath()}>
                                         <FileIcon />
                                         Browse…
                                     </Button>
@@ -2480,6 +2510,7 @@ export function App() {
                             <div className="gglab-native-path-row">
                                 <Input
                                     id="native-sibling-build"
+                                    disabled={workspace.activeEnvironment !== null}
                                     className="gglab-native-path-input"
                                     placeholder="…\Build\Output\x64"
                                     title={native.discoveryConfig.siblingBuildOutput === "" ? undefined : native.discoveryConfig.siblingBuildOutput}
@@ -2488,7 +2519,7 @@ export function App() {
                                     aria-label="Configured sibling build-output location (discovery rule 2)"
                                 />
                                 {fileChannel !== null && (
-                                    <Button variant="ghost" className="gglab-native-path-browse" onClick={() => void browseSiblingBuildOutput()}>
+                                    <Button variant="ghost" className="gglab-native-path-browse" disabled={workspace.activeEnvironment !== null} onClick={() => void browseSiblingBuildOutput()}>
                                         <FileIcon />
                                         Browse…
                                     </Button>
@@ -2752,9 +2783,15 @@ export function App() {
                             and its actions. */}
                         <div className="gglab-bottom-panel-body" role="tabpanel" aria-label={bottomPanelTabLabel(bottomPanelTab)}>
                             {bottomPanelTab === "build" ? (
-                                <BuildPanelView session={native.flow?.buildSession ?? null} notes={native.notes} />
+                                <>
+                                    {buildHistory.filter(owner => owner !== native.flow?.buildSession).map((owner, index) => <details key={index}><summary>Previous authoring session</summary><BuildPanelView session={owner} notes={[]} /></details>)}
+                                    <BuildPanelView session={native.flow?.buildSession ?? null} notes={native.notes} />
+                                </>
                             ) : bottomPanelTab === "preview" ? (
-                                <PreviewPanelView session={preview.flow?.session ?? null} notes={preview.notes} />
+                                <>
+                                    {previewHistory.filter(owner => owner !== preview.flow?.session).map(owner => <details key={owner.sessionId}><summary>Previous Preview session</summary><PreviewPanelView session={owner} notes={[]} /></details>)}
+                                    <PreviewPanelView session={preview.flow?.session ?? null} notes={preview.notes} />
+                                </>
                             ) : bottomPanelTab === "problems" ? (
                                 <ProblemsPanelView snapshot={shownProblemsSnapshot} onClear={clearProblemsPresentation} navigation={problemNavigation} onNavigate={navigateProblem} />
                             ) : (

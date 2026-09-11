@@ -1,6 +1,6 @@
 # Environment import readiness and publisher handoff
 
-Current update (2026-09-10): the owner approved the v1 integration baseline in
+Current update (2026-09-11): the owner approved the v1 integration baseline in
 `../../GraphicsGadgetLabDocs/GGLab_Environment_Publication_Approval.md`.
 The producer alias defect and evidence baseline were closed by
 [clean replay](environment-clean-replay.md). [Tauri storage integration](environment-tauri-storage.md)
@@ -8,7 +8,8 @@ adds native inspection/storage and recovery composition. Final proof, managed
 state, guarded publication/registration and Workspace activation now have callable
 implementations. The [persistent authoring host](environment-authoring-host.md)
 adds final-location profile resolution and existing build/process boundaries.
-The desktop hook integration and menu import workflow remain incomplete. Earlier
+[Workspace authoring integration](environment-workspace-authoring.md) connects the
+desktop hooks; the menu import workflow remains incomplete. Earlier
 approval/defect statements below describe the historical handoff rather than the
 current gate.
 

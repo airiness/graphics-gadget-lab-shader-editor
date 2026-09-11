@@ -245,6 +245,10 @@ mod tests {
                         storage.observe(args["directoryId"].as_str().unwrap())?,
                     )
                     .unwrap(),
+                    "shader-environment-registry-open" => {
+                        let registry = crate::environment_storage::RegistryStorage::new(PathBuf::from(std::env::var("GGLAB_REGISTRATION_ROOT").expect("Test registry root")))?;
+                        serde_json::to_value(storage.open_registration(&registry, args["key"].as_str().unwrap())?).unwrap()
+                    },
                     "shader-environment-open-execution" => serde_json::to_value(execution.open(
                         &storage,
                         &tools,

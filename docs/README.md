@@ -84,6 +84,9 @@ below), not this one.
 - [Environment authoring host](environment-authoring-host.md) documents persistent
   build/process boundaries, final-location profile resolution and native regressions.
 
+- [Workspace Environment authoring](environment-workspace-authoring.md) connects the
+  shared controller owner to application hooks and records native integration evidence.
+
 ## Documents owned by other repositories (referenced, not copied)
 
 GGLab docs repository:

@@ -129,15 +129,17 @@ export function composeWorkspaceProblemSnapshot(
     buildSession: NativeBuildSession | null,
     previewSession: PreviewBuildSession | null,
     environmentProblems: readonly ProblemSnapshotEntry[] = [],
+    resolveDescriptor: (document: import("@gglab/shader-graph-core").ShaderGraphDocument) => SurfaceProfileDescriptor | null = () => descriptor,
 ): ProblemSnapshot {
     const entries: ProblemSnapshotEntry[] = [...environmentProblems];
     const openIds = new Set(workspace.documents.map((document) => document.sessionId));
     for (const document of workspace.documents) {
         const graph = document.history.present;
+        const selectedDescriptor = resolveDescriptor(graph);
         const diagnostics = [
             ...validateShaderGraph(graph).diagnostics,
             ...resolveGraphTypes(graph).diagnostics,
-            ...(descriptor === null ? [] : [...checkProfileDescriptorCompatibility(graph, descriptor).diagnostics, ...checkProfileConformance(graph, descriptor).diagnostics]),
+            ...(selectedDescriptor === null ? [] : [...checkProfileDescriptorCompatibility(graph, selectedDescriptor).diagnostics, ...checkProfileConformance(graph, selectedDescriptor).diagnostics]),
             ...(document.presentation.emission?.ok === false ? document.presentation.emission.diagnostics : []),
         ];
         entries.push(...problemEntriesFromGraphDiagnostics(diagnostics, { documentSessionId: document.sessionId, documentRevision: documentRevision(document) }));

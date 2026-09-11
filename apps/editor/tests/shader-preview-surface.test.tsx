@@ -243,6 +243,29 @@ describe("attached Shader Preview React surface", () => {
         hook.unmount();
     });
 
+    it("does not auto-launch from an old build delivered after Workspace Environment selection changes", async () => {
+        const store = new WorkspaceStore<WorkspaceAuthoringState>({ session: createWorkspaceSession(), profileDescriptor: null });
+        const hook = renderHook(() => useShaderPreview({ document, descriptor, descriptorCompatible: true, emission, configuredTarget: "gglab-dx12", nativeFlow, workspaceStore: store }));
+        await waitFor(() => expect(hook.result.current.flow).not.toBeNull());
+        await act(async () => hook.result.current.previewHandshake());
+        let release!: () => void;
+        const delivery = new Promise<void>(resolve => { release = resolve; });
+        const coordinator = hook.result.current.coordinator;
+        const issue = coordinator.buildPreview.bind(coordinator);
+        vi.spyOn(coordinator, "buildPreview").mockImplementation(async input => {
+            const launch = await issue(input);
+            return launch.issued ? { ...launch, outcome: launch.outcome.then(async outcome => { await delivery; return outcome; }) } : launch;
+        });
+        let pending!: Promise<void>;
+        act(() => { pending = hook.result.current.buildPreview(); });
+        await waitFor(() => expect(hook.result.current.flow?.initialPublicationAvailable).toBe(true));
+        store.apply(state => ({ next: { ...state, session: { ...state.session, activeEnvironment: { environmentId: "sha256:" + "a".repeat(64), environmentRoot: "D:/new", stateRoot: "D:/state", activationSequence: 1, tool: { path: "D:/new/tool.exe", sha256: "b".repeat(64) }, runtime: { path: "D:/new/runtime.exe", sha256: "c".repeat(64) } } } }, result: null }));
+        await act(async () => { release(); await pending; });
+        expect((previewWorld.runtime as FakePreviewRuntimeBoundary).launchCalls).toBe(0);
+        expect(coordinator.hostAdmitted).toBe(false);
+        hook.unmount();
+    });
+
     it("unmounts cleanly while a launch is pending and still stops the Runtime that launches after unmount", async () => {
         previewWorld.runtimeSpec = {
             launches: [{ kind: "launched", runtimeIdentity: "runtime-a" }],

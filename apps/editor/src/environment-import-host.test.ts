@@ -11,6 +11,11 @@ import { createEnvironmentActivationHost } from "./environment-activation-host.j
 import { PreviewCoordinator } from "./preview-coordinator.js";
 import { WorkspaceStore, type WorkspaceAuthoringState } from "./workspace-store.js";
 import { createWorkspaceSession } from "./workspace-session.js";
+import { emitHlsl } from "@gglab/shader-graph-core";
+import { createWorkspaceEnvironmentBinding } from "./use-environment-authoring.js";
+import { createSession, provenanceFromImport } from "./document-session.js";
+import { createDocumentSessionId } from "./workspace-session.js";
+import { previewProgramDescriptorIdentity } from "./preview-program-contract.js";
 import { createEnvironmentImportHost } from "./environment-import-host.js";
 
 describe("Environment import composition", () => {
@@ -76,7 +81,33 @@ describe("Environment import composition", () => {
                 expect(result).toMatchObject({ ok: true, identity: { kind: "environment" } });
                 expect(workspace.getSnapshot().session.activeEnvironment).toMatchObject({ environmentId: first.registration.closure.manifest.environmentId, environmentRoot: env.root, stateRoot: writable.root });
                 expect(requests).toHaveLength(12);
-                activationEvidence = { result, selection: workspace.getSnapshot().session.activeEnvironment, previousRuntime: "absent", nativeAuthoringBinding: "unavailable" };
+                const selection = workspace.getSnapshot().session.activeEnvironment!;
+                const authoringRuns = [];
+                for (const backend of ["dx12", "vulkan"] as const) for (const version of [1, 2] as const) {
+                    const owner = createWorkspaceEnvironmentBinding(invoke, selection, () => workspace.getSnapshot().session.activeEnvironment === selection, backend);
+                    try {
+                        await owner.open();
+                        const documentOwner = createSession(createDocumentSessionId(`native-${backend}-${version}`), provenanceFromImport(), graph(version));
+                        const document = documentOwner.history.present, descriptor = owner.resolveProfile(document);
+                        owner.native.updateJudgment(descriptor.processContract.tool);
+                        await owner.native.discover({ bundled: false }); await owner.native.handshake();
+                        const input = { documentOwner, document, descriptor, descriptorCompatible: true, emission: emitHlsl(document, descriptor), configuredTarget: backend === "dx12" ? "gglab-dx12" : "gglab-vulkan13", previewProgramDescriptorIdentity };
+                        const bound = new PreviewCoordinator(() => owner.manager, () => owner.preview, workspace, owner.current, d => owner.resolveProfile(d));
+                        expect(await owner.preview.previewHandshake(input)).toMatchObject({ kind: "settled", eligibility: { status: "eligible" } });
+                        const build = await bound.buildPreview(input);
+                        if (!build.issued) throw new Error(`Workspace binding build refused: ${JSON.stringify(build)}`);
+                        expect(await build.outcome).toMatchObject({ kind: "published" });
+                        const candidate = owner.preview.launchCandidate(); if (candidate === null) throw new Error("Missing launch candidate");
+                        expect(await owner.manager.launch(candidate)).toMatchObject({ launched: true });
+                        const until = Date.now() + 30000;
+                        while (owner.preview.acceptedObservation?.status !== "loaded" && Date.now() < until) {
+                            await owner.preview.refreshObservation(); await new Promise(resolve => setTimeout(resolve, 100));
+                        }
+                        expect(owner.preview.acceptedObservation?.status).toBe("loaded");
+                        authoringRuns.push({ backend, profileVersion: version, sessionId: owner.preview.session.sessionId, observation: owner.preview.acceptedObservation });
+                    } finally { await owner.close(); }
+                }
+                activationEvidence = { result, selection, previousRuntime: "absent", nativeAuthoringBinding: "qualified", authoringRuns };
             }
             if (process.env.GGLAB_IMPORT_REPORT) writeFileSync(process.env.GGLAB_IMPORT_REPORT, JSON.stringify({
                 producerRevision: baseline.producerRevision,

@@ -2429,7 +2429,7 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         const applyAt = retargetBody.indexOf("this.store.apply");
         expect(teardownAt).toBeGreaterThanOrEqual(0);
         expect(applyAt).toBeGreaterThan(teardownAt);
-        expect(coordinator).toMatch(/const descriptor = state\.profileDescriptor/);
+        expect(coordinator).toContain("state.session.activeEnvironment === null ? state.profileDescriptor : this.environmentDescriptor(target.history.present)");
         expect(coordinator).toMatch(/emitHlsl\(target\.history\.present, descriptor\)/);
         expect(coordinator).toMatch(/target-emission-unavailable/);
     });
