@@ -585,6 +585,7 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
             "shader-workspace-cancel-discovery",
             "shader-workspace-choose-root",
             "shader-workspace-discover",
+            "shader-workspace-reopen-last",
         ]);
         // No raw arbitrary-path parameter exists on the document command
         // surface. The native service resolves only host-issued URI
@@ -644,5 +645,20 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
             expect(security.csp).toContain("connect-src");
         }
         expect(typeof security?.devCsp).toBe("string");
+    });
+});
+
+
+describe("remembered Workspace admission", () => {
+    it("asks the host to re-admit its own saved root without submitting a path", async () => {
+        const fake = fakeHost({ invoke: async () => HOST_WORKSPACE_ROOT });
+        expect(await createDesktopFileChannel(fake.host).reopenLastWorkspace()).toEqual(HOST_WORKSPACE_ROOT);
+        expect(fake.invokes).toEqual([{ command: "shader-workspace-reopen-last" }]);
+        expect(fake.opens).toEqual([]);
+        expect(fake.reads).toEqual([]);
+    });
+    it("keeps a missing root distinct from a malformed host response", async () => {
+        expect(await createDesktopFileChannel(fakeHost({ invoke: async () => null }).host).reopenLastWorkspace()).toBeNull();
+        await expect(createDesktopFileChannel(fakeHost({ invoke: async () => ({ displayPath: "C:/old" }) }).host).reopenLastWorkspace()).rejects.toThrow();
     });
 });

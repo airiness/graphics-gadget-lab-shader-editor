@@ -854,7 +854,7 @@ export function App() {
     // and the exact snapshot read; the WebView only observes host-issued
     // canonical URIs (never an arbitrary path) and opens them as co-existing
     // tabs. Discovery is bounded/cancellable.
-    const onChooseWorkspaceRoot = async (): Promise<void> => {
+    const onChooseWorkspaceRoot = async (reopen = false): Promise<void> => {
         const channel = fileChannel;
         if (channel === null) {
             return;
@@ -862,9 +862,10 @@ export function App() {
         setExplorerError(null);
         setExplorerStatus(null);
         try {
-            const root = await channel.chooseWorkspaceRoot();
+            const root = await (reopen ? channel.reopenLastWorkspace() : channel.chooseWorkspaceRoot());
             if (root === null) {
-                return; // user cancelled the directory dialog
+                if (reopen) setExplorerStatus("No previous Workspace is available. Choose a directory to begin.");
+                return; // user cancelled, or the remembered root is unavailable
             }
             // The new root supersedes any in-flight discovery. Invalidate the
             // binding FIRST, so a late settlement from the OLD root is dropped
@@ -2186,6 +2187,9 @@ export function App() {
                                     <Button variant="secondary" onClick={() => void onChooseWorkspaceRoot()}>
                                         Choose…
                                     </Button>
+                                )}
+                                {fileChannel !== null && workspace.workspaceRoot === null && (
+                                    <Button variant="secondary" onClick={() => void onChooseWorkspaceRoot(true)}>Reopen last Workspace</Button>
                                 )}
                                 <Button variant="primary" onClick={() => void onDiscoverWorkspace()} disabled={explorerBusy}>
                                     {explorerBusy ? "Discovering…" : "Discover"}

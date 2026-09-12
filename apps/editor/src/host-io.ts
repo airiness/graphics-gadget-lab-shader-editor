@@ -149,6 +149,8 @@ export type DocumentSaveOutcome =
 export interface FileChannel {
     /** Host-owned directory dialog followed by canonical root admission. */
     chooseWorkspaceRoot(): Promise<WorkspaceRootHandle | null>;
+    /** Re-admit only the host-remembered Workspace; never restore live handles. */
+    reopenLastWorkspace(): Promise<WorkspaceRootHandle | null>;
     /** Bounded/cancellable discovery; the prior token turns this into a
      * pull-based change observation. */
     discoverWorkspace(
@@ -180,6 +182,10 @@ export interface FileChannel {
 
 export function createDesktopFileChannel(host: DesktopHost): FileChannel {
     return {
+        async reopenLastWorkspace() {
+            const value = await host.invoke("shader-workspace-reopen-last");
+            return value === null ? null : readWorkspaceRoot(value);
+        },
         async chooseWorkspaceRoot() {
             const value = await host.invoke("shader-workspace-choose-root");
             return value === null ? null : readWorkspaceRoot(value);
