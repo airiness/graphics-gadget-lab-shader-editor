@@ -19,6 +19,7 @@
  * The channel is pure: invoke/channel/readTextFile are injected, so the module
  * has no Tauri import of its own and tests drive it with fakes.
  */
+import { readWorkspaceResume, type WorkspaceResumeHost } from "./workspace-resume.js";
 import { readLayoutPreferences, type LayoutPreferenceHost } from "./layout-preferences.js";
 
 import {
@@ -140,7 +141,7 @@ export type DocumentSaveOutcome =
  * reads. `null`/`cancelled` are user choices; rejections are explicit host or
  * contract failures.
  */
-export interface FileChannel extends LayoutPreferenceHost {
+export interface FileChannel extends LayoutPreferenceHost, WorkspaceResumeHost {
     /** Host-owned directory dialog followed by canonical root admission. */
     chooseWorkspaceRoot(): Promise<WorkspaceRootHandle | null>;
     /** Re-admit only the host-remembered Workspace; never restore live handles. */
@@ -176,6 +177,14 @@ export interface FileChannel extends LayoutPreferenceHost {
 
 export function createDesktopFileChannel(host: DesktopHost): FileChannel {
     return {
+        async readWorkspaceResume(workspaceUri) {
+            const value = await host.invoke("shader-workspace-read-resume", { workspaceUri });
+            if (value === null) return null;
+            const intent = readWorkspaceResume(value);
+            if (intent.workspaceUri !== workspaceUri) throw new Error("Host returned another Workspace's resume intent.");
+            return intent;
+        },
+        async saveWorkspaceResume(intent) { await host.invoke("shader-workspace-save-resume", { intent: readWorkspaceResume(intent) }); },
         async readLayoutPreferences() {
             const value = await host.invoke("shader-editor-read-layout");
             return value === null ? null : readLayoutPreferences(value);

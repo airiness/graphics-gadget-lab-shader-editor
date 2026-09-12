@@ -107,3 +107,26 @@ semantic histories, fixed selection purposes and no arbitrary frontend dialog
 options. Only a selected descriptor receives single-file read scope. The generic
 WebView open-dialog permission has been removed. Actual native dialog navigation
 remains part of final desktop acceptance.
+
+
+## Safe session intent implementation
+
+Explorer now offers explicit restoration of host-backed per-Workspace tab,
+active-tab, Preview-target, Environment and build-target intent. It re-discovers
+and reads files, preserves already-open edits, reuses the existing Environment
+verification workflow and never serializes native truth. Interrupted restoration
+retains the previous saved intent for retry. See `application-preferences.md` for
+the bounded host contract and recovery behavior.
+
+This implements the safe persistence portion of restart acceptance. A full desktop
+restart with an actual registered Environment and fresh Preview observation is
+still outstanding. Selection-only Inspector/global engineering panel placement,
+semantic theme and responsive visual acceptance remain separate closure work.
+
+
+Verification for the session-intent working tree based on `e6055ef`:
+`pnpm typecheck`, `pnpm test` (1,026 passed; nine explicit opt-in skips),
+`pnpm lint`, Editor Vite build and `git diff --check` passed. Rust library tests
+passed 74 checks with three explicit native opt-in skips. No Main revision was
+modified or newly qualified; this is implementation regression evidence, not the
+final clean cross-repository or desktop acceptance replay.

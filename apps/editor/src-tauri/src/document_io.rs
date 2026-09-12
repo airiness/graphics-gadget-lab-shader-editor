@@ -489,6 +489,11 @@ impl DocumentFileService {
         Ok(true)
     }
 
+    /// Internal lookup for remembering already admitted document identities.
+    pub(crate) fn registered_path(&self, canonical_uri: &str) -> Result<PathBuf, DocumentIoError> {
+        Ok(self.authorized_document(canonical_uri)?.canonical_path)
+    }
+
     fn authorized_document(
         &self,
         canonical_uri: &str,

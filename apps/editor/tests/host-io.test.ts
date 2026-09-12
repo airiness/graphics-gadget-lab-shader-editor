@@ -549,7 +549,9 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
             "shader-workspace-cancel-discovery",
             "shader-workspace-choose-root",
             "shader-workspace-discover",
+            "shader-workspace-read-resume",
             "shader-workspace-reopen-last",
+            "shader-workspace-save-resume",
         ]);
         // No raw arbitrary-path parameter exists on the document command
         // surface. The native service resolves only host-issued URI
@@ -623,5 +625,26 @@ describe("remembered Workspace admission", () => {
     it("keeps a missing root distinct from a malformed host response", async () => {
         expect(await createDesktopFileChannel(fakeHost({ invoke: async () => null }).host).reopenLastWorkspace()).toBeNull();
         await expect(createDesktopFileChannel(fakeHost({ invoke: async () => ({ displayPath: "C:/old" }) }).host).reopenLastWorkspace()).rejects.toThrow();
+    });
+});
+
+
+describe("Workspace resume transport", () => {
+    const intent = { workspaceUri: HOST_WORKSPACE_ROOT.canonicalWorkspaceUri, documentUris: [], activeUri: null, previewUri: null, environmentId: null, buildTarget: "dx12" };
+    it("round trips only intent through narrow host commands", async () => {
+        const fake = fakeHost({ invoke: async command => command === "shader-workspace-read-resume" ? intent : undefined });
+        const channel = createDesktopFileChannel(fake.host);
+        expect(await channel.readWorkspaceResume(intent.workspaceUri)).toEqual(intent);
+        await channel.saveWorkspaceResume(intent);
+        expect(fake.invokes).toEqual([
+            { command: "shader-workspace-read-resume", args: { workspaceUri: intent.workspaceUri } },
+            { command: "shader-workspace-save-resume", args: { intent } },
+        ]);
+        expect(fake.reads).toEqual([]);
+    });
+    it("rejects another Workspace's response and unknown runtime state", async () => {
+        const channel = createDesktopFileChannel(fakeHost({ invoke: async () => ({ ...intent, workspaceUri: "file:///other/" }) }).host);
+        await expect(channel.readWorkspaceResume(intent.workspaceUri)).rejects.toThrow();
+        await expect(channel.saveWorkspaceResume({ ...intent, current: true } as typeof intent)).rejects.toThrow();
     });
 });

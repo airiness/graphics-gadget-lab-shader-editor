@@ -391,6 +391,20 @@ function nonReadyComposition(): PreviewCompositionInput {
 }
 
 describe("PreviewCoordinator — commit-time CURRENT revalidation", () => {
+    it("does not commit expired resume intent after joining the old Runtime", async () => {
+        const A = docSession("A", V1_GRAPH), B = docSession("B", V1_EMIT);
+        const state: WorkspaceAuthoringState = { session: { ...createWorkspaceSession<DocumentSession>(), documents: [A, B], activeDocumentId: B.sessionId, preview: { targetDocumentId: A.sessionId } }, profileDescriptor: D1 };
+        const world = makeWorld(state, { launches: [{ kind: "launched", runtimeIdentity: "runtime-a" }], holdStopUntilRelease: true, stopReleaseKind: "stopped" });
+        await attach(world);
+        let requested = true;
+        const transition = world.coordinator.retargetTo(B.sessionId, () => requested);
+        requested = false;
+        expect(world.runtime.releaseStop()).toBe(true);
+        expect(await transition).toEqual({ ok: false, refusal: { reason: "retarget-intent-expired" } });
+        expect(world.store.getSnapshot()).toBe(state);
+        expect((await world.coordinator.retargetTo(B.sessionId)).ok).toBe(true);
+    });
+
     it("commits a retarget with the descriptor CURRENT after the teardown settles — D1 -> D2 uses D2, and D1 never is", async () => {
         // The target B is on the v2 profile line: D1 (v1) CANNOT legally
         // emit it, D2 (v2) can. So a commit applied against the

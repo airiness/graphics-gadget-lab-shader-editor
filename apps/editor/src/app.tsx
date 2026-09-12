@@ -7,6 +7,8 @@
  * defined here: validation, port-level types, conformance, compatibility,
  * and emission all come from @gglab/shader-graph-core.
  */
+import { bindWorkspaceResume, projectWorkspaceResume, sameResumeContext, type WorkspaceResume } from "./workspace-resume.js";
+import type { EnvironmentWorkflow } from "./environment-workflow.js";
 import { useLayoutPreferences } from "./use-layout-preferences.js";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
 import {
@@ -505,6 +507,11 @@ export function App() {
     // UI state; "nodes" is the default so the existing library UX is
     // unchanged, and "explorer" is the Workspace file browser.
     const [sidebarPanel, setSidebarPanel] = useState<"explorer" | "nodes">("nodes");
+    const [resumeHint, setResumeHint] = useState<WorkspaceResume | null>(null);
+    const [resumeBusy, setResumeBusy] = useState(false);
+    const resumeBinding = useRef<ReturnType<typeof bindWorkspaceResume> | null>(null);
+    const environmentWorkflowRef = useRef<EnvironmentWorkflow | null>(null);
+    const resumeAttempt = useRef<{ cancelled: boolean; discoveryId: WorkspaceDiscoveryId | null } | null>(null);
     // Workspace Explorer (volatile host observation, not a graph authority).
     const [explorerEntries, setExplorerEntries] = useState<readonly WorkspaceDocumentEntry[] | null>(null);
     const [explorerBusy, setExplorerBusy] = useState(false);
@@ -2053,6 +2060,110 @@ export function App() {
         }
     };
 
+    const resumeProjection = projectWorkspaceResume(workspace, native.target.target);
+    const resumeLatest = useRef(resumeProjection); resumeLatest.current = resumeProjection;
+    const resumeRootUri = workspace.workspaceRoot?.canonicalWorkspaceUri ?? null;
+    useEffect(() => {
+        setResumeHint(null);
+        const initial = resumeLatest.current;
+        if (fileChannel === null || initial === null) return;
+        const binding = bindWorkspaceResume(fileChannel, initial, setResumeHint,
+            error => output.append("workspace", "refusal", `Workspace resume preferences: ${String(error)}`));
+        resumeBinding.current = binding;
+        return () => {
+            const attempt = resumeAttempt.current;
+            if (attempt !== null) {
+                attempt.cancelled = true;
+                if (attempt.discoveryId !== null) void fileChannel.cancelWorkspaceDiscovery(attempt.discoveryId)
+                    .catch(error => output.append("workspace", "refusal", String(error)));
+                void environmentWorkflowRef.current?.cancel();
+            }
+            if (resumeBinding.current === binding) resumeBinding.current = null;
+            void binding.dispose();
+        };
+    }, [fileChannel, resumeRootUri, output]);
+    const resumeProjectionIdentity = JSON.stringify(resumeProjection);
+    useEffect(() => { if (resumeLatest.current !== null) resumeBinding.current?.observe(resumeLatest.current); }, [resumeProjectionIdentity]);
+
+    const restoreSavedWorkspace = async (): Promise<void> => {
+        const intent = resumeHint, channel = fileChannel;
+        if (intent === null || channel === null || resumeAttempt.current !== null) return;
+        const attempt = { cancelled: false, discoveryId: null as WorkspaceDiscoveryId | null };
+        const binding = resumeBinding.current;
+        resumeAttempt.current = attempt; setResumeBusy(true); setExplorerError(null);
+        const pendingWrites = binding?.pause();
+        let restoredTarget = false;
+        let expected = authoringStore.getSnapshot();
+        const check = () => {
+            if (attempt.cancelled || !sameResumeContext(expected, authoringStore.getSnapshot()) || expected.session.workspaceRoot?.canonicalWorkspaceUri !== intent.workspaceUri) {
+                throw new Error("Workspace restore stopped because the editing context changed or was cancelled.");
+            }
+        };
+        try {
+            await pendingWrites; check();
+            const scan = await channel.discoverWorkspace(expected.session.workspaceRoot!.canonicalWorkspaceUri);
+            attempt.discoveryId = scan.discoveryId;
+            if (attempt.cancelled) await channel.cancelWorkspaceDiscovery(scan.discoveryId);
+            const result = await scan.result; check(); attempt.discoveryId = null;
+            if (result.kind !== "changed") throw new Error("Workspace restore requires a fresh complete discovery.");
+            setExplorerEntries(result.snapshot.documents);
+            for (const uri of intent.documentUris) {
+                check();
+                if (expected.session.documents.some(doc => doc.canonicalUri === uri)) continue;
+                const entry = result.snapshot.documents.find(doc => doc.canonicalDocumentUri === uri);
+                if (entry === undefined) { output.append("workspace", "info", `Saved tab is no longer discoverable: ${uri}`); continue; }
+                const snapshot = await channel.readDocumentSnapshot(entry.canonicalDocumentUri); check();
+                const parsed = parseShaderGraphDocument(snapshot.text);
+                if (!parsed.ok || parsed.value === null) { output.append("workspace", "refusal", `Saved tab could not be parsed: ${uri}`, EMPTY_EVIDENCE_CORRELATION, parsed.diagnostics); continue; }
+                openDocumentSession(parsed.value, provenanceFromFile(snapshot.displayPath), snapshot.canonicalDocumentUri, snapshot.fileRevisionToken);
+                expected = authoringStore.getSnapshot();
+            }
+            const active = expected.session.documents.find(doc => doc.canonicalUri === intent.activeUri);
+            if (active) { onActivateTab(active.sessionId); expected = authoringStore.getSnapshot(); }
+            if (intent.environmentId !== null && expected.session.activeEnvironment?.environmentId !== intent.environmentId) {
+                const workflow = environmentWorkflowRef.current;
+                if (workflow === null) throw new Error("Environment workflow is not ready. Retry restoring the session.");
+                await workflow.refresh(); check();
+                const matches = workflow.getSnapshot().registry?.records.filter(entry => entry.record.environmentId === intent.environmentId) ?? [];
+                if (matches.length !== 1) throw new Error("The saved Environment is missing or ambiguous. Select it explicitly in GGLab Environment.");
+                const before = expected;
+                await workflow.useRegistered(matches[0]!.record);
+                const after = authoringStore.getSnapshot();
+                if (attempt.cancelled || !sameResumeContext(before, after, true)) {
+                    throw new Error("Workspace restore stopped because the editing context changed or was cancelled during Environment verification.");
+                }
+                if (after.session.activeEnvironment === before.session.activeEnvironment ||
+                    after.session.activeEnvironment?.environmentId !== intent.environmentId) throw new Error(workflow.getSnapshot().message);
+                expected = after;
+            }
+            check();
+            const target = expected.session.documents.find(doc => doc.canonicalUri === intent.previewUri);
+            if (target) {
+                const transition = await preview.coordinator.retargetTo(target.sessionId,
+                    () => !attempt.cancelled && sameResumeContext(expected, authoringStore.getSnapshot()));
+                if (!transition.ok) throw new Error(`Saved Preview target is not ready: ${describeTransitionRefusal(transition.refusal)}`);
+            }
+            if (attempt.cancelled) throw new Error("Workspace restore cancelled.");
+            native.setTarget(intent.buildTarget); restoredTarget = true;
+            output.append("workspace", "ok", "Saved session restored from current files. No attached Preview was launched and no saved build or Runtime evidence was restored.");
+        } catch (error) {
+            setExplorerError(String(error));
+            output.append("workspace", "refusal", `Workspace restore: ${String(error)}`);
+        } finally {
+            const baseline = projectWorkspaceResume(authoringStore.getSnapshot().session,
+                restoredTarget ? intent.buildTarget : (resumeLatest.current?.buildTarget ?? native.target.target));
+            if (baseline?.workspaceUri === intent.workspaceUri) binding?.resume(baseline);
+            if (resumeAttempt.current === attempt) { resumeAttempt.current = null; setResumeBusy(false); }
+        }
+    };
+    const cancelWorkspaceRestore = () => {
+        const attempt = resumeAttempt.current;
+        if (!attempt) return;
+        attempt.cancelled = true;
+        if (attempt.discoveryId && fileChannel) void fileChannel.cancelWorkspaceDiscovery(attempt.discoveryId).catch(error => setExplorerError(String(error)));
+        void environmentWorkflowRef.current?.cancel();
+    };
+
     // The zone badges: each zone's live STATE projected from the facts
     // above (design section 13, surface note) — the badges render, they
     // own nothing: one source of truth per fact stands.
@@ -2080,7 +2191,7 @@ export function App() {
                     <span className="gglab-brand-sub">gglab.surface authoring</span>
                 </div>
                 <div className="gglab-header-group">
-                    <EnvironmentPanel coordinator={preview.coordinator} begin={environmentEvidence.begin} activeRoot={workspace.activeEnvironment?.environmentRoot ?? null} capture={() => {
+                    <EnvironmentPanel onWorkflowReady={workflow => { environmentWorkflowRef.current = workflow; }} coordinator={preview.coordinator} begin={environmentEvidence.begin} activeRoot={workspace.activeEnvironment?.environmentRoot ?? null} capture={() => {
                         const session = authoringStore.getSnapshot().session;
                         return () => {
                             const current = authoringStore.getSnapshot().session;
@@ -2192,6 +2303,8 @@ export function App() {
                                 {fileChannel !== null && workspace.workspaceRoot === null && (
                                     <Button variant="secondary" onClick={() => void onChooseWorkspaceRoot(true)}>Reopen last Workspace</Button>
                                 )}
+                                {resumeHint !== null && <Button variant="secondary" disabled={resumeBusy} onClick={() => void restoreSavedWorkspace()}>Restore saved session</Button>}
+                                {resumeBusy && <Button variant="ghost" onClick={cancelWorkspaceRestore}>Cancel restore</Button>}
                                 <Button variant="primary" onClick={() => void onDiscoverWorkspace()} disabled={explorerBusy}>
                                     {explorerBusy ? "Discovering…" : "Discover"}
                                 </Button>

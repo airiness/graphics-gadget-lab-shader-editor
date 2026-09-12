@@ -6,6 +6,7 @@ import type { EnvironmentImportEvent } from "@gglab/shader-toolchain-client";
 
 interface Props {
     coordinator: PreviewCoordinator;
+    onWorkflowReady?: (workflow: EnvironmentWorkflow | null) => void;
     capture: () => () => boolean;
     begin: () => (event: EnvironmentImportEvent) => void;
     activeRoot: string | null;
@@ -25,8 +26,9 @@ export function EnvironmentPanel(props: Props) {
                 capture: () => latest.current.capture(), begin: () => latest.current.begin(),
             });
             setWorkflow(owned);
+            latest.current.onWorkflowReady?.(owned);
         }).catch(e => { if (!disposed) setError(String(e)); });
-        return () => { disposed = true; void owned?.cancel(); };
+        return () => { disposed = true; latest.current.onWorkflowReady?.(null); void owned?.cancel(); };
     }, []);
     return <>
         <Button variant="ghost" onClick={() => { dialog.current?.showModal(); void workflow?.refresh(); }}>GGLab Environment…</Button>

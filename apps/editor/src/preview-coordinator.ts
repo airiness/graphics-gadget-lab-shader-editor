@@ -100,6 +100,7 @@ export interface PreviewTransitionIdentity {
 }
 
 export type PreviewTransitionRefusal =
+    | { readonly reason: "retarget-intent-expired" }
     | { readonly reason: "environment-activation-refused"; readonly detail: string }
     | { readonly reason: "transition-in-flight"; readonly inFlight: PreviewTransitionIdentity }
     | { readonly reason: "build-in-flight" }
@@ -117,6 +118,7 @@ export type PreviewTransitionResult =
 /** One human-facing note for a structured transition refusal. */
 export function describeTransitionRefusal(refusal: PreviewTransitionRefusal): string {
     switch (refusal.reason) {
+        case "retarget-intent-expired": return "the Preview target intent was cancelled or its editing context changed";
         case "environment-activation-refused": return refusal.detail;
         case "transition-in-flight":
             return `another Preview transition (#${refusal.inFlight.sequence}) is in flight — transitions are not queued; retry once it settles`;
@@ -355,7 +357,7 @@ export class PreviewCoordinator {
      * snapshot) -> [same-target fast path: NO teardown] -> the LAST await
      * is `terminateAndJoin()` -> exactly ONE synchronous apply (revalidate
      * + resolve CURRENT emission + commit) -> release. */
-    async retargetTo(targetDocumentId: DocumentSession["sessionId"]): Promise<PreviewTransitionResult> {
+    async retargetTo(targetDocumentId: DocumentSession["sessionId"], stillRequested: () => boolean = () => true): Promise<PreviewTransitionResult> {
         const existing = this.inFlight;
         if (existing !== null) {
             return { ok: false, refusal: { reason: "transition-in-flight", inFlight: existing } };
@@ -371,6 +373,7 @@ export class PreviewCoordinator {
         };
         this.inFlight = identity;
         try {
+            if (!stillRequested()) return { ok: false, refusal: { reason: "retarget-intent-expired" } };
             if (openDocumentIn(this.store.getSnapshot().session, targetDocumentId) === undefined) {
                 return { ok: false, refusal: { reason: "target-not-open", targetDocumentId } };
             }
@@ -383,6 +386,8 @@ export class PreviewCoordinator {
                 }
             }
             return this.store.apply<PreviewTransitionResult>((state) => {
+                // Restored intent may expire while joining an existing Runtime.
+                if (!stillRequested()) return { next: state, result: { ok: false, refusal: { reason: "retarget-intent-expired" } } };
                 const commit = this.commitTarget(state, targetDocumentId);
                 if (commit.refused !== null) {
                     return { next: state, result: { ok: false, refusal: commit.refused } };

@@ -20,9 +20,11 @@ struct Preferences {
     directories: BTreeMap<DialogKind, PathBuf>,
     #[serde(default)]
     layout: Option<LayoutPreferences>,
+    #[serde(default)]
+    workspaces: Vec<WorkspaceResume>,
 }
 impl Default for Preferences {
-    fn default() -> Self { Self { preferences_version: 1, directories: BTreeMap::new(), layout: None } }
+    fn default() -> Self { Self { preferences_version: 1, directories: BTreeMap::new(), layout: None, workspaces: Vec::new() } }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -48,6 +50,30 @@ impl LayoutPreferences {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceResume {
+    pub workspace_uri: String,
+    pub document_uris: Vec<String>,
+    pub active_uri: Option<String>,
+    pub preview_uri: Option<String>,
+    pub environment_id: Option<String>,
+    pub build_target: String,
+}
+impl WorkspaceResume {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.workspace_uri.is_empty() || self.workspace_uri.len() > 8192 || self.document_uris.len() > 32 ||
+            self.document_uris.iter().any(|uri| uri.is_empty() || uri.len() > 8192) ||
+            self.document_uris.iter().collect::<std::collections::HashSet<_>>().len() != self.document_uris.len() ||
+            [&self.active_uri, &self.preview_uri].iter().any(|uri| uri.as_ref().is_some_and(|uri| !self.document_uris.contains(uri))) ||
+            self.environment_id.as_ref().is_some_and(|id| id.is_empty() || id.len() > 128) ||
+            self.build_target.is_empty() || self.build_target.len() > 128 {
+            return Err("Invalid Workspace resume intent".into());
+        }
+        Ok(())
+    }
+}
+
 pub struct PreferencesStore { root: PathBuf }
 impl PreferencesStore {
     pub fn new(root: PathBuf) -> Self { Self { root } }
@@ -67,6 +93,8 @@ impl PreferencesStore {
             return Err("Application preference directories must be absolute".into());
         }
         if let Some(layout) = &data.layout { layout.validate()?; }
+        if data.workspaces.len() > 10 || data.workspaces.iter().map(|item| &item.workspace_uri).collect::<std::collections::HashSet<_>>().len() != data.workspaces.len() { return Err("Too many saved Workspaces".into()); }
+        for workspace in &data.workspaces { workspace.validate()?; }
         Ok(data)
     }
     pub fn directory(&self, kind: DialogKind) -> Result<Option<PathBuf>, String> {
@@ -82,6 +110,17 @@ impl PreferencesStore {
     pub fn save_layout(&self, layout: LayoutPreferences) -> Result<(), String> {
         layout.validate()?;
         self.update(|data| { data.layout = Some(layout); })
+    }
+    pub fn workspace(&self, uri: &str) -> Result<Option<WorkspaceResume>, String> {
+        Ok(self.read()?.workspaces.into_iter().find(|item| item.workspace_uri == uri))
+    }
+    pub fn save_workspace(&self, intent: WorkspaceResume) -> Result<(), String> {
+        intent.validate()?;
+        self.update(|data| {
+            data.workspaces.retain(|item| item.workspace_uri != intent.workspace_uri);
+            data.workspaces.insert(0, intent);
+            data.workspaces.truncate(10);
+        })
     }
     fn update(&self, change: impl FnOnce(&mut Preferences)) -> Result<(), String> {
         fs::create_dir_all(&self.root).map_err(|e| e.to_string())?;
@@ -136,6 +175,30 @@ mod tests {
         fn store(&self) -> PreferencesStore { PreferencesStore::new(self.0.join("prefs")) }
     }
     impl Drop for Fixture { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
+    #[test]
+    fn workspace_intent_survives_restart_without_native_evidence_or_history_loss() {
+        let f = Fixture::new();
+        f.store().remember(DialogKind::Workspace, &f.0).unwrap();
+        let intent = WorkspaceResume { workspace_uri: "file:///workspace/".into(), document_uris: vec!["file:///workspace/a.shadergraph".into()],
+            active_uri: Some("file:///workspace/a.shadergraph".into()), preview_uri: None, environment_id: Some("env".into()), build_target: "dx12".into() };
+        f.store().save_workspace(intent.clone()).unwrap();
+        assert_eq!(f.store().workspace(&intent.workspace_uri).unwrap(), Some(intent.clone()));
+        assert!(f.store().directory(DialogKind::Workspace).unwrap().is_some());
+        let previous = fs::read(f.store().path()).unwrap();
+        let mut invalid = intent.clone(); invalid.preview_uri = Some("not-open".into());
+        assert!(f.store().save_workspace(invalid).is_err());
+        let mut duplicate = intent.clone(); duplicate.document_uris.push(duplicate.document_uris[0].clone());
+        assert!(f.store().save_workspace(duplicate).is_err());
+        assert_eq!(fs::read(f.store().path()).unwrap(), previous);
+        let mut wire = serde_json::to_value(&intent).unwrap(); wire["current"] = true.into();
+        assert!(serde_json::from_value::<WorkspaceResume>(wire).is_err());
+        for index in 0..11 {
+            let mut next = intent.clone(); next.workspace_uri = format!("file:///workspace-{index}/");
+            f.store().save_workspace(next).unwrap();
+        }
+        assert_eq!(f.store().read().unwrap().workspaces.len(), 10);
+        assert!(f.store().workspace(&intent.workspace_uri).unwrap().is_none());
+    }
     #[test]
     fn layout_round_trips_without_erasing_dialog_history() {
         let f = Fixture::new(); f.store().remember(DialogKind::Workspace, &f.0).unwrap();

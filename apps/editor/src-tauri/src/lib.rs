@@ -130,6 +130,17 @@ async fn shader_editor_pick_auxiliary(app: tauri::AppHandle, kind: AuxiliarySele
     }).await.map_err(|e| e.to_string())?
 }
 
+#[tauri::command(rename = "shader-workspace-read-resume")]
+async fn shader_workspace_read_resume(app: tauri::AppHandle, state: tauri::State<'_, WorkspaceFileShared>, workspace_uri: String) -> Result<Option<application_preferences::WorkspaceResume>, String> {
+    let service = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || { service.validate_resume_root(&workspace_uri)?; preferences(&app)?.workspace(&workspace_uri) }).await.map_err(|e| e.to_string())?
+}
+#[tauri::command(rename = "shader-workspace-save-resume")]
+async fn shader_workspace_save_resume(app: tauri::AppHandle, state: tauri::State<'_, WorkspaceFileShared>, intent: application_preferences::WorkspaceResume) -> Result<(), String> {
+    let service = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || preferences(&app)?.save_workspace(service.resume_intent(intent)?)).await.map_err(|e| e.to_string())?
+}
+
 /// Host-owned Open dialog followed by one canonical, revisioned snapshot.
 /// No caller-supplied path crosses this command boundary.
 #[tauri::command(rename = "shader-document-open")]
@@ -671,6 +682,8 @@ pub fn run() {
             shader_document_save_as,
             shader_workspace_choose_root,
             shader_workspace_reopen_last,
+            shader_workspace_read_resume,
+            shader_workspace_save_resume,
             shader_editor_pick_auxiliary,
             shader_editor_read_layout,
             shader_editor_save_layout,
