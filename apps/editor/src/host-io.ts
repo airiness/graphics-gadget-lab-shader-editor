@@ -19,6 +19,7 @@
  * The channel is pure: invoke/open/readTextFile are injected, so the module
  * has no Tauri import of its own and tests drive it with fakes.
  */
+import { readLayoutPreferences, type LayoutPreferenceHost } from "./layout-preferences.js";
 
 import {
     canonicalDocumentUriFromHost,
@@ -146,7 +147,7 @@ export type DocumentSaveOutcome =
  * reads. `null`/`cancelled` are user choices; rejections are explicit host or
  * contract failures.
  */
-export interface FileChannel {
+export interface FileChannel extends LayoutPreferenceHost {
     /** Host-owned directory dialog followed by canonical root admission. */
     chooseWorkspaceRoot(): Promise<WorkspaceRootHandle | null>;
     /** Re-admit only the host-remembered Workspace; never restore live handles. */
@@ -182,6 +183,13 @@ export interface FileChannel {
 
 export function createDesktopFileChannel(host: DesktopHost): FileChannel {
     return {
+        async readLayoutPreferences() {
+            const value = await host.invoke("shader-editor-read-layout");
+            return value === null ? null : readLayoutPreferences(value);
+        },
+        async saveLayoutPreferences(layout) {
+            await host.invoke("shader-editor-save-layout", { layout: readLayoutPreferences(layout) });
+        },
         async reopenLastWorkspace() {
             const value = await host.invoke("shader-workspace-reopen-last");
             return value === null ? null : readWorkspaceRoot(value);

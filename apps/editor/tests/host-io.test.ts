@@ -554,6 +554,8 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
             "shader-document-read-snapshot",
             "shader-document-save",
             "shader-document-save-as",
+            "shader-editor-read-layout",
+            "shader-editor-save-layout",
             "shader-environment-cancel-discovery",
             "shader-environment-cancel-execution",
             "shader-environment-cancel-mutation",

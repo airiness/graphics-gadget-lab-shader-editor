@@ -7,6 +7,7 @@
  * defined here: validation, port-level types, conformance, compatibility,
  * and emission all come from @gglab/shader-graph-core.
  */
+import { useLayoutPreferences } from "./use-layout-preferences.js";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
 import {
     addConnection,
@@ -587,6 +588,14 @@ export function App() {
     // Desktop native document I/O channel (absent in the browser
     // — the web build keeps the text save/load surface only).
     const [fileChannel, setFileChannel] = useState<FileChannel | null>(null);
+    useLayoutPreferences(fileChannel, {
+        libraryOpen, inspectorOpen, bottomPanelOpen, bottomPanelHeight: Math.round(bottomPanelHeight), bottomPanelTab, sidebarPanel,
+    }, layout => {
+        setLibraryOpen(layout.libraryOpen); setInspectorOpen(layout.inspectorOpen);
+        setBottomPanelOpen(layout.bottomPanelOpen); setBottomPanelHeight(layout.bottomPanelHeight);
+        setBottomPanelTab(layout.bottomPanelTab); setSidebarPanel(layout.sidebarPanel);
+    }, error => output.append("workspace", "refusal", `Layout preferences: ${String(error)}`));
+
     // A stable reference to the current channel for async cleanups (e.g.
     // cancelling an in-flight workspace discovery on unmount) that must not
     // capture a stale channel closure.

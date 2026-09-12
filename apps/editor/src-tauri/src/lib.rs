@@ -87,6 +87,15 @@ async fn shader_workspace_reopen_last(app: tauri::AppHandle, state: tauri::State
     }).await.map_err(|e| WorkspaceIoError::HostTask { detail: e.to_string() })?
 }
 
+#[tauri::command(rename = "shader-editor-read-layout")]
+async fn shader_editor_read_layout(app: tauri::AppHandle) -> Result<Option<application_preferences::LayoutPreferences>, String> {
+    tauri::async_runtime::spawn_blocking(move || preferences(&app)?.layout()).await.map_err(|e| e.to_string())?
+}
+#[tauri::command(rename = "shader-editor-save-layout")]
+async fn shader_editor_save_layout(app: tauri::AppHandle, layout: application_preferences::LayoutPreferences) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || preferences(&app)?.save_layout(layout)).await.map_err(|e| e.to_string())?
+}
+
 /// Host-owned Open dialog followed by one canonical, revisioned snapshot.
 /// No caller-supplied path crosses this command boundary.
 #[tauri::command(rename = "shader-document-open")]
@@ -628,6 +637,8 @@ pub fn run() {
             shader_document_save_as,
             shader_workspace_choose_root,
             shader_workspace_reopen_last,
+            shader_editor_read_layout,
+            shader_editor_save_layout,
             shader_workspace_discover,
             shader_workspace_cancel_discovery,
             shader_tool_discover,

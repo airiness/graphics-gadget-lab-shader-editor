@@ -18,9 +18,34 @@ pub enum DialogKind { Workspace, Graph, EnvironmentSource, PublishedEnvironment,
 struct Preferences {
     preferences_version: u32,
     directories: BTreeMap<DialogKind, PathBuf>,
+    #[serde(default)]
+    layout: Option<LayoutPreferences>,
 }
 impl Default for Preferences {
-    fn default() -> Self { Self { preferences_version: 1, directories: BTreeMap::new() } }
+    fn default() -> Self { Self { preferences_version: 1, directories: BTreeMap::new(), layout: None } }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LayoutPreferences {
+    pub library_open: bool,
+    pub inspector_open: bool,
+    pub bottom_panel_open: bool,
+    pub bottom_panel_height: u16,
+    pub bottom_panel_tab: BottomPanelTab,
+    pub sidebar_panel: SidebarPanel,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum BottomPanelTab { Output, Build, Preview, Problems }
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SidebarPanel { Explorer, Nodes }
+impl LayoutPreferences {
+    fn validate(&self) -> Result<(), String> {
+        if !(96..=480).contains(&self.bottom_panel_height) { return Err("Bottom panel height must be between 96 and 480".into()); }
+        Ok(())
+    }
 }
 
 pub struct PreferencesStore { root: PathBuf }
@@ -41,6 +66,7 @@ impl PreferencesStore {
         if data.directories.values().any(|path| !path.is_absolute()) {
             return Err("Application preference directories must be absolute".into());
         }
+        if let Some(layout) = &data.layout { layout.validate()?; }
         Ok(data)
     }
     pub fn directory(&self, kind: DialogKind) -> Result<Option<PathBuf>, String> {
@@ -50,6 +76,14 @@ impl PreferencesStore {
     pub fn remember(&self, kind: DialogKind, directory: &Path) -> Result<(), String> {
         let directory = fs::canonicalize(directory).map_err(|e| e.to_string())?;
         if !directory.is_dir() { return Err("Remembered selection is not a directory".into()); }
+        self.update(|data| { data.directories.insert(kind, directory); })
+    }
+    pub fn layout(&self) -> Result<Option<LayoutPreferences>, String> { Ok(self.read()?.layout) }
+    pub fn save_layout(&self, layout: LayoutPreferences) -> Result<(), String> {
+        layout.validate()?;
+        self.update(|data| { data.layout = Some(layout); })
+    }
+    fn update(&self, change: impl FnOnce(&mut Preferences)) -> Result<(), String> {
         fs::create_dir_all(&self.root).map_err(|e| e.to_string())?;
         // OS-released lock: a crash cannot leave a permanent busy marker. Read under
         // the lock so concurrent windows preserve each other's semantic histories.
@@ -57,7 +91,7 @@ impl PreferencesStore {
             .open(self.root.join("application-preferences.lock")).map_err(|e| e.to_string())?;
         lock.try_lock().map_err(|e| format!("Application preferences are busy: {e}"))?;
         let mut data = self.read()?;
-        data.directories.insert(kind, directory);
+        change(&mut data);
         let bytes = serde_json::to_vec_pretty(&data).map_err(|e| e.to_string())?;
         if bytes.len() as u64 > LIMIT { return Err("Application preferences exceed the size limit".into()); }
         let staging = self.root.join(format!(".preferences-{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
@@ -102,6 +136,21 @@ mod tests {
         fn store(&self) -> PreferencesStore { PreferencesStore::new(self.0.join("prefs")) }
     }
     impl Drop for Fixture { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
+    #[test]
+    fn layout_round_trips_without_erasing_dialog_history() {
+        let f = Fixture::new(); f.store().remember(DialogKind::Workspace, &f.0).unwrap();
+        let layout = LayoutPreferences { library_open: false, inspector_open: true, bottom_panel_open: true,
+            bottom_panel_height: 280, bottom_panel_tab: BottomPanelTab::Problems, sidebar_panel: SidebarPanel::Explorer };
+        f.store().save_layout(layout.clone()).unwrap();
+        f.store().remember(DialogKind::Graph, &f.0).unwrap();
+        assert_eq!(f.store().layout().unwrap(), Some(layout.clone()));
+        assert!(f.store().directory(DialogKind::Workspace).unwrap().is_some());
+        let bytes = fs::read(f.store().path()).unwrap();
+        let mut invalid = layout; invalid.bottom_panel_height = 0;
+        assert!(f.store().save_layout(invalid).is_err());
+        assert_eq!(fs::read(f.store().path()).unwrap(), bytes);
+        assert!(serde_json::from_str::<LayoutPreferences>(r#"{"current":true}"#).is_err());
+    }
     #[test]
     fn histories_are_independent_and_survive_restart() {
         let f = Fixture::new(); let a = f.0.join("graphs"); let b = f.0.join("source");
