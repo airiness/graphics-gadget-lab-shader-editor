@@ -9,7 +9,6 @@ it("accepts discovery results decoded separately from invoke admission", async (
     const channel = createDesktopFileChannel({
         invoke: async () => ({ sequence: 1 }),
         createChannel: receive => { deliver = receive; return {}; },
-        openDialog: async () => null,
         readTextFile: async () => "",
     });
     const attempt = await channel.discoverWorkspace(uri);

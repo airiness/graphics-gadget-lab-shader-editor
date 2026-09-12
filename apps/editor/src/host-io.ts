@@ -9,14 +9,14 @@
  *     host-lifetime URI capabilities, exact snapshots, revision tokens, and
  *     compare-and-swap atomic saves. No caller-supplied document path crosses
  *     inward; a returned display path is provenance, never authority;
- *   official scoped plugins — descriptor/config file selection and UTF-8
- *     reads only;
+ *   host-owned auxiliary selectors — fixed purposes and semantic directory history;
+ *   official scoped fs plugin — selected descriptor UTF-8 reads only;
  *   shader-graph-core — parses and serializes documents (the
  *     .shadergraph disk format authority) and profile descriptors;
  *   this app        — owns document/session state and decides which
  *     text moves where.
  *
- * The channel is pure: invoke/open/readTextFile are injected, so the module
+ * The channel is pure: invoke/channel/readTextFile are injected, so the module
  * has no Tauri import of its own and tests drive it with fakes.
  */
 import { readLayoutPreferences, type LayoutPreferenceHost } from "./layout-preferences.js";
@@ -37,12 +37,6 @@ export function isDesktopHost(host: unknown): boolean {
     return "__TAURI_INTERNALS__" in (host as Record<string, unknown>);
 }
 
-/** File dialog options as produced by the channel. `multiple` is always
- * false (single picks only); `directory` is false for the file picks and
- * true for the directory pick (the build-output location). */
-export type FileDialogOptions = Record<string, unknown>;
-/** Official `open` shape; `null` is a user cancel. */
-export type HostOpenDialog = (options?: FileDialogOptions) => Promise<string | string[] | null>;
 /** Invoke one allowlisted custom host command. */
 export type HostInvoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 /** Construct one native IPC channel whose payload is validated by this seam. */
@@ -56,7 +50,6 @@ export type HostReadTextFile = (path: string) => Promise<unknown>;
 export interface DesktopHost {
     readonly invoke: HostInvoke;
     readonly createChannel: HostChannelFactory;
-    readonly openDialog: HostOpenDialog;
     readonly readTextFile: HostReadTextFile;
 }
 
@@ -280,35 +273,9 @@ export function createDesktopFileChannel(host: DesktopHost): FileChannel {
             });
             return readDocumentSaveOutcome(value);
         },
-        async pickDescriptorPath() {
-            const picked = await host.openDialog({
-                title: "Open surface profile descriptor",
-                multiple: false,
-                directory: false,
-                filters: [{ name: "Surface profile descriptor", extensions: ["json"] }],
-            });
-            return typeof picked === "string" ? picked : null;
-        },
-        async pickToolExecutablePath() {
-            const picked = await host.openDialog({
-                title: "Select the gglab-shaderc executable",
-                multiple: false,
-                directory: false,
-                filters: [
-                    { name: "Executables", extensions: ["exe"] },
-                    { name: "All files", extensions: [] },
-                ],
-            });
-            return typeof picked === "string" ? picked : null;
-        },
-        async pickSiblingBuildOutputDirectory() {
-            const picked = await host.openDialog({
-                title: "Select the sibling GGLab build-output directory",
-                multiple: false,
-                directory: true,
-            });
-            return typeof picked === "string" ? picked : null;
-        },
+        async pickDescriptorPath() { return pickAuxiliary(host, "descriptor"); },
+        async pickToolExecutablePath() { return pickAuxiliary(host, "tool-executable"); },
+        async pickSiblingBuildOutputDirectory() { return pickAuxiliary(host, "build-output"); },
         async readText(path) {
             const text = await host.readTextFile(path);
             if (typeof text !== "string") {
@@ -317,6 +284,11 @@ export function createDesktopFileChannel(host: DesktopHost): FileChannel {
             return text;
         },
     };
+}
+
+async function pickAuxiliary(host: DesktopHost, kind: "descriptor" | "tool-executable" | "build-output"): Promise<string | null> {
+    const value = await host.invoke("shader-editor-pick-auxiliary", { kind });
+    return value === null ? null : readNonEmptyString(value, "Auxiliary selection path");
 }
 
 function readWorkspaceRoot(value: unknown): WorkspaceRootHandle {

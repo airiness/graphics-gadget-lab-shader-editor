@@ -44,7 +44,7 @@ missing implementation or evidence too weak to establish completion.
 | 23 | Output/Build/Preview chronology vs current Problems | Bottom Panel and evidence projection tests; review legacy local note surfaces. |
 | 24 | Problem source and document ownership | Owner-bound evidence origins and Problems tests; replay navigation after tab/revision changes. |
 | 25 | Clear is presentation-only | Bottom Panel tests; retain state after clear in final scenario. |
-| 26 | Semantic directories and correct persistence owners | Host-owned primary dialog histories and explicit last-Workspace re-admission implemented; layout persistence is now implemented; auxiliary histories and full safe session intent restoration remain open. |
+| 26 | Semantic directories and correct persistence owners | Host-owned primary dialog histories and explicit last-Workspace re-admission implemented; layout persistence is now implemented; all existing file-dialog purposes now have separate history; full safe session intent restoration remains open. |
 | 27 | Responsive state/action/event hierarchy and semantic colors | Open: current shell still uses the old blue accent; complete Graphite/Iris roles, overflow and layout validation. |
 | 28 | Safe restart, detached, no restored Current | Explicit last-Workspace re-admission implemented with no live proof restoration; safe tabs/target/Environment intent and restart acceptance remain open. |
 | 29 | No generic native authority | Narrow Tauri commands and existing Environment host; retain command-boundary review. |
@@ -99,3 +99,11 @@ visibility, and Bottom Panel view/height. Hydration and writes preserve user
 interaction ordering and reject unknown/native state. This closes the layout
 storage implementation portion of items 26/27; rendered restoration, responsive
 visual polish and full safe Workspace/session resume still require completion.
+
+## Auxiliary selection implementation
+
+Descriptor, tool executable and build-output selection now have host-owned
+semantic histories, fixed selection purposes and no arbitrary frontend dialog
+options. Only a selected descriptor receives single-file read scope. The generic
+WebView open-dialog permission has been removed. Actual native dialog navigation
+remains part of final desktop acceptance.

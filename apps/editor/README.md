@@ -481,64 +481,47 @@ possible native surface. The layer contract (one direction, never
 widened):
 
 ```
-native layer      →  official Tauri plugins ONLY; the shell owns no
-                     custom commands. Dialogs choose a path; scoped
-                     UTF-8 file access serves it.
-core              →  parse / serialize (the .shadergraph disk format,
-                     descriptor reading).
-editor (the app)  →  document + session state; decides which text moves.
+native layer      →  bounded host-owned Workspace, document, Environment,
+                     preference and auxiliary-selection commands;
+                     scoped UTF-8 descriptor reads through the fs plugin.
+core              →  graph/descriptor parsing, semantic edits and emission.
+editor (the app)  →  document/session ownership and presentation.
 ```
 
-Access model — this is the whole point of using the official plugins
-instead of hand-written path commands: when the user picks a file in a
-native dialog, the dialog plugin adds **that path** to the filesystem
-scope, and only scoped access is granted. File access can therefore only
-ever touch files the user explicitly chose; no arbitrary-path read/write
-command exists in the host.
+Document Open/Save As and Workspace discovery use host-owned canonical handles,
+revision tokens and compare-and-swap saving. Auxiliary selection accepts only a
+fixed purpose (descriptor, tool executable, or build-output). Its dialog options
+and independent directory history belong to the host. Only a selected descriptor
+is added to the fs plugin's single-file read scope; selecting a tool or build
+folder grants no recursive file access and makes no readiness claim.
 
-Native surface (registered in `src-tauri`, ACL-locked by
-`capabilities/default.json` to exactly):
+The WebView plugin permissions are `core:default`, window destroy/title operations,
+and `fs:allow-read-text-file`. It has no generic dialog-open or file-write
+permission. Custom native commands are separately allowlisted and regression-tested
+in `tests/host-io.test.ts`.
 
-- `core:default`
-- `dialog:allow-open` + `dialog:allow-save` — native dialogs only choose
-  a path (`.shadergraph` / JSON filters);
-- `fs:allow-read-text-file` + `fs:allow-write-text-file` — scoped UTF-8
-  text read/write (`readTextFile` / `writeTextFile` in
-  `@tauri-apps/plugin-fs`); IO failure is an explicit rejection.
-
-The JS side uses the official public API only
-(`@tauri-apps/plugin-dialog` `open`/`save`, `@tauri-apps/plugin-fs`
-`readTextFile`/`writeTextFile`) — never internal wire command names.
-
-The app keeps this behind a small **host/file abstraction**
-(`src/host-io.ts`): a `FileChannel` whose four host functions (`open` /
-`save` / `readTextFile` / `writeTextFile`) are *injected* — so the
-module is unit-testable with fakes, has no Tauri import of its own, and
-the plugin JS is dynamically imported, code-split out of the web bundle,
-and loaded only inside the desktop webview. The read boundary verifies
-its payload is really a string (a runtime boundary, not a cast). The
-browser build keeps its text save/load surface untouched.
+`src/host-io.ts` injects invoke/channel/scoped-read functions for boundary tests.
+Desktop APIs are dynamically imported only inside the native WebView; browser mode
+keeps text save/load. See [application preferences](../../docs/application-preferences.md)
+for semantic directory histories and layout persistence.
 
 UI (desktop only, above the existing text save/load block, which stays
 as the web path and the copy-to-clipboard path):
 
-- **Open…** — native open dialog → scoped UTF-8 read → **core** document
-  reader → the session is *replaced*: the document becomes current and
-  the invalidated derivatives (diagnostic focus, the emission preview,
-  the operation notes) are cleared — a stale build result is never
-  current;
-- **Save** — the core's canonical `.shadergraph` serialization written
-  to the path owned by the CURRENT document (a file-opened one); a
-  pathless document (seeded or text-imported) instead gets the save
-  dialog (default name `Untitled.shadergraph`);
-- **Save As…** — native save dialog → same canonical bytes to the new
-  path, which the document then owns;
+- **Open…** — host-owned file selection and revisioned snapshot → core document
+  parsing → open a new DocumentSession tab or activate the existing canonical-file
+  tab. Other open documents retain their independent history and evidence.
+- **Save** — serialize the current document and compare-and-swap through its
+  host-canonical URI and observed file-revision token. External changes become
+  explicit conflicts rather than being overwritten silently. Untitled documents
+  use Save As.
+- **Save As…** — host-owned destination selection and canonical serialization;
+  an existing target requires an explicit observed-revision conflict decision.
+  A successful save updates only the owning document's provenance and baseline.
 
-The Save target is derived from **document provenance** (owned in
-`src/document-session.ts`): a file-opened document owns its path; a
-text-imported document owns none — so an imported document can never
-silently overwrite a file opened earlier, and a replaced session never
-inherits a previous document's path.
+Save authority belongs to the document's host-admitted provenance and revision,
+not a remembered dialog directory or a previous tab's path. Directory history is
+only navigation convenience.
 - **descriptor Open** — the panel receives an optional host file-open
   injection (native dialog → UTF-8 text → the core's strict descriptor
   reader); without one it falls back to the browser file input. Cancel
@@ -607,8 +590,8 @@ instead of relying on the import-as-baseline shortcut.
 
 Layout:
 
-- `src-tauri/src/main.rs` — the window + the two official plugins
-  (dialog, fs). No custom commands, no state, no graph knowledge;
+- `src-tauri/src/main.rs` — entry point for the window and bounded services
+  registered in `lib.rs`; no graph-semantic authority;
 - `src-tauri/tauri.conf.json` — window (1440×900, min 960×600),
   `devUrl` = the Vite dev server, `frontendDist` = `../dist`, and the
   tightened `csp` / `devCsp` (production `script-src 'self'`; `connect-src`
@@ -616,8 +599,7 @@ Layout:
   origin in `devCsp`);
 - `src-tauri/capabilities/default.json` — exactly `core:default` +
   `core:window:allow-destroy`/`core:window:allow-set-title` +
-  `dialog:allow-open`/`dialog:allow-save` +
-  `fs:allow-read-text-file`/`fs:allow-write-text-file`;
+  `fs:allow-read-text-file`;
 - `src-tauri/icons/` — self-generated flat motif (two linked node cards,
   repo palette) as a classic **DIB-based** `icon.ico` (the older Windows
   resource compiler on this machine rejects PNG-compressed ICOs) plus the

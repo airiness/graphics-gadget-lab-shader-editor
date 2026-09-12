@@ -8,8 +8,9 @@ this file's location or write stored directory paths.
 The host-owned dialogs remember separate locations for Workspace, graph Open / Save
 As, GGLab source repository, published Environment, and writable state selection.
 A cancelled dialog does not update history. Directory hints are canonicalized;
-missing directories are omitted from the next dialog. Profile overrides and loose
-development auxiliary dialogs still need their own persisted history integration.
+missing directories are omitted from the next dialog. Descriptor overrides, loose
+tool executable selection, and loose build-output selection each use independent
+host-owned histories as well.
 
 Writes acquire an OS-released file lock, re-read the current file, and atomically
 replace it using a private sibling file. Concurrent windows cannot lose another
@@ -62,3 +63,18 @@ The regression suite checks hydration ordering, superseded readers, write order,
 final flush, unknown data rejection, and coexistence with semantic directory
 history. Native dialog and desktop visual/restart acceptance remain separately
 tracked in `ux-evolution-closure.md`.
+
+## Auxiliary selection boundary
+
+`shader-editor-pick-auxiliary` accepts only `descriptor`, `tool-executable`, or
+`build-output`. The host fixes the dialog purpose, file/folder mode, filters and
+remembered starting directory. The frontend receives one selected path or null;
+an executable selection remains only a candidate, not permission to launch it or
+proof of compatibility. Only descriptor selection adds the chosen file to the fs
+plugin's read scope. Tool and build-output selection grant no recursive scope.
+
+All application file selection now goes through purpose-specific host commands.
+The WebView no longer has `dialog:allow-open`; the remaining fs permission is
+`fs:allow-read-text-file` for explicitly scoped auxiliary reads. Document IO still
+uses the existing host canonical handles and CAS save operations. This change
+neither expands generic filesystem access nor introduces a process/argv API.

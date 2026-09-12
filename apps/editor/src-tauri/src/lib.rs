@@ -35,6 +35,7 @@ mod workspace_io;
 
 use std::sync::Arc;
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_fs::FsExt;
 use tauri::Manager;
 
 use document_io::{
@@ -94,6 +95,39 @@ async fn shader_editor_read_layout(app: tauri::AppHandle) -> Result<Option<appli
 #[tauri::command(rename = "shader-editor-save-layout")]
 async fn shader_editor_save_layout(app: tauri::AppHandle, layout: application_preferences::LayoutPreferences) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || preferences(&app)?.save_layout(layout)).await.map_err(|e| e.to_string())?
+}
+
+#[derive(Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum AuxiliarySelection { Descriptor, ToolExecutable, BuildOutput }
+
+/// Selection purpose is allowlisted; dialog options, remembered paths and scope
+/// admission belong to the host. Picking an executable never launches it.
+#[tauri::command(rename = "shader-editor-pick-auxiliary")]
+async fn shader_editor_pick_auxiliary(app: tauri::AppHandle, kind: AuxiliarySelection) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use application_preferences::DialogKind;
+        let history = match kind {
+            AuxiliarySelection::Descriptor => DialogKind::DescriptorOverride,
+            AuxiliarySelection::ToolExecutable => DialogKind::ToolExecutable,
+            AuxiliarySelection::BuildOutput => DialogKind::BuildOutput,
+        };
+        let dialog = history_dialog(&app, history)?;
+        let selected = match kind {
+            AuxiliarySelection::Descriptor => dialog.set_title("Open surface profile descriptor").add_filter("Surface profile descriptor", &["json"]).blocking_pick_file(),
+            AuxiliarySelection::ToolExecutable => dialog.set_title("Select the gglab-shaderc executable").add_filter("Executables", &["exe"]).add_filter("All files", &["*"]).blocking_pick_file(),
+            AuxiliarySelection::BuildOutput => dialog.set_title("Select the sibling GGLab build-output directory").blocking_pick_folder(),
+        };
+        let Some(selected) = selected else { return Ok(None); };
+        let path = selected.into_path().map_err(|e| e.to_string())?;
+        let directory = if matches!(kind, AuxiliarySelection::BuildOutput) { path.as_path() }
+            else { path.parent().ok_or("Selected file has no parent directory")? };
+        remember_directory(&app, history, directory)?;
+        // Only the chosen descriptor may be read through the scoped auxiliary
+        // read plugin. Tool/deployment selections grant no recursive file access.
+        if matches!(kind, AuxiliarySelection::Descriptor) { app.fs_scope().allow_file(&path).map_err(|e| e.to_string())?; }
+        Ok(Some(path.to_str().ok_or("Selected path is not UTF-8")?.to_owned()))
+    }).await.map_err(|e| e.to_string())?
 }
 
 /// Host-owned Open dialog followed by one canonical, revisioned snapshot.
@@ -637,6 +671,7 @@ pub fn run() {
             shader_document_save_as,
             shader_workspace_choose_root,
             shader_workspace_reopen_last,
+            shader_editor_pick_auxiliary,
             shader_editor_read_layout,
             shader_editor_save_layout,
             shader_workspace_discover,

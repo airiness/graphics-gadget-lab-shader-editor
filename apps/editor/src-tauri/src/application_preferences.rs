@@ -11,7 +11,7 @@ static NEXT: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case")]
-pub enum DialogKind { Workspace, Graph, EnvironmentSource, PublishedEnvironment, WritableState }
+pub enum DialogKind { Workspace, Graph, EnvironmentSource, PublishedEnvironment, WritableState, DescriptorOverride, ToolExecutable, BuildOutput }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

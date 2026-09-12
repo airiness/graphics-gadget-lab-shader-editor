@@ -148,7 +148,6 @@ import { composeWorkspaceProblemSnapshot } from "./problems-composition.js";
 // Type-only (erased at compile time): the official dialog option shapes,
 // used for the single documented boundary cast below. Runtime functions
 // are dynamically imported inside the desktop effect only.
-import type { OpenDialogOptions } from "@tauri-apps/plugin-dialog";
 import "./app.css";
 
 /** The editor's default workspace document (a valid gglab.surface v1 graph). */
@@ -634,12 +633,10 @@ export function App() {
             // code-split out of the web bundle and loaded only inside the
             // desktop webview. Document Open/Save As and all document bytes
             // go through bounded host commands. The official dialog/fs APIs
-            // remain only for user-selected auxiliary descriptor/config
-            // reads. No arbitrary document path crosses the WebView command
+            // remain only for scoped user-selected descriptor reads. No arbitrary document path crosses the WebView command
             // boundary.
-            const [core, dialog, fs] = await Promise.all([
+            const [core, fs] = await Promise.all([
                 import("@tauri-apps/api/core"),
-                import("@tauri-apps/plugin-dialog"),
                 import("@tauri-apps/plugin-fs"),
             ]);
             if (cancelled) {
@@ -650,11 +647,6 @@ export function App() {
                     invoke: (command, args) => core.invoke(command, args),
                     createChannel: (onMessage) =>
                         new core.Channel<unknown>((message) => onMessage(message)),
-                    // The host-io slots are intentionally generic
-                    // (Record<string, unknown> options); the official API
-                    // types live here, at the composition root — the single
-                    // place cast/verification is allowed.
-                    openDialog: (options) => dialog.open(options as unknown as OpenDialogOptions),
                     readTextFile: (path) => fs.readTextFile(path),
                 }),
             );
