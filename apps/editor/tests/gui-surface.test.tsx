@@ -1129,10 +1129,10 @@ describe("typed port presentation (core types → data categories)", () => {
         it("the app opens the node menu with the target SELECTED (menu and Delete key agree on one target)", () => {
             const app = read("../src/app.tsx");
             const handler = app.match(/const onNodeMenu = [^\n]*\n[\s\S]*?\n\s{4}\};/)?.[0] ?? "";
-            expect(handler).toContain("setSelectedNodeId(nodeId)"); // menu open = target selected
-            expect(handler).toContain("setSelectedConnectionId(null)"); // exclusive selection
-            expect(handler).toContain("setReconnectArmed(null)"); // a pending gesture and an open menu contradict
-            expect(handler).toContain("setNodeMenu({ nodeId, x: anchor.x, y: anchor.y })");
+            expect(handler).toContain("selectedNodeId: nodeId"); // atomic menu selection
+            expect(handler).toContain("selectedConnectionId: null"); // exclusive selection
+            expect(handler).toContain("reconnectArmed: null"); // a pending gesture and an open menu contradict
+            expect(handler).toContain("nodeMenu: { nodeId, x: anchor.x, y: anchor.y }");
             expect(app).toContain("onNodeMenu={onNodeMenu}");
         });
 
@@ -1162,9 +1162,10 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(handler).toContain("applyRemoveConnection(selectedConnectionId)");
             const nodeSelect = app.match(/const onNodeSelect = [^\n]*\n[\s\S]*?\n\s{4}\};/)?.[0] ?? "";
             expect(nodeSelect).toContain("setSelectedNodeId(nodeId)");
-            expect(nodeSelect).toContain("setSelectedConnectionId(null)");
+            expect(nodeSelect).not.toContain("setSelectedConnectionId(null)"); // the exclusive setter already clears the edge
             const edgeSelect = app.match(/const onEdgeSelect = [^\n]*\n[\s\S]*?\n\s{4}\};/)?.[0] ?? "";
-            expect(edgeSelect).toContain("setSelectedNodeId(null)"); // one selection fact at a time
+            expect(edgeSelect).toContain("setSelectedConnectionId(connectionId)"); // the setter atomically retires node selection
+            expect(edgeSelect).not.toContain("setSelectedNodeId(null)");
         });
 
         it("projection: the selected node carries emphasis, exactly like the selected connection", () => {
@@ -1267,7 +1268,8 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(barrel).toContain("NodePropertiesPanel");
             const app = read("../src/app.tsx");
             expect(app).toContain("setConstantValue(document, nodeId, value)");
-            expect(app).toContain('setInspectorZone("selection")');
+            expect(app).toContain('aria-label="Selection Inspector"');
+            expect(app).not.toContain("setInspectorZone");
             expect(app).toContain("onConstantValueCommit={onConstantValueCommit}");
             const css = read("../src/app.css");
             expect(css).toContain(".gglab-node-property-grid");

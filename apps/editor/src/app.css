@@ -1011,50 +1011,6 @@ body.gglab-resizing {
    carries the zone's LIVE STATE badge — the strip organizes, it never
    hides; a zoned-out zone still states itself on its label. */
 
-/* Two columns of state CARDS instead of one row of squeezed tabs: the
-   inspector is 336px wide, and an all-across row leaves too little per zone —
-   not enough for a zone name plus its live state badge. Two cards per
-   row give each zone the full state at its natural size; nothing is
-   abbreviated, nothing is clipped. */
-.gglab-inspector-tabs {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-    margin-bottom: 10px;
-}
-
-.gglab-inspector-tab {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    padding: 7px 4px;
-    background: transparent;
-    color: var(--muted);
-    border: 1px solid transparent;
-    border-radius: var(--r-1);
-    cursor: pointer;
-    font: inherit;
-    font-size: var(--type-meta);
-    font-weight: var(--weight-heading);
-    text-align: center;
-}
-
-.gglab-inspector-tab:hover {
-    color: var(--text);
-    background: var(--panel-hi);
-    border-color: var(--border-soft);
-}
-
-.gglab-inspector-tab.active {
-    color: var(--text);
-    background: var(--panel-hi);
-    border-color: var(--border-soft);
-    font-weight: 700;
-}
-
 /* ---- contextual node properties -------------------------------------------
    Selection is session state; values still enter the document only through
    the core-judged authoring operation. Draft text lives in the panel and is
@@ -2178,3 +2134,30 @@ button.gglab-diagnostics-item:hover {
 .gglab-node-inline .gglab-node-property-field { min-width: 0; }
 .gglab-node-inline .gglab-node-property-input { width: 100%; min-width: 0; height: 24px; }
 .gglab-node-inline .gglab-node-property-error { font-size: var(--type-meta); overflow-wrap: anywhere; }
+
+
+/* Global actions wrap independently of the horizontally scrollable document tabs. */
+.gglab-tabs { flex-wrap: wrap; }
+.gglab-tabs-list { flex: 1 1 100%; }
+.gglab-tabs-actions { flex-wrap: wrap; min-width: 0; }
+.gglab-target-control { display: flex; align-items: center; gap: 6px; font-size: var(--type-meta); color: var(--muted); }
+.gglab-target-control select { width: auto; max-width: 220px; }
+.gglab-workbench-dialog {
+    width: min(780px, 92vw);
+    max-height: 86vh;
+    margin: auto;
+    overflow: auto;
+    padding: 20px;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--border-hi);
+    border-radius: var(--r-2);
+    overflow-wrap: anywhere;
+}
+.gglab-workbench-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+.gglab-workbench-dialog-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.gglab-workbench-dialog-heading h2 { font-size: var(--type-body); font-weight: var(--weight-heading); }
+.gglab-engineering-details { border-top: 1px solid var(--border-soft); margin-top: 12px; }
+.gglab-engineering-details > summary { cursor: pointer; padding: 10px 0; font-weight: var(--weight-heading); }
+.gglab-engineering-details .gglab-panel { max-width: 960px; }
+.gglab-selection-problem { background: none; border: 0; padding: 0; color: var(--text); text-align: left; cursor: pointer; overflow-wrap: anywhere; }

@@ -1478,7 +1478,11 @@ Given the same semantic graph, frozen profile contract, and graph compiler versi
 
 # 25. Build Inspector and observability
 
-The editor should make the build explainable.
+The editor should make the build explainable. "Build Inspector" denotes the
+single-owner evidence projection, not a requirement to occupy the persistent
+right-hand Selection Inspector. The Workspace shell presents these facts in
+expandable Bottom Panel Build details; global configuration and Preview lifecycle
+controls remain separate from selection editing.
 
 Useful fields include:
 

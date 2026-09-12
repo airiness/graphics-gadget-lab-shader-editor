@@ -728,14 +728,15 @@ valid owning program exists, a reviewer must be able to determine, from the
 inspector alone, which tool, under which contract facts, compiled which exact
 complete-program bytes, to what evidence, and why the state is what it is.
 
-**Surface grouping.** The right inspector groups its distinct
-responsibilities into zones (contract & checks · document · emission ·
-native build), one tab per zone. A zone's STATE stays visible while its
-content is zoned out — the tab label carries its live badge, projected from
-facts the editor already holds (the badge renders the fact; it owns
-nothing). Switching zones is surface organization only: it concedes no
-state authority and no fact changes. The guarantees above bind the zone's
-CONTENT (complete, one source of truth per field), not its position.
+**Surface placement.** Build Inspector names the evidence projection, not the
+persistent right-hand selection panel. Under the Workspace/UX evolution guidance,
+its current readiness and exact identity fields are expandable details in the
+Bottom Panel's Build view; emission text is available there as well. Preview
+lifecycle and advanced controls belong to the Preview view. Document text and
+profile configuration have global modal entry points; loose tool paths are
+explicit advanced configuration and cannot override an active Environment.
+The right Inspector remains selection-oriented. Moving or hiding a surface never
+changes its owner's readiness, evidence, document state or Runtime lifecycle.
 
 ---
 

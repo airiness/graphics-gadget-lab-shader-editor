@@ -31,8 +31,6 @@ import {
     Button,
     ButtonGroup,
     DescriptorPanel,
-    DiagnosticsPanel,
-    diagnosticFocus,
     documentToFlow,
     FlowViewport,
     Input,
@@ -65,7 +63,7 @@ import {
     type ShaderGraphDiagnostic,
     type SurfaceProfileDescriptor,
 } from "@gglab/shader-graph-core";
-import { buildTargetOptions, DEFAULT_BUILD_TARGET } from "./build-target-config.js";
+import { buildTargetOptions } from "./build-target-config.js";
 import type { BuildInspectorRow } from "./build-inspector.js";
 import {
     createDesktopFileChannel,
@@ -127,7 +125,7 @@ import {
     type WorkspaceAuthoringState,
 } from "./workspace-store.js";
 import { saveShortcutOf } from "./shortcuts.js";
-import { INSPECTOR_ZONES, INSPECTOR_ZONE_LABELS, inspectorZoneBadge, type InspectorZone, type InspectorZoneFacts } from "./inspector-tabs.js";
+import { WorkbenchDialog } from "./workbench-dialog.js";
 import {
     BOTTOM_PANEL_TABS,
     BOTTOM_PANEL_DEFAULT_HEIGHT,
@@ -290,10 +288,7 @@ export function App() {
     // Right inspector rail: layout session state, same model as the
     // library rail (the app owns which column is collapsed).
     const [inspectorOpen, setInspectorOpen] = useState(true);
-    /** The visible inspector zone — pure surface organization (inspector-tabs.ts):
-     *  the zoned-out zones keep their state on their TAB (a projection of
-     *  existing facts; the switch itself owns no state). */
-    const [inspectorZone, setInspectorZone] = useState<InspectorZone>("contract");
+    const [workbenchDialog, setWorkbenchDialog] = useState<"document" | "contract" | "advanced" | null>(null);
     // Bottom panel — layout session state, the same model as the two rails
     // (the app owns which view is visible, whether the panel is open, and the
     // drag-resize height). Pure presentation: it concedes no Build, Preview,
@@ -736,7 +731,7 @@ export function App() {
         // activation ITSELF is the active-identity commit (no shadow write).
         applyWorkspaceTransition((current) => openWorkspaceDocument(current, replacement));
         setInspectorOpen(true);
-        setInspectorZone("contract");
+
     };
 
     /** Display label for one open document's tab (presentation only; the
@@ -1060,7 +1055,7 @@ export function App() {
                     return openWorkspaceDocument(current, replacement);
                 });
                 setInspectorOpen(true);
-                setInspectorZone("contract");
+
                 setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: `Opened ${snapshot.displayPath}; the tab is now active.` });
                 requestAnimationFrame(() => fitRef.current?.());
                 return;
@@ -1568,12 +1563,6 @@ export function App() {
         return result.applied;
     };
 
-    function selectDiagnostic(diagnostic: ShaderGraphDiagnostic): void {
-        // Navigation intent → target resolved against the document from the
-        // diagnostic's own dataPath anchor (never parsed from prose).
-        setFocus(diagnosticFocus(document, diagnostic));
-    }
-
     const onAddNode = (type: string): void => {
         applyAuthoring(addNode(document, type), `added a ${type} node`);
     };
@@ -1612,19 +1601,15 @@ export function App() {
         // Selection is ONE fact at a time: an edge selection retires the
         // node selection (and the node menu) — never two live targets for
         // the Delete key.
+        // The exclusive setter already retires the other selection and menus.
         setSelectedConnectionId(connectionId);
-        setSelectedNodeId(null);
-        setEdgeMenu(null);
-        setNodeMenu(null);
     };
     const onNodeSelect = (nodeId: string): void => {
         // A genuine card click selects THAT node and retires the edge
         // selection — the same exclusive, one-selection model.
         setSelectedNodeId(nodeId);
-        setSelectedConnectionId(null);
-        setEdgeMenu(null);
         setInspectorOpen(true);
-        setInspectorZone("selection");
+
     };
     const onCanvasClick = (): void => {
         setSelectedConnectionId(null);
@@ -1638,13 +1623,10 @@ export function App() {
         // SELECTED (the Delete key and the menu agree on the target), the
         // edge side retired, and the armed reconnect cancelled — a pending
         // gesture and an open action menu are contradictory states.
-        setSelectedNodeId(nodeId);
-        setSelectedConnectionId(null);
-        setEdgeMenu(null);
-        setReconnectArmed(null);
-        setNodeMenu({ nodeId, x: anchor.x, y: anchor.y });
+        patchPresentation({ selectedNodeId: nodeId, selectedConnectionId: null, edgeMenu: null,
+            reconnectArmed: null, nodeMenu: { nodeId, x: anchor.x, y: anchor.y } });
         setInspectorOpen(true);
-        setInspectorZone("selection");
+
     };
     const onEdgeContextMenu = (event: { clientX: number; clientY: number }, connectionId: string): void => {
         // Right-click selects (if needed) and offers the one destructive
@@ -1993,7 +1975,7 @@ export function App() {
             return { next: { ...state, session: updated.workspace }, result: null };
         });
         setInspectorOpen(true);
-        setInspectorZone("selection");
+
         const nodeIds = navigation.focus?.nodeHighlights.map((node) => node.nodeId) ?? [];
         if (nodeIds.length > 0) requestAnimationFrame(() => {
             const current = activeWorkspaceDocument(authoringStore.getSnapshot().session);
@@ -2164,22 +2146,197 @@ export function App() {
         void environmentWorkflowRef.current?.cancel();
     };
 
-    // The zone badges: each zone's live STATE projected from the facts
-    // above (design section 13, surface note) — the badges render, they
-    // own nothing: one source of truth per fact stands.
-    const inspectorZoneFacts: InspectorZoneFacts = {
-        selection: { nodeSelected: selectedNode !== null },
-        checks: {
-            ok: graphOk && contractOk,
-            problemCount: graphProblemCount + contractProblemCount,
-        },
-        document: { dirty },
-        emission: {
-            state: emission === null ? "none" : emission.ok === false ? "failed" : "ok",
-            problemCount: emission !== null && emission.ok === false ? emission.diagnostics.length : 0,
-        },
-        build: { ready: native.ready },
-    };
+    const selectedConnection = document.connections.find(connection => connection.id === selectedConnectionId);
+    const selectionProblems = problemsSnapshot.entries.filter(entry => {
+        const navigation = resolveProblemNavigation(workspace, entry);
+        return navigation.available && navigation.document.sessionId === session.sessionId && (
+            (selectedNode !== null && navigation.focus?.nodeHighlights.some(node => node.nodeId === selectedNode.id)) ||
+            (selectedConnection !== undefined && navigation.focus?.connectionHighlights.includes(selectedConnection.id)));
+    });
+    const showEvidence = (tab: BottomPanelTab) => { setBottomPanelOpen(true); setBottomPanelTab(tab); };
+    const nativeDetails = (<details className="gglab-engineering-details"><summary>Native readiness and identities</summary>
+                    <section className="gglab-panel gglab-panel-native-build" aria-label="Native build">
+                        <h2 className="gglab-panel-title">Native build</h2>
+                        <p className="gglab-panel-hint">
+                            Tool readiness, proof, and the generated-function facts for the native production contract. The generated surface function is a
+                            function contract, not a complete program entry.
+                        </p>
+                        <Badge variant={native.ready ? "ok" : "error"}>
+                            <BadgeDot />
+                            {native.ready ? "Ready" : "NotReady"}
+                        </Badge>
+                        {readyReasonList(native.readiness) !== null && <ul className="gglab-native-reasons">{readyReasonList(native.readiness)}</ul>}
+                        {/* Program-composition state: carried INSIDE the
+                            readiness reason list above (one source per
+                            fact, one verdict — Preview Program design
+                            v1.0): while this surface owns no
+                            complete-program composition, the readiness
+                            verdict is NotReady [ProgramCompositionUnavailable]
+                            and the gate refuses structurally. No second
+                            display surface for it here. */}
+                        {/* The attempt CHRONOLOGY (the build line's states,
+                            the outcomes, the diagnostics) projects to the
+                            bottom panel's Build view alongside these current readiness facts. */}
+                        {native.inspector !== null && (
+                            <>
+                                <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
+                                    Replayable evidence
+                                </h3>
+                                <p className="gglab-native-field-hint">
+                                    One source of truth per field: which tool, under which facts, compiled which exact bytes — and where each fact is true.
+                                </p>
+                                <InspectorRows title="Tool" rows={native.inspector.tool} />
+                                <InspectorRows title="Descriptor" rows={native.inspector.descriptor} />
+                                <InspectorRows title="Host · target · readiness" rows={native.inspector.hostAndTarget} />
+                                <InspectorRows title="Build" rows={native.inspector.build} />
+                            </>
+                        )}
+                        {/* Discovery operation events render in Output; the build
+                            panel view — one display surface, owned by it. */}
+                    </section></details>);
+    const emissionDetails = (<details className="gglab-engineering-details"><summary>Generated HLSL</summary>
+                    <section className="gglab-panel gglab-emission-block">
+                        <h2 className="gglab-panel-title">Emission preview</h2>
+                        <ButtonGroup className="mb-2.5">
+                            <Button variant="secondary" onClick={onEmit}>
+                                Generate HLSL (core)
+                            </Button>
+                        </ButtonGroup>
+                        {emission !== null && <EmissionPreview emission={emission} />}
+                        </section></details>);
+    const previewDetails = (<details className="gglab-engineering-details"><summary>Preview state and advanced controls</summary>
+                    <section className="gglab-panel gglab-panel-native-build" aria-label="Shader Graph Preview">
+                        <h2 className="gglab-panel-title">Shader Graph Preview</h2>
+                        <p className="gglab-panel-hint">
+                            Authoritative attached preview through the main-owned Preview Program and GGLab Runtime. Launch is success-first: no Runtime process starts before a valid publication exists.
+                        </p>
+                        <Badge
+                            variant={
+                                preview.projection?.freshness === "current"
+                                    ? "ok"
+                                    : preview.projection?.freshness === "rejected"
+                                      ? "error"
+                                      : preview.projection?.freshness === "stale"
+                                        ? "warn"
+                                        : "accent"
+                            }
+                        >
+                            <BadgeDot />
+                            {preview.projection?.freshness ?? "idle"}
+                        </Badge>
+                        <dl className="gglab-facts" style={{ marginTop: 10 }}>
+                            <div className="gglab-fact">
+                                <dt>Session</dt>
+                                <dd className="mono">{preview.sessionId ?? "(desktop Preview host unavailable)"}</dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Runtime</dt>
+                                <dd className="mono">
+                                    {preview.runtime.kind}
+                                    {"runtimeId" in preview.runtime
+                                        ? ` · #${preview.runtime.runtimeId.sequence}` +
+                                          (preview.runtime.kind === "exit-unproven"
+                                              ? ` · ${preview.runtime.exit.kind}`
+                                              : preview.runtime.kind === "runtime-ownership-conflict"
+                                                ? " · ownership-conflict"
+                                                : "")
+                                        : preview.runtime.kind === "launch-refused"
+                                          ? ` · ${preview.runtime.result.kind}`
+                                          : preview.runtime.kind === "launch-outcome-unproven"
+                                            ? " · launch-outcome-unproven"
+                                            : ""}
+                                </dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Runtime executable identity</dt>
+                                <dd className="mono">
+                                    {"runtimeIdentity" in preview.runtime ? preview.runtime.runtimeIdentity : "—"}
+                                </dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Target</dt>
+                                <dd className="mono">{native.target.target}</dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Current publication</dt>
+                                <dd className="mono">{preview.projection?.currentPublicationId ?? "—"}</dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Last-good publication</dt>
+                                <dd className="mono">{preview.projection?.lastGoodPublicationId ?? "—"}</dd>
+                            </div>
+                            <div className="gglab-fact">
+                                <dt>Observation</dt>
+                                <dd className="mono">
+                                    {preview.lastObservationRefresh?.kind ?? "not read"}
+                                    {preview.projection?.rejectionCode !== null && preview.projection?.rejectionCode !== undefined
+                                        ? ` · ${preview.projection.rejectionCode}`
+                                        : ""}
+                                </dd>
+                            </div>
+                        </dl>
+                        {preview.gate !== null && !preview.gate.admitted && (
+                            <ul className="gglab-native-reasons">
+                                {preview.gate.reasons.map((reason, index) => (
+                                    <li key={`${reason.reason}-${index}`}>
+                                        <code className="gglab-panel-code">{reason.reason}</code>
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                        <ButtonGroup role="toolbar" aria-label="Shader Graph Preview actions">
+                            <Button
+                                variant="ghost"
+                                onClick={() => void preview.previewHandshake()}
+                                disabled={preview.flow === null || preview.handshakeInFlight}
+                            >
+                                {preview.handshakeInFlight ? "Proving Preview…" : "Prove Preview compatibility"}
+                            </Button>
+                            <Button
+                                variant="primary"
+                                onClick={() => void preview.buildPreview()}
+                                disabled={preview.flow === null || preview.buildInFlight || preview.gate?.admitted !== true}
+                            >
+                                {preview.buildInFlight ? "Building Preview…" : "Build / Update Preview"}
+                            </Button>
+                            <Button
+                                variant="secondary"
+                                onClick={() => void preview.launchPreview()}
+                                disabled={
+                                    preview.flow === null ||
+                                    preview.launchInFlight ||
+                                    !preview.initialPublicationAvailable ||
+                                    (preview.runtime.kind !== "idle" && preview.runtime.kind !== "launch-refused")
+                                }
+                            >
+                                {preview.launchInFlight ? "Launching…" : "Launch attached Lab"}
+                            </Button>
+                            <Button
+                                variant="ghost"
+                                onClick={() => void preview.stopPreview()}
+                                disabled={
+                                    // Stop is enabled ONLY where the manager
+                                    // holds a lease and can act:
+                                    // `running` / `terminating` /
+                                    // `exit-unproven`. Every other state —
+                                    // `idle`, `launching`, `launch-refused`,
+                                    // `runtime-ownership-conflict`,
+                                    // `launch-outcome-unproven` — has no
+                                    // lease; offering Stop there and seeing
+                                    // "No attached Runtime" would contradict
+                                    // the host's ownership fact / the unknown
+                                    // launch outcome.
+                                    preview.runtime.kind !== "running" &&
+                                    preview.runtime.kind !== "terminating" &&
+                                    preview.runtime.kind !== "exit-unproven"
+                                }
+                            >
+                                Stop attached Lab
+                            </Button>
+                        </ButtonGroup>
+                        {/* The surface's operation notes render in the preview
+                            panel view — one display surface, owned by it. */}
+                    </section></details>);
     const saveConflictActions =
         saveConflict === null ? [] : documentSaveConflictActions(saveConflict);
 
@@ -2250,7 +2407,26 @@ export function App() {
                         );
                     })}
                 </div>
-                <div className="gglab-tabs-actions">
+                <div className="gglab-tabs-actions" role="group" aria-label="Document and native actions">
+                    {fileChannel !== null && <>
+                        <Button variant="toolbar" onClick={() => void openDocument()}>Open…</Button>
+                        <Button variant="toolbar" onClick={() => void saveDocument(false)}>Save</Button>
+                        <Button variant="toolbar" onClick={() => void saveDocument(true)}>Save As…</Button>
+                    </>}
+                    <Button variant="toolbar" onClick={() => setWorkbenchDialog("document")}>Document…</Button>
+                    <Button variant="toolbar" onClick={() => setWorkbenchDialog("contract")}>Profile…</Button>
+                    <Button variant="toolbar" onClick={() => setWorkbenchDialog("advanced")}>Advanced…</Button>
+                    <label className="gglab-target-control">Target
+                        <select id="native-build-target" className="gglab-native-select" value={native.target.target} onChange={(event) => native.setTarget(event.currentTarget.value)}>
+                                {nativeTargetOptions.map((option) => (
+                                    <option key={option} value={option}>
+                                        {option}
+                                    </option>
+                                ))}
+                            </select></label>
+                    <Button variant="toolbar" onClick={() => showEvidence("build")}>Build / HLSL</Button>
+                    <Button variant="toolbar" onClick={() => showEvidence("preview")}>Preview details</Button>
+
                     <Button
                         variant="toolbar"
                         onClick={() => void onPreviewThisGraph()}
@@ -2465,7 +2641,7 @@ export function App() {
                         touching connections + placement) through the
                         core-judged `removeNode`. */}
                 </main>
-                <aside className="gglab-side gglab-side-right">
+                <aside className="gglab-side gglab-side-right" aria-label="Selection Inspector">
                     {inspectorOpen ? (
                         <>
                         {/* Same rail language as the node library: head +
@@ -2479,380 +2655,20 @@ export function App() {
                                 </Button>
                             </div>
                         </div>
-                        {/* Inspector zones (design section 13, surface note): one
-                            responsibility per tab; each tab carries its zone's
-                            LIVE STATE badge — the grouping organizes, it never
-                            hides: a zoned-out zone still states itself here. */}
-                        <div className="gglab-inspector-tabs" role="tablist" aria-label="Inspector zones">
-                            {INSPECTOR_ZONES.map((zone) => {
-                                const badge = inspectorZoneBadge(zone, inspectorZoneFacts);
-                                return (
-                                    <button
-                                        key={zone}
-                                        type="button"
-                                        role="tab"
-                                        aria-selected={inspectorZone === zone}
-                                        className={inspectorZone === zone ? "gglab-inspector-tab active" : "gglab-inspector-tab"}
-                                        onClick={() => setInspectorZone(zone)}
-                                    >
-                                        <span>{INSPECTOR_ZONE_LABELS[zone]}</span>
-                                        <Badge variant={badge.variant}>
-                                            <BadgeDot />
-                                            {badge.label}
-                                        </Badge>
-                                    </button>
-                                );
-                            })}
-                        </div>
-                        {inspectorZone === "selection" && (
-                            <NodePropertiesPanel
-                                key={session.sessionId}
-                                node={selectedNode}
-                                onConstantValueCommit={onConstantValueCommit}
-                            />
-                        )}
-                        {inspectorZone === "contract" && (
-                            <>
-                            <DescriptorPanel readOnly={workspace.activeEnvironment !== null} state={workspace.activeEnvironment === null ? descriptorState : descriptor === null ? { kind: "empty" } : { kind: "ready", descriptor }} onStateChange={onDescriptorStateChange} openDescriptorFile={openDescriptorFile} />
-                    {graphSets.map((set) => (
-                        <DiagnosticsPanel key={set.title} title={set.title} diagnostics={set.diagnostics} ok={set.ok} passedText={set.passedText} onSelect={selectDiagnostic} />
-                    ))}
-                    {contractSets.map((set) => (
-                        <DiagnosticsPanel key={set.title} title={set.title} diagnostics={set.diagnostics} ok={set.ok} passedText={set.passedText} onSelect={selectDiagnostic} />
-                    ))}
-                            </>
-                        )}
-                        {inspectorZone === "document" && (
-                            <>
-                    {/* Native document I/O. The host owns canonical URI
-                        capabilities, revision tokens, and exact UTF-8 bytes;
-                        the core owns parse/serialize, and this app owns which
-                        snapshot belongs to each document session. */}
-                    {fileChannel !== null && (
-                        <section className="gglab-panel gglab-document-native">
-                            <h2 className="gglab-panel-title">Document</h2>
-                            <p className="gglab-panel-hint">
-                                Native open, revision-checked save, and save-as (the host owns file identity; bytes are the core&apos;s canonical .shadergraph serialization).
-                            </p>
-                            <ButtonGroup role="toolbar" aria-label="Document I/O">
-                                <Button variant="secondary" onClick={() => void openDocument()}>
-                                    <FileIcon />
-                                    Open…
-                                </Button>
-                                <Button variant="secondary" onClick={() => void saveDocument(false)}>
-                                    Save
-                                </Button>
-                                <Button variant="ghost" onClick={() => void saveDocument(true)}>
-                                    Save As…
-                                </Button>
-                            </ButtonGroup>
-                            {session.provenance.kind === "file" && <p className="gglab-panel-hint mono">{session.provenance.path}</p>}
-                        </section>
-                    )}
-                    <section className="gglab-panel gglab-document-io">
-                        <h2 className="gglab-panel-title">Document save / load</h2>
-                        <textarea
-                            className="gglab-field gglab-field-mono"
-                            value={savedText}
-                            onChange={(event) => setSavedText(event.currentTarget.value)}
-                            rows={12}
-                            spellCheck={false}
-                        />
-                        <ButtonGroup className="mt-2.5">
-                            <Button variant="ghost" onClick={onSave}>
-                                Save to text
-                            </Button>
-                            <Button variant="secondary" onClick={onLoad}>
-                                Load from text
-                            </Button>
-                        </ButtonGroup>
-                    </section>
-                            </>
-                        )}
-                        {inspectorZone === "emission" && (
-                            <>
-                    <section className="gglab-panel gglab-emission-block">
-                        <h2 className="gglab-panel-title">Emission preview</h2>
-                        <ButtonGroup className="mb-2.5">
-                            <Button variant="secondary" onClick={onEmit}>
-                                Generate HLSL (core)
-                            </Button>
-                        </ButtonGroup>
-                        {emission !== null && <EmissionPreview emission={emission} />}
-                        </section>
-                            </>
-                        )}
-                        {inspectorZone === "build" && (
-                            <>
-                    {/* Native build — readiness, gate, build line, and the
-                        Build Inspector projection (one source of truth
-                        per field; the inspector never computes facts). */}
-                    <section className="gglab-panel gglab-panel-native-build" aria-label="Native build">
-                        <h2 className="gglab-panel-title">Native build</h2>
-                        <p className="gglab-panel-hint">
-                            Tool readiness, proof, and the generated-function facts for the native production contract. The generated surface function is a
-                            function contract, not a complete program entry.
-                        </p>
-                        <Badge variant={native.ready ? "ok" : "error"}>
-                            <BadgeDot />
-                            {native.ready ? "Ready" : "NotReady"}
-                        </Badge>
-                        {readyReasonList(native.readiness) !== null && <ul className="gglab-native-reasons">{readyReasonList(native.readiness)}</ul>}
-                        {/* Program-composition state: carried INSIDE the
-                            readiness reason list above (one source per
-                            fact, one verdict — Preview Program design
-                            v1.0): while this surface owns no
-                            complete-program composition, the readiness
-                            verdict is NotReady [ProgramCompositionUnavailable]
-                            and the gate refuses structurally. No second
-                            display surface for it here. */}
-                        {/* Configuration (sections 5 and 8) — each field is a
-                            stacked block: a short label, the explanation in
-                            the hint, and the control on its own full-width
-                            row. A long label never shares the value's row
-                            again (the path display is never crushed). */}
-                        <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
-                            Configuration
-                        </h3>
-                        <div className="gglab-native-field">
-                            <label className="gglab-native-field-label" htmlFor="native-tool-path">
-                                Tool path
-                            </label>
-                            <p className="gglab-native-field-hint">
-                                Explicit configuration — discovery rule 1. Empty means not configured: that rule records its own failure.
-                            </p>
-                            <div className="gglab-native-path-row">
-                                <Input
-                                    id="native-tool-path"
-                                    disabled={workspace.activeEnvironment !== null}
-                                    className="gglab-native-path-input"
-                                    placeholder="C:\…\gglab-shaderc.exe"
-                                    title={native.discoveryConfig.explicitConfig === "" ? undefined : native.discoveryConfig.explicitConfig}
-                                    value={native.discoveryConfig.explicitConfig}
-                                    onChange={(event) => native.setToolPath(event.currentTarget.value)}
-                                    aria-label="Explicit tool path (discovery rule 1)"
-                                />
-                                {fileChannel !== null && (
-                                    <Button variant="ghost" className="gglab-native-path-browse" disabled={workspace.activeEnvironment !== null} onClick={() => void browseToolPath()}>
-                                        <FileIcon />
-                                        Browse…
-                                    </Button>
-                                )}
-                            </div>
-                        </div>
-                        <div className="gglab-native-field">
-                            <label className="gglab-native-field-label" htmlFor="native-sibling-build">
-                                Build-output location
-                            </label>
-                            <p className="gglab-native-field-hint">
-                                Sibling GGLab build output — discovery rule 2; optional.
-                            </p>
-                            <div className="gglab-native-path-row">
-                                <Input
-                                    id="native-sibling-build"
-                                    disabled={workspace.activeEnvironment !== null}
-                                    className="gglab-native-path-input"
-                                    placeholder="…\Build\Output\x64"
-                                    title={native.discoveryConfig.siblingBuildOutput === "" ? undefined : native.discoveryConfig.siblingBuildOutput}
-                                    value={native.discoveryConfig.siblingBuildOutput}
-                                    onChange={(event) => native.setSiblingBuildOutput(event.currentTarget.value)}
-                                    aria-label="Configured sibling build-output location (discovery rule 2)"
-                                />
-                                {fileChannel !== null && (
-                                    <Button variant="ghost" className="gglab-native-path-browse" disabled={workspace.activeEnvironment !== null} onClick={() => void browseSiblingBuildOutput()}>
-                                        <FileIcon />
-                                        Browse…
-                                    </Button>
-                                )}
-                            </div>
-                        </div>
-                        <div className="gglab-native-field">
-                            <label className="gglab-native-field-label" htmlFor="native-build-target">
-                                Build target
-                            </label>
-                            <p className="gglab-native-field-hint">
-                                Explicit configuration (development default {DEFAULT_BUILD_TARGET}); the next BuildIntent carries it.
-                            </p>
-                            <select id="native-build-target" className="gglab-native-select" value={native.target.target} onChange={(event) => native.setTarget(event.currentTarget.value)}>
-                                {nativeTargetOptions.map((option) => (
-                                    <option key={option} value={option}>
-                                        {option}
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
-                        {/* Actions, in lifecycle order: resolve the tool
-                            (the rule walk), establish proof (the handshake).
-                            No compile action: the function-only program
-                            composition is unavailable in this editor (the
-                            state above), so the surface offers no path to
-                            issue one. */}
-                        <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
-                            Actions
-                        </h3>
-                        <ButtonGroup role="toolbar" aria-label="native build actions">
-                            <Button variant="ghost" onClick={() => void native.discoverNow()} disabled={native.discoveryInFlight}>
-                                {native.discoveryInFlight ? "Discovering…" : "Re-discover"}
-                            </Button>
-                            <Button variant="ghost" onClick={() => void native.handshakeNow()} disabled={native.handshakeInFlight}>
-                                {native.handshakeInFlight ? "Handshaking…" : "Handshake (establish proof)"}
-                            </Button>
-                        </ButtonGroup>
-                        {/* The attempt CHRONOLOGY (the build line's states,
-                            the outcomes, the diagnostics) projects to the
-                            bottom panel's Build view — the inspector keeps
-                            the selection-oriented facts above. */}
-                        {native.inspector !== null && (
-                            <>
-                                <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
-                                    Replayable evidence
-                                </h3>
-                                <p className="gglab-native-field-hint">
-                                    One source of truth per field: which tool, under which facts, compiled which exact bytes — and where each fact is true.
-                                </p>
-                                <InspectorRows title="Tool" rows={native.inspector.tool} />
-                                <InspectorRows title="Descriptor" rows={native.inspector.descriptor} />
-                                <InspectorRows title="Host · target · readiness" rows={native.inspector.hostAndTarget} />
-                                <InspectorRows title="Build" rows={native.inspector.build} />
-                            </>
-                        )}
-                        {/* Discovery operation events render in Output; the build
-                            panel view — one display surface, owned by it. */}
-                    </section>
-                    <section className="gglab-panel gglab-panel-native-build" aria-label="Shader Graph Preview">
-                        <h2 className="gglab-panel-title">Shader Graph Preview</h2>
-                        <p className="gglab-panel-hint">
-                            Authoritative attached preview through the main-owned Preview Program and GGLab Runtime. Launch is success-first: no Runtime process starts before a valid publication exists.
-                        </p>
-                        <Badge
-                            variant={
-                                preview.projection?.freshness === "current"
-                                    ? "ok"
-                                    : preview.projection?.freshness === "rejected"
-                                      ? "error"
-                                      : preview.projection?.freshness === "stale"
-                                        ? "warn"
-                                        : "accent"
-                            }
-                        >
-                            <BadgeDot />
-                            {preview.projection?.freshness ?? "idle"}
-                        </Badge>
-                        <dl className="gglab-facts" style={{ marginTop: 10 }}>
-                            <div className="gglab-fact">
-                                <dt>Session</dt>
-                                <dd className="mono">{preview.sessionId ?? "(desktop Preview host unavailable)"}</dd>
-                            </div>
-                            <div className="gglab-fact">
-                                <dt>Runtime</dt>
-                                <dd className="mono">
-                                    {preview.runtime.kind}
-                                    {"runtimeId" in preview.runtime
-                                        ? ` · #${preview.runtime.runtimeId.sequence}` +
-                                          (preview.runtime.kind === "exit-unproven"
-                                              ? ` · ${preview.runtime.exit.kind}`
-                                              : preview.runtime.kind === "runtime-ownership-conflict"
-                                                ? " · ownership-conflict"
-                                                : "")
-                                        : preview.runtime.kind === "launch-refused"
-                                          ? ` · ${preview.runtime.result.kind}`
-                                          : preview.runtime.kind === "launch-outcome-unproven"
-                                            ? " · launch-outcome-unproven"
-                                            : ""}
-                                </dd>
-                            </div>
-                            <div className="gglab-fact">
-                                <dt>Runtime executable identity</dt>
-                                <dd className="mono">
-                                    {"runtimeIdentity" in preview.runtime ? preview.runtime.runtimeIdentity : "—"}
-                                </dd>
-                            </div>
-                            <div className="gglab-fact">
-                                <dt>Target</dt>
-                                <dd className="mono">{native.target.target}</dd>
-                            </div>
-                            <div className="gglab-fact">
-                                <dt>Current publication</dt>
-                                <dd className="mono">{preview.projection?.currentPublicationId ?? "—"}</dd>
-                            </div>
-                            <div className="gglab-fact">
-                                <dt>Last-good publication</dt>
-                                <dd className="mono">{preview.projection?.lastGoodPublicationId ?? "—"}</dd>
-                            </div>
-                            <div className="gglab-fact">
-                                <dt>Observation</dt>
-                                <dd className="mono">
-                                    {preview.lastObservationRefresh?.kind ?? "not read"}
-                                    {preview.projection?.rejectionCode !== null && preview.projection?.rejectionCode !== undefined
-                                        ? ` · ${preview.projection.rejectionCode}`
-                                        : ""}
-                                </dd>
-                            </div>
-                        </dl>
-                        {preview.gate !== null && !preview.gate.admitted && (
-                            <ul className="gglab-native-reasons">
-                                {preview.gate.reasons.map((reason, index) => (
-                                    <li key={`${reason.reason}-${index}`}>
-                                        <code className="gglab-panel-code">{reason.reason}</code>
-                                    </li>
-                                ))}
-                            </ul>
-                        )}
-                        <ButtonGroup role="toolbar" aria-label="Shader Graph Preview actions">
-                            <Button
-                                variant="ghost"
-                                onClick={() => void preview.previewHandshake()}
-                                disabled={preview.flow === null || preview.handshakeInFlight}
-                            >
-                                {preview.handshakeInFlight ? "Proving Preview…" : "Prove Preview compatibility"}
-                            </Button>
-                            <Button
-                                variant="primary"
-                                onClick={() => void preview.buildPreview()}
-                                disabled={preview.flow === null || preview.buildInFlight || preview.gate?.admitted !== true}
-                            >
-                                {preview.buildInFlight ? "Building Preview…" : "Build / Update Preview"}
-                            </Button>
-                            <Button
-                                variant="secondary"
-                                onClick={() => void preview.launchPreview()}
-                                disabled={
-                                    preview.flow === null ||
-                                    preview.launchInFlight ||
-                                    !preview.initialPublicationAvailable ||
-                                    (preview.runtime.kind !== "idle" && preview.runtime.kind !== "launch-refused")
-                                }
-                            >
-                                {preview.launchInFlight ? "Launching…" : "Launch attached Lab"}
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                onClick={() => void preview.stopPreview()}
-                                disabled={
-                                    // Stop is enabled ONLY where the manager
-                                    // holds a lease and can act:
-                                    // `running` / `terminating` /
-                                    // `exit-unproven`. Every other state —
-                                    // `idle`, `launching`, `launch-refused`,
-                                    // `runtime-ownership-conflict`,
-                                    // `launch-outcome-unproven` — has no
-                                    // lease; offering Stop there and seeing
-                                    // "No attached Runtime" would contradict
-                                    // the host's ownership fact / the unknown
-                                    // launch outcome.
-                                    preview.runtime.kind !== "running" &&
-                                    preview.runtime.kind !== "terminating" &&
-                                    preview.runtime.kind !== "exit-unproven"
-                                }
-                            >
-                                Stop attached Lab
-                            </Button>
-                        </ButtonGroup>
-                        {/* The surface's operation notes render in the preview
-                            panel view — one display surface, owned by it. */}
-                    </section>
-                        </>
-                    )}
+                        {selectedConnection === undefined ? <NodePropertiesPanel key={session.sessionId} node={selectedNode} onConstantValueCommit={onConstantValueCommit} /> :
+                            <section className="gglab-panel" aria-label="Connection properties">
+                                <h2 className="gglab-panel-title">Connection</h2>
+                                <p className="mono">{selectedConnection.id}</p>
+                                <dl className="gglab-facts">
+                                    <div><dt>From</dt><dd>{selectedConnection.from.nodeId} · {selectedConnection.from.portId}</dd></div>
+                                    <div><dt>To</dt><dd>{selectedConnection.to.nodeId} · {selectedConnection.to.portId}</dd></div>
+                                </dl>
+                                <Button variant="ghost" onClick={() => applyRemoveConnection(selectedConnection.id)}>Delete connection</Button>
+                            </section>}
+                        {selectionProblems.length > 0 && <section className="gglab-panel" aria-label="Selection problems">
+                            <h2 className="gglab-panel-title">Selection problems</h2>
+                            {selectionProblems.map(entry => <p key={entry.identity}><button type="button" className="gglab-selection-problem" onClick={() => navigateProblem(entry)}>{entry.code}: {entry.text}</button></p>)}
+                        </section>}
                     </>
                     ) : (
                         <div className="gglab-side-rail" aria-label="Inspector (collapsed)">
@@ -2926,11 +2742,13 @@ export function App() {
                                 <>
                                     {buildHistory.filter(owner => owner !== native.flow?.buildSession).map((owner, index) => <details key={index}><summary>Previous authoring session</summary><BuildPanelView session={owner} notes={[]} /></details>)}
                                     <BuildPanelView session={native.flow?.buildSession ?? null} notes={native.notes} />
+                                    {emissionDetails}{nativeDetails}
                                 </>
                             ) : bottomPanelTab === "preview" ? (
                                 <>
                                     {previewHistory.filter(owner => owner !== preview.flow?.session).map(owner => <details key={owner.sessionId}><summary>Previous Preview session</summary><PreviewPanelView session={owner} notes={[]} /></details>)}
                                     <PreviewPanelView session={preview.flow?.session ?? null} notes={preview.notes} />
+                                    {previewDetails}
                                 </>
                             ) : bottomPanelTab === "problems" ? (
                                 <ProblemsPanelView snapshot={shownProblemsSnapshot} onClear={clearProblemsPresentation} navigation={problemNavigation} onNavigate={navigateProblem} />
@@ -3054,6 +2872,116 @@ export function App() {
                     </div>
                 </div>
             )}
+            {workbenchDialog !== null && <WorkbenchDialog title={workbenchDialog === "document" ? "Graph document" : workbenchDialog === "contract" ? "Surface Profile" : "Advanced native configuration"} onClose={() => setWorkbenchDialog(null)}>
+                {workbenchDialog === "document" ? <>
+                    <p>{session.provenance.kind === "file" ? session.provenance.path : "Untitled document"}{dirty ? " · Unsaved changes" : ""}</p>
+                    <section className="gglab-panel gglab-document-io">
+                        <h2 className="gglab-panel-title">Graph document text</h2>
+                        <textarea
+                            className="gglab-field gglab-field-mono"
+                            aria-label="Graph document JSON"
+                            value={savedText}
+                            onChange={(event) => setSavedText(event.currentTarget.value)}
+                            rows={12}
+                            spellCheck={false}
+                        />
+                        <ButtonGroup className="mt-2.5">
+                            <Button variant="ghost" onClick={onSave}>
+                                Export to text
+                            </Button>
+                            <Button variant="secondary" onClick={onLoad}>
+                                Import from text
+                            </Button>
+                        </ButtonGroup>
+                    </section>
+                </> : workbenchDialog === "contract" ? <>
+                    <p>The selected Environment supplies this document's requested profile line. Loose descriptor overrides are for advanced development.</p>
+<DescriptorPanel readOnly={workspace.activeEnvironment !== null} state={workspace.activeEnvironment === null ? descriptorState : descriptor === null ? { kind: "empty" } : { kind: "ready", descriptor }} onStateChange={onDescriptorStateChange} openDescriptorFile={openDescriptorFile} />
+                    <Button onClick={() => { setWorkbenchDialog(null); showEvidence("problems"); }}>Show current problems</Button>
+                </> : <>
+                    <p>Loose tool configuration is for development without an active Environment. It never overrides an imported Environment.</p>
+                    {workspace.activeEnvironment !== null ? <p>The selected Environment owns tool and state locations.</p> : <>
+                        {/* Configuration (sections 5 and 8) — each field is a
+                            stacked block: a short label, the explanation in
+                            the hint, and the control on its own full-width
+                            row. A long label never shares the value's row
+                            again (the path display is never crushed). */}
+                        <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
+                            Configuration
+                        </h3>
+                        <div className="gglab-native-field">
+                            <label className="gglab-native-field-label" htmlFor="native-tool-path">
+                                Tool path
+                            </label>
+                            <p className="gglab-native-field-hint">
+                                Explicit configuration — discovery rule 1. Empty means not configured: that rule records its own failure.
+                            </p>
+                            <div className="gglab-native-path-row">
+                                <Input
+                                    id="native-tool-path"
+                                    disabled={workspace.activeEnvironment !== null}
+                                    className="gglab-native-path-input"
+                                    placeholder="C:\…\gglab-shaderc.exe"
+                                    title={native.discoveryConfig.explicitConfig === "" ? undefined : native.discoveryConfig.explicitConfig}
+                                    value={native.discoveryConfig.explicitConfig}
+                                    onChange={(event) => native.setToolPath(event.currentTarget.value)}
+                                    aria-label="Explicit tool path (discovery rule 1)"
+                                />
+                                {fileChannel !== null && (
+                                    <Button variant="ghost" className="gglab-native-path-browse" disabled={workspace.activeEnvironment !== null} onClick={() => void browseToolPath()}>
+                                        <FileIcon />
+                                        Browse…
+                                    </Button>
+                                )}
+                            </div>
+                        </div>
+                        <div className="gglab-native-field">
+                            <label className="gglab-native-field-label" htmlFor="native-sibling-build">
+                                Build-output location
+                            </label>
+                            <p className="gglab-native-field-hint">
+                                Sibling GGLab build output — discovery rule 2; optional.
+                            </p>
+                            <div className="gglab-native-path-row">
+                                <Input
+                                    id="native-sibling-build"
+                                    disabled={workspace.activeEnvironment !== null}
+                                    className="gglab-native-path-input"
+                                    placeholder="…\Build\Output\x64"
+                                    title={native.discoveryConfig.siblingBuildOutput === "" ? undefined : native.discoveryConfig.siblingBuildOutput}
+                                    value={native.discoveryConfig.siblingBuildOutput}
+                                    onChange={(event) => native.setSiblingBuildOutput(event.currentTarget.value)}
+                                    aria-label="Configured sibling build-output location (discovery rule 2)"
+                                />
+                                {fileChannel !== null && (
+                                    <Button variant="ghost" className="gglab-native-path-browse" disabled={workspace.activeEnvironment !== null} onClick={() => void browseSiblingBuildOutput()}>
+                                        <FileIcon />
+                                        Browse…
+                                    </Button>
+                                )}
+                            </div>
+                        </div>
+                        {/* Actions, in lifecycle order: resolve the tool
+                            (the rule walk), establish proof (the handshake).
+                            No compile action: the function-only program
+                            composition is unavailable in this editor (the
+                            state above), so the surface offers no path to
+                            issue one. */}
+                        <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
+                            Actions
+                        </h3>
+                        <ButtonGroup role="toolbar" aria-label="native build actions">
+                            <Button variant="ghost" onClick={() => void native.discoverNow()} disabled={native.discoveryInFlight}>
+                                {native.discoveryInFlight ? "Discovering…" : "Re-discover"}
+                            </Button>
+                            <Button variant="ghost" onClick={() => void native.handshakeNow()} disabled={native.handshakeInFlight}>
+                                {native.handshakeInFlight ? "Handshaking…" : "Handshake (establish proof)"}
+                            </Button>
+                        </ButtonGroup>
+
+                    </>}
+                </>}
+            </WorkbenchDialog>}
             <footer className="gglab-statusbar">
                 <div className="gglab-status-group">
                     {/* The document name + the dirty star — the same rule

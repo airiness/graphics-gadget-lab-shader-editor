@@ -38,15 +38,15 @@ missing implementation or evidence too weak to establish completion.
 | 17 | Source-independent normal operation | Existing isolated producer/native evidence; repeat final Editor flow without source lookup. |
 | 18 | Multiple Environments and deliberate switch | Registry and activation workflow; replay coexistence and failure preservation. |
 | 19 | Document profile persisted and explicit | Core edit/profile resolution and Environment binding; replay two profile lines. |
-| 20 | Loose configuration separate from Environment | Authoring binding gates exist; normal/advanced configuration presentation remains open. |
-| 21 | Selection-oriented right Inspector | Open: global descriptor/native/Preview panels still occupy the right side. |
+| 20 | Loose configuration separate from Environment | Authoring binding gates exist; loose tool paths are now an explicit Advanced global surface, hidden while an Environment owns locations. |
+| 21 | Selection-oriented right Inspector | Selection-only panel implemented; node/connection editing and contextual current problems have behavioral coverage. Global Document/Profile/Advanced dialogs and Bottom Panel Build/Preview details replace the old zones. Visual replay remains. |
 | 22 | Direct node values via core operations | Inline Float/Float2/Float3/Float4 editing in `7c56fd1`; shared Inspector draft logic, document-scoped drafts, same core edit/history path. Runtime parameters remain inputs, not graph defaults. Visual/integrated replay still required. |
 | 23 | Output/Build/Preview chronology vs current Problems | Bottom Panel and evidence projection tests; review legacy local note surfaces. |
 | 24 | Problem source and document ownership | Owner-bound evidence origins and Problems tests; replay navigation after tab/revision changes. |
 | 25 | Clear is presentation-only | Bottom Panel tests; retain state after clear in final scenario. |
-| 26 | Semantic directories and correct persistence owners | Host-owned primary dialog histories and explicit last-Workspace re-admission implemented; layout persistence is now implemented; all existing file-dialog purposes now have separate history; full safe session intent restoration remains open. |
+| 26 | Semantic directories and correct persistence owners | Host-owned primary dialog histories and explicit last-Workspace re-admission implemented; layout persistence is now implemented; all existing file-dialog purposes now have separate history; safe session intent implemented in `3830de0`; desktop restart replay remains. |
 | 27 | Responsive state/action/event hierarchy and semantic colors | Open: current shell still uses the old blue accent; complete Graphite/Iris roles, overflow and layout validation. |
-| 28 | Safe restart, detached, no restored Current | Explicit last-Workspace re-admission implemented with no live proof restoration; safe tabs/target/Environment intent and restart acceptance remain open. |
+| 28 | Safe restart, detached, no restored Current | Explicit last-Workspace re-admission implemented with no live proof restoration; safe tabs/target/Environment intent implemented in `3830de0`; desktop restart acceptance remains open. |
 | 29 | No generic native authority | Narrow Tauri commands and existing Environment host; retain command-boundary review. |
 | 30 | Reviewed GGLab-owned publication contract | Existing import approval and pinned producer records; preserve contract/revision provenance. |
 | 31 | Both native backends remain qualified | `color-study-preview-sample-evidence.json` records Debug/Release DX12/Vulkan Loaded at the baseline; replay relevant native gates after remaining integration changes. |
@@ -130,3 +130,31 @@ Verification for the session-intent working tree based on `e6055ef`:
 passed 74 checks with three explicit native opt-in skips. No Main revision was
 modified or newly qualified; this is implementation regression evidence, not the
 final clean cross-repository or desktop acceptance replay.
+
+
+## Selection and global surface implementation
+
+The right Inspector now always presents the selected node or connection and its
+current attributable problems. It does not contain graph-wide configuration,
+text import/export, emission or native lifecycle sections. Global actions expose
+Document, Profile and Advanced configuration dialogs, file actions, target choice
+and Preview entry. Build/Preview Bottom Panel views retain chronology and provide
+expandable current facts and advanced controls. Hiding/collapsing these surfaces
+never resets their controllers or evidence. Loose tool configuration remains
+separate from an active imported Environment.
+
+Behavior tests uncovered an existing selection regression: the node setter already
+cleared the edge selection, but calling the edge setter with null immediately
+cleared the node again (and vice versa). A single exclusive update now preserves
+the requested target. Node-menu selection uses one atomic presentation patch.
+Coverage includes a real React Flow node click, contextual node/connection display,
+connection/node deletion and Undo, modal cancellation and document-text drafts,
+and opening the appropriate evidence view with the Inspector collapsed.
+
+Typecheck, the root test suite (1,027 passed; nine opt-in skips), lint and Editor
+build are the implementation gates for this change. Native contracts and Rust
+code are unchanged. Actual visual acceptance remains open: the computer-use
+runtime returned `native pipe is unavailable` and CUA returned no browsers/apps.
+These failures are recorded as missing visual evidence, not as product failures
+or successful desktop acceptance. Theme/responsiveness and the full integrated
+acceptance replay remain required work.

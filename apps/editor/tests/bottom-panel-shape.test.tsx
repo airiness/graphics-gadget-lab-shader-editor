@@ -133,6 +133,15 @@ function keyboardLift(handle: HTMLElement, steps = 80): void {
 }
 
 describe("the Bottom Panel shell", () => {
+    it("a real Canvas node click keeps its selection visible in the Inspector", () => {
+        const { root, container, unmount } = mountApp();
+        const node = container.querySelector('.react-flow__node[data-id="n.t"]');
+        expect(node).not.toBeNull();
+        fireEvent.click(node!);
+        expect(root.getByRole("complementary", { name: "Selection Inspector" }).textContent).toContain("p.tint");
+        unmount();
+    });
+
     it("renders the four views as tabs, the first selected by default", () => {
         const { root, unmount } = mountApp();
         for (const tab of BOTTOM_PANEL_TABS) {
