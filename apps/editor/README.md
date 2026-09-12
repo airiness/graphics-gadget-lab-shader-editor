@@ -153,6 +153,8 @@ those inputs is a main-repository obligation.
   See the [golden Workspace guide](../../packages/shader-graph-core/tests/fixtures/README.md)
   for opening the shared fixture directory through Explorer and selecting an
   Environment for native Build/Preview.
+  Use `surface-texture-preview.shadergraph` for the current native Preview
+  contract; the four-parameter authoring golden below is not native-previewable.
   `…/tests/fixtures/
   SurfaceTextureGolden.shadergraph` (fully legal v2 surface, and a
   true `SurfaceTexture` scene: the sample's TYPED channels consumed

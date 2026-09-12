@@ -11,7 +11,7 @@ import { createEnvironmentActivationHost } from "./environment-activation-host.j
 import { PreviewCoordinator } from "./preview-coordinator.js";
 import { WorkspaceStore, type WorkspaceAuthoringState } from "./workspace-store.js";
 import { createWorkspaceSession } from "./workspace-session.js";
-import { emitHlsl } from "@gglab/shader-graph-core";
+import { emitHlsl, parseShaderGraphDocument } from "@gglab/shader-graph-core";
 import { createWorkspaceEnvironmentBinding } from "./use-environment-authoring.js";
 import { createEnvironmentWorkflow } from "./environment-workflow.js";
 import { createSession, provenanceFromImport } from "./document-session.js";
@@ -43,7 +43,15 @@ describe("Environment import composition", () => {
         const reader = createInterface({ input: child.stdout });
         reader.on("line", line => { if (!line.startsWith("GGLAB_PROOF_REPLY:")) return; const reply = JSON.parse(line.slice("GGLAB_PROOF_REPLY:".length)) as { value?: unknown; error?: unknown }; const current = pending; pending = null; if (reply.error) current?.reject(reply.error); else current?.resolve(reply.value); });
         const requests: Record<string, unknown>[] = [];
-        const invoke = (command: string, args?: Record<string, unknown>) => new Promise<unknown>((resolve, reject) => { if (pending) { reject(new Error("Concurrent test bridge request")); return; } const op = args?.operation as { operation?: string; request?: Record<string, unknown> } | undefined; if (op?.operation === "build-preview" && op.request) requests.push(op.request); pending = { resolve, reject }; child.stdin.write(JSON.stringify({ command, args }) + "\n"); });
+        const exchange = (command: string, args?: Record<string, unknown>) => new Promise<unknown>((resolve, reject) => { if (pending) { reject(new Error("Concurrent test bridge request")); return; } const op = args?.operation as { operation?: string; request?: Record<string, unknown> } | undefined; if (op?.operation === "build-preview" && op.request) requests.push(op.request); pending = { resolve, reject }; child.stdin.write(JSON.stringify({ command, args }) + "\n"); });
+        // Unlike Tauri IPC, this line bridge has no response IDs. Runtime exit polling and
+        // foreground registration can overlap; serialize transport, not production ownership.
+        let transport = Promise.resolve();
+        const invoke = (command: string, args?: Record<string, unknown>) => {
+            const result = transport.then(() => exchange(command, args));
+            transport = result.then(() => {}, () => {});
+            return result;
+        };
         let commits = 0;
         const lossyInvoke = async (command: string, args?: Record<string, unknown>) => {
             const result = await invoke(command, args);
@@ -88,7 +96,9 @@ describe("Environment import composition", () => {
                     const owner = createWorkspaceEnvironmentBinding(invoke, selection, () => workspace.getSnapshot().session.activeEnvironment === selection, backend);
                     try {
                         await owner.open();
-                        const documentOwner = createSession(createDocumentSessionId(`native-${backend}-${version}`), provenanceFromImport(), graph(version));
+                        const sample = parseShaderGraphDocument(readFileSync(new URL("../../../packages/shader-graph-core/tests/fixtures/surface-texture-preview.shadergraph", import.meta.url), "utf8"));
+                        if (!sample.ok || !sample.value) throw new Error(JSON.stringify(sample.diagnostics));
+                        const documentOwner = createSession(createDocumentSessionId(`native-${backend}-${version}`), provenanceFromImport(), version === 2 ? sample.value : graph(version));
                         const document = documentOwner.history.present, descriptor = owner.resolveProfile(document);
                         owner.native.updateJudgment(descriptor.processContract.tool);
                         await owner.native.discover({ bundled: false }); await owner.native.handshake();
@@ -105,13 +115,14 @@ describe("Environment import composition", () => {
                             await owner.preview.refreshObservation(); await new Promise(resolve => setTimeout(resolve, 100));
                         }
                         expect(owner.preview.acceptedObservation?.status).toBe("loaded");
-                        authoringRuns.push({ backend, profileVersion: version, sessionId: owner.preview.session.sessionId, observation: owner.preview.acceptedObservation });
+                        authoringRuns.push({ backend, profileVersion: version, graphId: document.graphId, generatedSourceIdentity: input.emission.sourceMap?.generatedSourceIdentity, sessionId: owner.preview.session.sessionId, observation: owner.preview.acceptedObservation });
                         if (backend === "vulkan" && version === 2) {
                             const workflow = createEnvironmentWorkflow(async (command, args) => command === "shader-environment-list-mutations" ? [] : invoke(command, args), () => { throw new Error("Registered reuse must not discover a producer"); }, {
                                 coordinator: () => bound, capture: () => () => workspace.getSnapshot().session.activeEnvironment === selection, begin: () => () => {},
                             });
                             await workflow.useRegistered(snapshot.records[0]!.record);
                             expect(workflow.getSnapshot(), workflow.getSnapshot().message).toMatchObject({ busy: false, canRetry: false });
+                            expect(workflow.getSnapshot().message).toBe("Environment selected. Build and Preview establish their own current readiness.");
                             expect(workspace.getSnapshot().session.activeEnvironment).not.toBe(selection);
                         }
                     } finally { await owner.close(); }

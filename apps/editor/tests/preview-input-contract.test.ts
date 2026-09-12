@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import {
     parseSurfaceProfileDescriptor,
+    parseShaderGraphDocument,
+    validateShaderGraph,
+    emitHlsl,
     type GraphParameter,
     type ShaderGraphDocument,
     type SurfaceProfileDescriptor,
@@ -8,6 +14,21 @@ import {
 import { canonicalV1Fixture } from "../../../packages/shader-graph-core/tests/fixtures/descriptor-v1.js";
 import { canonicalV2Fixture } from "../../../packages/shader-graph-core/tests/fixtures/descriptor-v2.js";
 import { selectPreviewInputContract } from "../src/preview-input-contract.js";
+
+it("admits the checked-in native Preview sample while keeping the authoring golden distinct", () => {
+    const load = (name: string) => {
+        const fixtures = resolve(dirname(fileURLToPath(import.meta.url)), "../../../packages/shader-graph-core/tests/fixtures");
+        const parsed = parseShaderGraphDocument(readFileSync(resolve(fixtures, name), "utf8"));
+        expect(parsed.diagnostics).toEqual([]);
+        if (!parsed.value) throw new Error("Fixture must parse");
+        return parsed.value;
+    };
+    const sample = load("surface-texture-preview.shadergraph"), contract = descriptor(canonicalV2Fixture);
+    expect(validateShaderGraph(sample).diagnostics).toEqual([]);
+    expect(selectPreviewInputContract(sample, contract)).toMatchObject({ matched: true, contract: { id: "gglab.preview-input.surface.texture2d" } });
+    expect(emitHlsl(sample, contract).ok).toBe(true);
+    expect(selectPreviewInputContract(load("SurfaceTextureGolden.shadergraph"), contract)).toMatchObject({ matched: false, mismatch: { reason: "graph-parameter-count-mismatch", expected: 2, observed: 4 } });
+});
 
 function descriptor(fixture: Record<string, unknown>): SurfaceProfileDescriptor {
     const parsed = parseSurfaceProfileDescriptor(JSON.stringify(fixture));
