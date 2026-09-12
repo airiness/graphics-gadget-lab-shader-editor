@@ -839,11 +839,11 @@ describe("typed port presentation (core types → data categories)", () => {
             // The library ships a default "selected" rule that re-colors the
             // path to a flat gray. Counter it at higher specificity (4 vs 3
             // classes) with the SAME per-kind value, order-independent.
-            expect(appCss).toMatch(/\.react-flow__edge\.gglab-edge\.selected \.react-flow__edge-path \{[\s\S]*?stroke: var\(--gglab-edge-stroke, #56637a\)/);
+            expect(appCss).toMatch(/\.react-flow__edge\.gglab-edge\.selected \.react-flow__edge-path \{[\s\S]*?stroke: var\(--gglab-edge-stroke, var\(--edge-muted\)\)/);
             // One color authority per kind (resting, selected, and the
             // counter-rule all read the same variable).
-            expect(appCss).toMatch(/\.react-flow__edge\.gglab-edge-kind-vector \{[\s\S]*?--gglab-edge-stroke: color-mix\(in srgb, var\(--kind-vector\) 70%, #3a4658\)/);
-            expect(appCss).toMatch(/\.react-flow__edge\.gglab-edge-selected \.react-flow__edge-path \{[\s\S]*?stroke: var\(--gglab-edge-stroke, #56637a\);[\s\S]*?stroke-width: 3;/);
+            expect(appCss).toMatch(/\.react-flow__edge\.gglab-edge-kind-vector \{[\s\S]*?--gglab-edge-stroke: color-mix\(in srgb, var\(--kind-vector\) 70%, var\(--edge-mix\)\)/);
+            expect(appCss).toMatch(/\.react-flow__edge\.gglab-edge-selected \.react-flow__edge-path \{[\s\S]*?stroke: var\(--gglab-edge-stroke, var\(--edge-muted\)\);[\s\S]*?stroke-width: 3;/);
             // The selected width (3px) must not be squashed by an inline
             // default — the stroke width is CSS alone.
             const viewport = read("../../../packages/editor-ui/src/flow/flow-viewport.tsx");
@@ -1352,13 +1352,13 @@ describe("typed port presentation (core types → data categories)", () => {
         // raised content < hover surface. Canvas and frame already use
         // the lowest steps in the existing design; lock that the ladder
         // stays a single ordered scale.
-        expect(appCss).toMatch(/--bg: #0f1319;[\s\S]*--panel: #151b23;[\s\S]*--panel-2: #1a222d;[\s\S]*--panel-hi: #202a37;/);
+        expect(appCss).toMatch(/--bg: #141416;[\s\S]*--panel: #1b1b1f;[\s\S]*--panel-2: #222228;[\s\S]*--panel-hi: #2b2b33;/);
         expect(appCss).toMatch(/\.gglab-viewport[\s\S]*?background: var\(--bg\)/);
         expect(appCss).toMatch(/\.gglab-header[\s\S]*?background: var\(--panel\)/);
         expect(appCss).toMatch(/\.gglab-statusbar[\s\S]*?background: var\(--panel\)/);
         // Faint text meets AA on the raised surface (small meta text,
         // diagnostic paths, hints must stay readable).
-        expect(appCss).toContain("--faint: #7b89a1");
+        expect(appCss).toContain("--faint: #9c9caa");
         // Slim, surface-agnostic scrollbar (transparent inset, hover step).
         expect(appCss).toMatch(/::-webkit-scrollbar[\s\S]*?width: 8px;/);
         expect(appCss).toMatch(/::-webkit-scrollbar-thumb[\s\S]*?border: 2px solid transparent/);

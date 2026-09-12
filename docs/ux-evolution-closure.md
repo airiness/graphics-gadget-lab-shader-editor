@@ -28,7 +28,7 @@ missing implementation or evidence too weak to establish completion.
 | 7 | Active tab differs from Preview target | `preview-coordinator.ts` and session tests; replay while Runtime is attached. |
 | 8 | Explicit visible Preview target | Tab marker and Preview-this-graph action; replay Explorer/status discoverability. |
 | 9 | One Runtime and identical-HLSL isolation | Coordinator ownership tests; retain native regression in final replay. |
-| 10 | Stop/await on target close/switch/Environment switch | Coordinator and Environment workflow tests; final native transition replay. |
+| 10 | Stop/await on target close/switch/Environment switch | Open: coordinator stops Runtime, but target-close currently re-seeds the surviving active document. Guidance §12.4 requires clearing the target and live binding; correct the reducer/consumer fallback and replay native transitions. |
 | 11 | Reject superseded results | Ownership reducers and controller tests; audit complete correlation coordinates. |
 | 12 | Repository/deployment import workflow | `environment-desktop-workflow.md` and desktop workflow implementation; replay first use. |
 | 13 | Finalize/validate/prove before registering | Environment import/final-proof tests and evidence; pinned native replay required. |
@@ -45,7 +45,7 @@ missing implementation or evidence too weak to establish completion.
 | 24 | Problem source and document ownership | Owner-bound evidence origins and Problems tests; replay navigation after tab/revision changes. |
 | 25 | Clear is presentation-only | Bottom Panel tests; retain state after clear in final scenario. |
 | 26 | Semantic directories and correct persistence owners | Host-owned primary dialog histories and explicit last-Workspace re-admission implemented; layout persistence is now implemented; all existing file-dialog purposes now have separate history; safe session intent implemented in `3830de0`; desktop restart replay remains. |
-| 27 | Responsive state/action/event hierarchy and semantic colors | Open: current shell still uses the old blue accent; complete Graphite/Iris roles, overflow and layout validation. |
+| 27 | Responsive state/action/event hierarchy and semantic colors | Graphite/Iris roles, independent info/verdict colors, wrapping global actions and narrower desktop columns implemented; actual rendered overflow and keyboard acceptance remain open. |
 | 28 | Safe restart, detached, no restored Current | Explicit last-Workspace re-admission implemented with no live proof restoration; safe tabs/target/Environment intent implemented in `3830de0`; desktop restart acceptance remains open. |
 | 29 | No generic native authority | Narrow Tauri commands and existing Environment host; retain command-boundary review. |
 | 30 | Reviewed GGLab-owned publication contract | Existing import approval and pinned producer records; preserve contract/revision provenance. |
@@ -158,3 +158,30 @@ runtime returned `native pipe is unavailable` and CUA returned no browsers/apps.
 These failures are recorded as missing visual evidence, not as product failures
 or successful desktop acceptance. Theme/responsiveness and the full integrated
 acceptance replay remain required work.
+
+
+## Semantic theme implementation
+
+Graphite surface/text tokens and Iris interaction tokens now own shell colors.
+Information, success, warning and error have independent roles; Preview target and
+open-file markers use interaction color, not success. Failed evidence and error
+Problems use the error token (including correction of an undefined `--err`
+fallback). Graph type/category hues retain their authority. Edge neutral/mix
+colors, foreground ink and dialog scrims are centralized as tokens.
+
+Global actions/header wrap, metadata can wrap, the status strip can scroll, and
+side columns narrow below 1100 pixels without changing saved collapse preferences.
+Reduced-motion preferences suppress incidental transitions. CSS color checks
+require a 4.5:1 minimum for all small-text semantic roles on each shell surface;
+this is measured token evidence, not a rendered accessibility audit. Typecheck,
+root tests (1,030 passed; nine opt-in skips), lint, Editor build and diff check
+passed. Full visual/keyboard/desktop acceptance remains outstanding.
+
+## Ownership audit finding
+
+Guidance §12.4 explicitly requires target close to clear Preview target and live
+ownership. The current `closeWorkspaceDocument` re-seeds the surviving active tab,
+and `resolvePreviewTarget` has an active-document fallback. Existing tests preserve
+that older behavior, so green tests do not establish the desired end state. The
+next correctness change must align reducer, coordinator and hook consumers with
+an explicit no-target state, preserve chronology, and test stop/await before close.

@@ -27,16 +27,16 @@
     --color-popover: var(--panel-hi);
     --color-popover-foreground: var(--text);
     --color-primary: var(--accent);
-    --color-primary-foreground: #0b1220;
+    --color-primary-foreground: var(--accent-ink);
     --color-secondary: var(--panel-hi);
     --color-secondary-foreground: var(--text);
     --color-muted: var(--panel-2);
     --color-muted-foreground: var(--muted);
     --color-accent: var(--accent);
-    --color-accent-foreground: #0b1220;
+    --color-accent-foreground: var(--accent-ink);
     --color-accent-soft: var(--accent-soft);
     --color-destructive: var(--error);
-    --color-destructive-foreground: #1a0b0b;
+    --color-destructive-foreground: var(--error-ink);
     --color-border: var(--border);
     --color-border-soft: var(--border-soft);
     --color-border-hi: var(--border-hi);
@@ -51,25 +51,28 @@
 
 :root {
     color-scheme: dark;
-    /* neutral scale */
-    --bg: #0f1319;
-    --panel: #151b23;
-    --panel-2: #1a222d;
-    --panel-hi: #202a37;
-    --border: #2b3442;
-    --border-soft: #232d3a;
-    --border-hi: #3b4859;
-    --text: #dde5ef;
-    --muted: #93a0b1;
-    /* ≈4.5:1 on --panel-2 (AA for small text) — raised from #66748a
-       (≈3.4:1) so meta text, hints, and diagnostic paths stay readable. */
-    --faint: #7b89a1;
-    /* semantics */
-    --accent: #5aa9ff;
-    --accent-soft: rgba(90, 169, 255, 0.14);
-    --ok: #6fd39a;
-    --warn: #e8b45a;
-    --error: #ff7a7a;
+    /* Graphite surfaces; Iris is interaction, never a success verdict. */
+    --bg: #141416;
+    --panel: #1b1b1f;
+    --panel-2: #222228;
+    --panel-hi: #2b2b33;
+    --border: #3c3c46;
+    --border-soft: #303038;
+    --border-hi: #555560;
+    --text: #ededf2;
+    --muted: #b3b3c0;
+    --faint: #9c9caa;
+    --accent: #b1a0ff;
+    --accent-ink: #191525;
+    --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+    --info: #80c8e8;
+    --ok: #83d7a2;
+    --warn: #efc174;
+    --error: #ff9292;
+    --error-ink: #281616;
+    --edge-muted: #747483;
+    --edge-mix: #494955;
+    --scrim: rgb(0 0 0 / 55%);
     /* data categories (port handles, dots, edge strokes) — a presentation
        mapping over the core catalog's type vocabulary */
     --kind-scalar: #d9a85f;
@@ -193,7 +196,7 @@ body {
        DOM order. The row list MUST stay in sync with the in-flow children:
        a missing row silently pushes the body into the 30px status row and
        gives the tab strip the flex space. */
-    grid-template-rows: 46px auto minmax(0, 1fr) 30px;
+    grid-template-rows: minmax(46px, auto) auto minmax(0, 1fr) 30px;
     height: 100%;
 }
 
@@ -465,7 +468,7 @@ body.gglab-resizing {
 }
 
 .gglab-tab-preview {
-    color: var(--ok);
+    color: var(--accent);
     font-size: var(--type-meta);
 }
 
@@ -582,7 +585,7 @@ body.gglab-resizing {
 }
 
 .gglab-explorer-open {
-    color: var(--ok);
+    color: var(--accent);
 }
 
 .gglab-side {
@@ -1490,47 +1493,47 @@ body.gglab-resizing {
        --gglab-edge-stroke: the wire's ONE color authority per kind,
        reused by every state (resting, the library's selected hook, and
        our own selected emphasis). */
-    --gglab-edge-glow: color-mix(in srgb, #56637a 55%, transparent);
-    --gglab-edge-stroke: #56637a;
+    --gglab-edge-glow: color-mix(in srgb, var(--edge-muted) 55%, transparent);
+    --gglab-edge-stroke: var(--edge-muted);
 }
 
 .react-flow__edge .react-flow__edge-path {
-    stroke: #56637a;
+    stroke: var(--edge-muted);
     stroke-width: 2;
 }
 
 .react-flow__edge.gglab-edge-kind-scalar {
     --gglab-edge-glow: color-mix(in srgb, var(--kind-scalar) 55%, transparent);
-    --gglab-edge-stroke: color-mix(in srgb, var(--kind-scalar) 70%, #3a4658);
+    --gglab-edge-stroke: color-mix(in srgb, var(--kind-scalar) 70%, var(--edge-mix));
 }
 
 .react-flow__edge.gglab-edge-kind-scalar .react-flow__edge-path {
     stroke: var(--kind-scalar);
-    stroke: color-mix(in srgb, var(--kind-scalar) 70%, #3a4658);
+    stroke: color-mix(in srgb, var(--kind-scalar) 70%, var(--edge-mix));
 }
 
 .react-flow__edge.gglab-edge-kind-vector {
     --gglab-edge-glow: color-mix(in srgb, var(--kind-vector) 55%, transparent);
-    --gglab-edge-stroke: color-mix(in srgb, var(--kind-vector) 70%, #3a4658);
+    --gglab-edge-stroke: color-mix(in srgb, var(--kind-vector) 70%, var(--edge-mix));
 }
 
 .react-flow__edge.gglab-edge-kind-vector .react-flow__edge-path {
     stroke: var(--kind-vector);
-    stroke: color-mix(in srgb, var(--kind-vector) 70%, #3a4658);
+    stroke: color-mix(in srgb, var(--kind-vector) 70%, var(--edge-mix));
 }
 
 .react-flow__edge.gglab-edge-kind-texture {
     --gglab-edge-glow: color-mix(in srgb, var(--kind-texture) 55%, transparent);
-    --gglab-edge-stroke: color-mix(in srgb, var(--kind-texture) 70%, #3a4658);
+    --gglab-edge-stroke: color-mix(in srgb, var(--kind-texture) 70%, var(--edge-mix));
 }
 
 .react-flow__edge.gglab-edge-kind-texture .react-flow__edge-path {
     stroke: var(--kind-texture);
-    stroke: color-mix(in srgb, var(--kind-texture) 70%, #3a4658);
+    stroke: color-mix(in srgb, var(--kind-texture) 70%, var(--edge-mix));
 }
 
 .react-flow__edge.gglab-edge-kind-generic .react-flow__edge-path {
-    stroke: #56637a;
+    stroke: var(--edge-muted);
 }
 
 /* Hover: same hue, slightly brighter (brightness cannot change the hue),
@@ -1543,7 +1546,7 @@ body.gglab-resizing {
 /* Selected: emphasis ONLY — the kind's own hue thickened + a soft
    same-hue glow. Semantic color is never overwritten by selection. */
 .react-flow__edge.gglab-edge-selected .react-flow__edge-path {
-    stroke: var(--gglab-edge-stroke, #56637a);
+    stroke: var(--gglab-edge-stroke, var(--edge-muted));
     stroke-width: 3;
     filter: drop-shadow(0 0 5px var(--gglab-edge-glow));
 }
@@ -1553,7 +1556,7 @@ body.gglab-resizing {
    rule so our per-kind color wins regardless of stylesheet order —
    one color authority per edge, in every state. */
 .react-flow__edge.gglab-edge.selected .react-flow__edge-path {
-    stroke: var(--gglab-edge-stroke, #56637a);
+    stroke: var(--gglab-edge-stroke, var(--edge-muted));
 }
 
 .react-flow__edge.gglab-edge-selected:hover .react-flow__edge-path {
@@ -1966,10 +1969,8 @@ button.gglab-diagnostics-item:hover {
     color: var(--muted);
 }
 
-.gglab-native-state-failed,
-.gglab-native-state-canceled {
-    color: var(--warn);
-}
+.gglab-native-state-failed { color: var(--error); }
+.gglab-native-state-canceled { color: var(--warn); }
 
 /* The Build / Preview panel views: one row per attempt — the identity head
    (attempt sequence, the owner's own state, the composed request), the session
@@ -1999,8 +2000,8 @@ button.gglab-diagnostics-item:hover {
 }
 
 .gglab-bottom-view-row {
-    border: 1px solid var(--edge);
-    border-radius: var(--radius, 6px);
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
     padding: 8px 10px;
     display: flex;
     flex-direction: column;
@@ -2041,16 +2042,11 @@ button.gglab-diagnostics-item:hover {
     color: var(--ok, var(--text));
 }
 
-.gglab-view-state-stale,
+.gglab-view-state-stale { color: var(--warn); }
 .gglab-view-state-in-flight,
-.gglab-view-state-pending {
-    color: var(--muted);
-}
-
-.gglab-view-state-failed,
-.gglab-view-state-canceled {
-    color: var(--warn);
-}
+.gglab-view-state-pending { color: var(--info); }
+.gglab-view-state-failed { color: var(--error); }
+.gglab-view-state-canceled { color: var(--warn); }
 
 /* The Problems view: the replaceable current diagnostic snapshot. The
    toolbar carries the whole-state count and the presentation-only Clear
@@ -2069,8 +2065,8 @@ button.gglab-diagnostics-item:hover {
 }
 
 .gglab-bottom-view-clear {
-    border: 1px solid var(--edge);
-    border-radius: var(--radius, 6px);
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
     background: transparent;
     color: var(--text);
     font-size: var(--type-meta);
@@ -2093,7 +2089,7 @@ button.gglab-diagnostics-item:hover {
 }
 
 .gglab-view-severity-error {
-    color: var(--err, var(--warn));
+    color: var(--error);
 }
 
 .gglab-view-severity-warning {
@@ -2114,7 +2110,7 @@ button.gglab-diagnostics-item:hover {
     border-radius: 8px;
     overflow-wrap: anywhere;
 }
-.gglab-environment-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+.gglab-environment-dialog::backdrop { background: var(--scrim); }
 .gglab-environment-dialog fieldset { margin: 16px 0; padding: 12px; border: 1px solid var(--border-hi); }
 .gglab-environment-dialog p { margin: 12px 0; }
 .gglab-environment-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0; }
@@ -2154,10 +2150,31 @@ button.gglab-diagnostics-item:hover {
     border-radius: var(--r-2);
     overflow-wrap: anywhere;
 }
-.gglab-workbench-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+.gglab-workbench-dialog::backdrop { background: var(--scrim); }
 .gglab-workbench-dialog-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .gglab-workbench-dialog-heading h2 { font-size: var(--type-body); font-weight: var(--weight-heading); }
 .gglab-engineering-details { border-top: 1px solid var(--border-soft); margin-top: 12px; }
 .gglab-engineering-details > summary { cursor: pointer; padding: 10px 0; font-weight: var(--weight-heading); }
 .gglab-engineering-details .gglab-panel { max-width: 960px; }
 .gglab-selection-problem { background: none; border: 0; padding: 0; color: var(--text); text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+
+
+/* Status categories are independent of focus/selection and graph type hues. */
+.gglab-note-info > .mono:first-child,
+.gglab-view-severity-info { color: var(--info); }
+.gglab-header { flex-wrap: wrap; padding-block: 8px; }
+.gglab-header-group { flex-wrap: wrap; }
+.gglab-fact { flex-wrap: wrap; }
+.gglab-fact dd, .gglab-bottom-view-row, .gglab-status-item { overflow-wrap: anywhere; min-width: 0; }
+.gglab-bottom-panel-body > .gglab-bottom-view { height: auto; overflow: visible; }
+.gglab-statusbar { overflow-x: auto; }
+.gglab-status-group { flex-shrink: 0; }
+@media (max-width: 1100px) {
+    .gglab-body { grid-template-columns: 212px minmax(0, 1fr) 280px; }
+    .gglab-body-library-collapsed { grid-template-columns: 48px minmax(0, 1fr) 280px; }
+    .gglab-body-inspector-collapsed { grid-template-columns: 212px minmax(0, 1fr) 48px; }
+    .gglab-body-library-collapsed.gglab-body-inspector-collapsed { grid-template-columns: 48px minmax(0, 1fr) 48px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0s !important; animation-duration: 0s !important; }
+}

@@ -2218,7 +2218,7 @@ export function App() {
                                       ? "error"
                                       : preview.projection?.freshness === "stale"
                                         ? "warn"
-                                        : "accent"
+                                        : "info"
                             }
                         >
                             <BadgeDot />
@@ -2428,7 +2428,7 @@ export function App() {
                     <Button variant="toolbar" onClick={() => showEvidence("preview")}>Preview details</Button>
 
                     <Button
-                        variant="toolbar"
+                        variant="primary"
                         onClick={() => void onPreviewThisGraph()}
                         disabled={startingGraphPreview || preview.buildInFlight || preview.launchInFlight}
                         title="Select this graph, prove Preview compatibility, and build. Launch Runtime only after successful publication."
@@ -2481,7 +2481,7 @@ export function App() {
                                 )}
                                 {resumeHint !== null && <Button variant="secondary" disabled={resumeBusy} onClick={() => void restoreSavedWorkspace()}>Restore saved session</Button>}
                                 {resumeBusy && <Button variant="ghost" onClick={cancelWorkspaceRestore}>Cancel restore</Button>}
-                                <Button variant="primary" onClick={() => void onDiscoverWorkspace()} disabled={explorerBusy}>
+                                <Button variant="secondary" onClick={() => void onDiscoverWorkspace()} disabled={explorerBusy}>
                                     {explorerBusy ? "Discovering…" : "Discover"}
                                 </Button>
                                 {explorerBusy && (
