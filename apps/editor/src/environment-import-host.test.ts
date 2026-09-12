@@ -92,13 +92,17 @@ describe("Environment import composition", () => {
                 expect(requests).toHaveLength(12);
                 const selection = workspace.getSnapshot().session.activeEnvironment!;
                 const authoringRuns = [];
-                for (const backend of ["dx12", "vulkan"] as const) for (const version of [1, 2] as const) {
+                const samples = ["surface-texture-preview.shadergraph", "surface-color-study-preview.shadergraph"].map(name => {
+                    const parsed = parseShaderGraphDocument(readFileSync(new URL(`../../../packages/shader-graph-core/tests/fixtures/${name}`, import.meta.url), "utf8"));
+                    if (!parsed.ok || !parsed.value) throw new Error(JSON.stringify(parsed.diagnostics));
+                    return parsed.value;
+                });
+                for (const backend of ["dx12", "vulkan"] as const) for (const source of [graph(1), ...samples]) {
+                    const version = source.profileVersion;
                     const owner = createWorkspaceEnvironmentBinding(invoke, selection, () => workspace.getSnapshot().session.activeEnvironment === selection, backend);
                     try {
                         await owner.open();
-                        const sample = parseShaderGraphDocument(readFileSync(new URL("../../../packages/shader-graph-core/tests/fixtures/surface-texture-preview.shadergraph", import.meta.url), "utf8"));
-                        if (!sample.ok || !sample.value) throw new Error(JSON.stringify(sample.diagnostics));
-                        const documentOwner = createSession(createDocumentSessionId(`native-${backend}-${version}`), provenanceFromImport(), version === 2 ? sample.value : graph(version));
+                        const documentOwner = createSession(createDocumentSessionId(`native-${backend}-${source.graphId}`), provenanceFromImport(), source);
                         const document = documentOwner.history.present, descriptor = owner.resolveProfile(document);
                         owner.native.updateJudgment(descriptor.processContract.tool);
                         await owner.native.discover({ bundled: false }); await owner.native.handshake();
@@ -116,7 +120,7 @@ describe("Environment import composition", () => {
                         }
                         expect(owner.preview.acceptedObservation?.status).toBe("loaded");
                         authoringRuns.push({ backend, profileVersion: version, graphId: document.graphId, generatedSourceIdentity: input.emission.sourceMap?.generatedSourceIdentity, sessionId: owner.preview.session.sessionId, observation: owner.preview.acceptedObservation });
-                        if (backend === "vulkan" && version === 2) {
+                        if (backend === "vulkan" && source === samples[samples.length - 1]) {
                             const workflow = createEnvironmentWorkflow(async (command, args) => command === "shader-environment-list-mutations" ? [] : invoke(command, args), () => { throw new Error("Registered reuse must not discover a producer"); }, {
                                 coordinator: () => bound, capture: () => () => workspace.getSnapshot().session.activeEnvironment === selection, begin: () => () => {},
                             });
@@ -140,5 +144,5 @@ describe("Environment import composition", () => {
             child.stdin.end();
             try { expect(await exited, diagnostics).toBe(0); } finally { reader.close(); }
         }
-    }, 300000);
+    }, 420000);
 });

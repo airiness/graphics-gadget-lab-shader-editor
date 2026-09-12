@@ -24,7 +24,7 @@ These are tool-owned regression scenes, not product material assets.
    switching tabs alone does not change the target.
 
 The directory picker selects `fixtures`, not the `.shadergraph` file.
-Explorer lists the three graph documents; this README and the TypeScript
+Explorer lists the four graph documents; this README and the TypeScript
 descriptor fixtures are not graph entries. Browser mode does not provide native
 Workspace directory access.
 
@@ -32,6 +32,7 @@ Workspace directory access.
 
 | File | Purpose |
 | --- | --- |
+| `surface-color-study-preview.shadergraph` | Interactive color study: UV gradient, tiled texture mask, cyan/orange palette, masked emission, metallic and roughness outputs. Uses the same frozen two-parameter contract. |
 | `surface-texture-preview.shadergraph` | Native Preview sample for the frozen `gglab.preview-input.surface.texture2d` contract: exactly `p.rough` and `p.tex`. Texture RGB drives BaseColor, B drives Metallic, roughness comes from the Preview Lab, Emissive is zero and Opacity is one. |
 | `SurfaceTextureGolden.shadergraph` | Legal Surface v2 graph: texture sampling, scalar/vector parameters, RGB fan-out, math and all five surface outputs. Zero graph diagnostics; fixed deterministic HLSL fingerprint. |
 | `SurfaceDiagnostics.shadergraph` | Intentionally invalid graph for Problems/navigation and failed-emission behavior. It opens but must refuse emission. |
@@ -60,3 +61,43 @@ Saving in place changes the checked-in regression fixture. Use **Save As** for
 free-form experiments; edit the original when intentionally updating the golden
 and review the corresponding tests. No runtime state or generated artifacts
 belong in this fixture directory.
+
+## Color study: see the graph change the image
+
+Open **surface-color-study-preview.shadergraph**, then click **Preview this graph**.
+The 22-node graph uses only the existing `p.rough` / `p.tex` contract; the editable
+controls are ordinary constant nodes, not additional Runtime parameters.
+
+With Runtime's default **1x1 White** texture, the mesh UV's U coordinate blends
+**Cool Color** (cyan) into **Warm Color** (orange). The same mask adds colored
+emission toward the warm end. For a patterned version, select **Texture2D v2 →
+Texture Fixture → Procedural Checker** in the Runtime Preview Lab. The graph
+multiplies the tiled texture's red channel by the UV gradient before clamping
+the result; the checker therefore modulates both the palette and emission.
+No external texture is required.
+
+Use **Save As** before experimenting. Select these labeled constant nodes in the
+Editor, change their values in the Inspector, then click **Preview this graph**
+again to publish the edited graph:
+
+| Node | Initial value | Experiment and expected effect |
+| --- | --- | --- |
+| Cool Color / Warm Color | `[0.01, 0.7, 0.95]` / `[1, 0.08, 0.01]` | Swap the two colors to reverse the palette. |
+| Gradient Direction | `[1, 0]` | Set `[0, 1]` to use V instead of U; `[0, 0]` makes the entire surface the cool color and removes emission. |
+| Texture Tiling | `3` | With Procedural Checker selected, compare `1` and `6` to change pattern density. White texture has no pattern to tile. |
+| Glow Strength | `0.65` | Set `0` to remove emission, or `1.5` to make it stronger. |
+| Metal Strength | `0.85` | Set `0` while viewing Metallic to remove its mask. |
+| Polished Roughness | `0.08` | Set `0.9` while viewing Roughness to change the warm end of the gradient. |
+
+Runtime **Preview Program → Output View** can isolate **Base Color**, **Emissive**,
+**Metallic**, and **Roughness**. The current **Combined** visualizer adds Emissive
+to lit BaseColor; it does not evaluate a metallic/roughness PBR BRDF or promise
+bloom. Use the individual output views to inspect those graph outputs directly.
+Runtime's **Texture2D v2 → Roughness** controls the other end of the roughness
+blend without rebuilding. Mesh UV layout determines the placement of the gradient.
+
+The native qualification test reads both checked-in Preview samples and requires
+successful publication and Runtime Loaded observations on each backend. Native
+Loaded evidence does not itself assert screenshot appearance.
+[Color study evidence](../../../../docs/color-study-preview-sample-evidence.json)
+records the exact sample hash and Debug/Release DX12/Vulkan results.

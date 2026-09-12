@@ -15,7 +15,7 @@ import { canonicalV1Fixture } from "../../../packages/shader-graph-core/tests/fi
 import { canonicalV2Fixture } from "../../../packages/shader-graph-core/tests/fixtures/descriptor-v2.js";
 import { selectPreviewInputContract } from "../src/preview-input-contract.js";
 
-it("admits the checked-in native Preview sample while keeping the authoring golden distinct", () => {
+it.each(["surface-texture-preview.shadergraph", "surface-color-study-preview.shadergraph"])("admits %s while keeping the authoring golden distinct", name => {
     const load = (name: string) => {
         const fixtures = resolve(dirname(fileURLToPath(import.meta.url)), "../../../packages/shader-graph-core/tests/fixtures");
         const parsed = parseShaderGraphDocument(readFileSync(resolve(fixtures, name), "utf8"));
@@ -23,7 +23,7 @@ it("admits the checked-in native Preview sample while keeping the authoring gold
         if (!parsed.value) throw new Error("Fixture must parse");
         return parsed.value;
     };
-    const sample = load("surface-texture-preview.shadergraph"), contract = descriptor(canonicalV2Fixture);
+    const sample = load(name), contract = descriptor(canonicalV2Fixture);
     expect(validateShaderGraph(sample).diagnostics).toEqual([]);
     expect(selectPreviewInputContract(sample, contract)).toMatchObject({ matched: true, contract: { id: "gglab.preview-input.surface.texture2d" } });
     expect(emitHlsl(sample, contract).ok).toBe(true);
