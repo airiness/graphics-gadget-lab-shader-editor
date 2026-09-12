@@ -36,6 +36,8 @@ import "@xyflow/react/dist/style.css";
 import type { ShaderFlowNode, ShaderNodeData } from "./flow-adapter.js";
 import { FLOW_NODE_TYPE, flowGeometryCssVars, handleStyle } from "./flow-adapter.js";
 import { AUTHORING_DROP_MIME, decodeAuthoringDrop, resolveDropCoordinate, type AuthoringDropPayload } from "../session/authoring-operations.js";
+import { InlineConstantEditor } from "../panels/node-properties-panel.js";
+import type { ConstantValue } from "../session/authoring-operations.js";
 import { Button } from "../components/ui/button.js";
 import { ChevronDownIcon } from "../components/icons.js";
 
@@ -56,6 +58,8 @@ export type PortActivation = {
     readonly isInput: boolean;
     readonly altKey: boolean;
 };
+
+const ConstantEditContext = createContext<{ scope: string; commit: (nodeId: string, value: ConstantValue) => boolean } | null>(null);
 
 const PortGestureContext = createContext<((activation: PortActivation) => void) | null>(null);
 
@@ -100,6 +104,7 @@ export function ShaderNode(props: NodeProps<ShaderNodeT>) {
             ? (event: { readonly altKey: boolean }) => activatePort({ nodeId: props.id, portId, isInput, altKey: event.altKey })
             : undefined;
     const openNodeMenu = useContext(NodeMenuContext);
+    const constantEdit = useContext(ConstantEditContext);
     return (
         <div className={`gglab-node gglab-node-cat-${data.nodeCategory ?? "unknown"}${data.knownToCatalog === false ? " gglab-node-unknown" : ""}${data.focused ? " gglab-node-focus" : ""}`}>
             <div className="gglab-node-header">
@@ -178,6 +183,9 @@ export function ShaderNode(props: NodeProps<ShaderNodeT>) {
                     );
                 })}
             </div>
+            {constantEdit !== null && data.authoringNode !== undefined && (
+                <InlineConstantEditor key={`${constantEdit.scope}:${props.id}`} node={data.authoringNode} onCommit={constantEdit.commit} />
+            )}
         </div>
     );
 }
@@ -188,6 +196,9 @@ export interface ConnectionRequest {
 }
 
 export interface FlowViewportProps {
+    readonly onConstantValueCommit?: (nodeId: string, value: ConstantValue) => boolean;
+    /** Draft lifetime follows the document session, even when node IDs repeat. */
+    readonly authoringScope?: string;
     readonly nodes: readonly ShaderFlowNode[];
     readonly edges: readonly import("@xyflow/react").Edge[];
     /** A connection attempt (interaction intent) — the core decides whether it holds. */
@@ -363,6 +374,7 @@ export function FlowViewport(props: FlowViewportProps) {
         <div className="gglab-viewport" style={flowGeometryCssVars()}>
             <PortGestureContext.Provider value={props.onPortActivate ?? null}>
             <NodeMenuContext.Provider value={props.onNodeMenu ?? null}>
+            <ConstantEditContext.Provider value={props.onConstantValueCommit === undefined ? null : { scope: props.authoringScope ?? "", commit: props.onConstantValueCommit }}>
             <ReactFlow<ShaderNodeT>
                 nodes={nodes}
                 onNodesChange={onNodesChange}
@@ -445,6 +457,7 @@ export function FlowViewport(props: FlowViewportProps) {
                 <Controls showInteractive={false} position="top-right" />
                 <MiniMap pannable zoomable nodeColor={minimapNodeColor} maskColor="rgba(15,19,25,0.78)" position="bottom-right" className="gglab-minimap" />
             </ReactFlow>
+            </ConstantEditContext.Provider>
             </NodeMenuContext.Provider>
             </PortGestureContext.Provider>
         </div>

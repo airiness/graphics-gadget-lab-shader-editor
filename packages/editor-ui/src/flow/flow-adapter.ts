@@ -18,7 +18,7 @@
  * order. Placement never changes generated HLSL (core invariant).
  */
 import type { Edge, Node } from "@xyflow/react";
-import type { ShaderGraphDocument } from "@gglab/shader-graph-core";
+import type { GraphNode, ShaderGraphDocument } from "@gglab/shader-graph-core";
 import { getNodeDefinition, resolveGraphTypes, type GraphType, type ResolvedGraphTypes } from "@gglab/shader-graph-core";
 import { FLOW_GEOMETRY, handleTop } from "./flow-geometry.js";
 
@@ -125,6 +125,7 @@ export interface CanvasFocus {
 }
 
 export type ShaderNodeData = {
+    readonly authoringNode?: GraphNode;
     readonly label: string;
     readonly nodeType: string;
     readonly inputPorts: readonly string[];
@@ -219,6 +220,7 @@ export function documentToFlow(
         const inputs = definition !== undefined ? portFacts(definition.inputs, inputConcrete) : { displays: [], kinds: [] };
         const outputs = definition !== undefined ? portFacts(definition.outputs, outputConcrete) : { displays: [], kinds: [] };
         const data: ShaderNodeData = {
+            authoringNode: node,
             label: node.label ?? definition?.displayName ?? node.type,
             nodeType: node.type,
             inputPorts: definition?.inputs.map((port) => port.id) ?? [],

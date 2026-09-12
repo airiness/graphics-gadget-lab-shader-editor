@@ -2162,3 +2162,19 @@ button.gglab-diagnostics-item:hover {
 .gglab-environment-dialog fieldset { margin: 16px 0; padding: 12px; border: 1px solid var(--border-hi); }
 .gglab-environment-dialog p { margin: 12px 0; }
 .gglab-environment-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0; }
+
+/* Inline drafts sit below the sockets, so edge anchors retain their geometry. */
+.gglab-node-inline {
+    box-sizing: border-box;
+    overflow-y: auto;
+    padding: 6px 12px 10px;
+    border-top: 1px solid var(--border-soft);
+}
+.gglab-node-inline .gglab-node-property-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+}
+.gglab-node-inline .gglab-node-property-field { min-width: 0; }
+.gglab-node-inline .gglab-node-property-input { width: 100%; min-width: 0; height: 24px; }
+.gglab-node-inline .gglab-node-property-error { font-size: var(--type-meta); overflow-wrap: anywhere; }

@@ -2271,6 +2271,8 @@ export function App() {
                         </div>
                     )}
                     <FlowViewport
+                        authoringScope={session.sessionId}
+                        onConstantValueCommit={onConstantValueCommit}
                         nodes={flow.nodes}
                         edges={flow.edges}
                         onConnectRequest={onConnectRequest}
@@ -2386,6 +2388,7 @@ export function App() {
                         </div>
                         {inspectorZone === "selection" && (
                             <NodePropertiesPanel
+                                key={session.sessionId}
                                 node={selectedNode}
                                 onConstantValueCommit={onConstantValueCommit}
                             />
