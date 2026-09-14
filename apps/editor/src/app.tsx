@@ -1,3 +1,5 @@
+import { DocumentProfilePanel } from "./document-profile-panel.js";
+import { onTabKeyDown } from "./tab-keyboard.js";
 /**
  * Composition root — where the core's semantic services are asked about
  * everything the user can do. The GUI components forward raw intents
@@ -51,6 +53,7 @@ import {
     withNodePosition,
 } from "@gglab/editor-ui";
 import {
+    applyGraphEdit,
     checkProfileConformance,
     checkProfileDescriptorCompatibility,
     emitHlsl,
@@ -406,43 +409,6 @@ export function App() {
         }
     }
 
-    // Keyboard tab navigation (roving selection): arrows move the active
-    // view, Home/End jump to the ends.
-    function selectBottomPanelTab(index: number): void {
-        const length = BOTTOM_PANEL_TABS.length;
-        const wrapped = ((index % length) + length) % length;
-        const tab = BOTTOM_PANEL_TABS[wrapped];
-        if (tab !== undefined) {
-            setBottomPanelTab(tab.id);
-        }
-    }
-
-    function onBottomPanelTabKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>): void {
-        const index = BOTTOM_PANEL_TABS.findIndex((entry) => entry.id === bottomPanelTab);
-        switch (event.key) {
-            case "ArrowRight":
-            case "ArrowDown":
-                event.preventDefault();
-                selectBottomPanelTab(index + 1);
-                return;
-            case "ArrowLeft":
-            case "ArrowUp":
-                event.preventDefault();
-                selectBottomPanelTab(index - 1);
-                return;
-            case "Home":
-                event.preventDefault();
-                selectBottomPanelTab(0);
-                return;
-            case "End":
-                event.preventDefault();
-                selectBottomPanelTab(BOTTOM_PANEL_TABS.length - 1);
-                return;
-            default:
-                return;
-        }
-    }
-
     // The Canvas-floor invariant is CONTINUOUS, not gesture-local: observe the
     // body's size and, whenever it changes (window resize, a layout shift),
     // refresh the measured available height. Seeded from the current layout on
@@ -775,7 +741,7 @@ export function App() {
      * target, the PreviewCoordinator owns the transition: the strict
      * teardown (last await; skipped only in the proven-no-Runtime / no-host
      * case) then one synchronous commit where the close + the Preview-target
-     * re-seed land together.
+     * clearance land together.
      *
      * Revision binding (data-loss guard): the app captures the EXACT
      * document revision the user just confirmed discarding and binds the
@@ -1524,6 +1490,11 @@ export function App() {
         return first !== undefined ? `${first.code}: ${first.message}` : "the profile and the descriptor instance disagree on capabilities";
     }, [profileCompatibility]);
 
+    const profileCatalog = useMemo(() => {
+        if (workspace.activeEnvironment === null) return descriptor === null ? [] : [descriptor];
+        try { return environmentBinding?.profileCatalog() ?? []; } catch { return []; }
+    }, [workspace.activeEnvironment, environmentBinding, descriptor]);
+
     function applyAuthoring(result: AuthoringResult, label: string): void {
         if (result.applied) {
             // An ACCEPTED operation is not necessarily a mutation: an
@@ -1913,21 +1884,21 @@ export function App() {
     // composes from the EXPLICIT Preview target — a distinct Workspace axis —
     // not the active (editing) document. Switching the active tab therefore
     // cannot silently retarget the Runtime; only an explicit "Preview this
-    // graph" moves the target. Before the user has ever chosen a target, the
-    // active (single seeded) document is the bootstrap default.
-    const previewTargetSession = resolvePreviewTarget(workspace) ?? session;
-    const previewDocument = previewTargetSession.history.present;
-    const previewEmission = previewTargetSession.presentation.emission;
+    // graph" moves the target. A closed target stays absent until explicit retarget.
+    const previewTargetSession = resolvePreviewTarget(workspace);
+    const previewDocument = previewTargetSession?.history.present ?? null;
+    const previewEmission = previewTargetSession?.presentation.emission ?? null;
     const previewDescriptor = useMemo(() => {
+        if (previewDocument === null) return null;
         if (workspace.activeEnvironment === null) return descriptor;
         try { return environmentBinding?.resolveProfile(previewDocument) ?? null; } catch { return null; }
     }, [workspace.activeEnvironment, descriptor, environmentBinding, previewDocument]);
     const preview = useShaderPreview({
         ...(environmentBinding === undefined ? {} : { environment: environmentBinding }),
-        documentOwner: previewTargetSession,
+        ...(previewTargetSession === undefined ? {} : { documentOwner: previewTargetSession }),
         document: previewDocument,
         descriptor: previewDescriptor,
-        descriptorCompatible: previewDescriptor !== null && checkProfileDescriptorCompatibility(previewDocument, previewDescriptor).ok,
+        descriptorCompatible: previewDocument !== null && previewDescriptor !== null && checkProfileDescriptorCompatibility(previewDocument, previewDescriptor).ok,
         emission: previewEmission,
         configuredTarget: native.target.target,
         nativeFlow: native.flow,
@@ -1943,8 +1914,13 @@ export function App() {
     }, [native.flow]);
     useEffect(() => {
         const owner = preview.flow?.session;
-        if (owner) setPreviewHistory(previous => previous.includes(owner) ? previous : [...previous, owner]);
-    }, [preview.flow]);
+        if (owner) setPreviewHistory(previous => {
+            const sessions = new Map(previous.map(session => [session.sessionId, session]));
+            for (const retired of preview.flow?.history ?? []) sessions.set(retired.sessionId, retired);
+            sessions.set(owner.sessionId, owner);
+            return [...sessions.values()];
+        });
+    }, [preview.flow, preview.flow?.session]);
 
     // Recompose the Workspace snapshot on every render. Owner objects retain
     // identity across settlements, so their identity is not a freshness token.
@@ -2207,6 +2183,7 @@ export function App() {
     const previewDetails = (<details className="gglab-engineering-details"><summary>Preview state and advanced controls</summary>
                     <section className="gglab-panel gglab-panel-native-build" aria-label="Shader Graph Preview">
                         <h2 className="gglab-panel-title">Shader Graph Preview</h2>
+                        <p role="status">{previewTargetSession === undefined ? "No Preview target. Choose Preview this graph to start." : `Preview target: ${tabNameFor(previewTargetSession)}`}</p>
                         <p className="gglab-panel-hint">
                             Authoritative attached preview through the main-owned Preview Program and GGLab Runtime. Launch is success-first: no Runtime process starts before a valid publication exists.
                         </p>
@@ -2364,17 +2341,21 @@ export function App() {
                     </Badge>
                 </div>
             </header>
-            <div className="gglab-tabs" role="tablist" aria-label="Open documents">
-                <div className="gglab-tabs-list">
+            <div className="gglab-tabs">
+                <div className="gglab-tabs-list" role="tablist" aria-label="Open documents">
                     {workspace.documents.map((doc) => {
                         const isActive = doc.sessionId === workspace.activeDocumentId;
                         const isPreviewTarget = doc.sessionId === workspace.preview.targetDocumentId;
                         const onlyTab = workspace.documents.length === 1;
                         return (
-                            <div key={doc.sessionId} className={`gglab-tab${isActive ? " gglab-tab-active" : ""}`} role="tab" aria-selected={isActive}>
+                            <div key={doc.sessionId} className={`gglab-tab${isActive ? " gglab-tab-active" : ""}`}>
                                 <button
                                     type="button"
                                     className="gglab-tab-label"
+                                    role="tab"
+                                    aria-selected={isActive}
+                                    tabIndex={isActive ? 0 : -1}
+                                    onKeyDown={onTabKeyDown}
                                     onClick={() => onActivateTab(doc.sessionId)}
                                     title={doc.provenance.kind === "file" ? doc.provenance.path : "Untitled document"}
                                 >
@@ -2447,6 +2428,8 @@ export function App() {
                             type="button"
                             role="tab"
                             aria-selected={sidebarPanel === "explorer"}
+                            tabIndex={sidebarPanel === "explorer" ? 0 : -1}
+                            onKeyDown={onTabKeyDown}
                             className={`gglab-activitybar-btn${sidebarPanel === "explorer" ? " gglab-activitybar-active" : ""}`}
                             onClick={() => setSidebarPanel("explorer")}
                         >
@@ -2456,6 +2439,8 @@ export function App() {
                             type="button"
                             role="tab"
                             aria-selected={sidebarPanel === "nodes"}
+                            tabIndex={sidebarPanel === "nodes" ? 0 : -1}
+                            onKeyDown={onTabKeyDown}
                             className={`gglab-activitybar-btn${sidebarPanel === "nodes" ? " gglab-activitybar-active" : ""}`}
                             onClick={() => setSidebarPanel("nodes")}
                         >
@@ -2716,7 +2701,7 @@ export function App() {
                                         tabIndex={bottomPanelTab === tab.id ? 0 : -1}
                                         className={bottomPanelTab === tab.id ? "gglab-bottom-panel-tab active" : "gglab-bottom-panel-tab"}
                                         onClick={() => setBottomPanelTab(tab.id)}
-                                        onKeyDown={onBottomPanelTabKeyDown}
+                                        onKeyDown={onTabKeyDown}
                                     >
                                         {tab.label}
                                     </button>
@@ -2746,7 +2731,7 @@ export function App() {
                                 </>
                             ) : bottomPanelTab === "preview" ? (
                                 <>
-                                    {previewHistory.filter(owner => owner !== preview.flow?.session).map(owner => <details key={owner.sessionId}><summary>Previous Preview session</summary><PreviewPanelView session={owner} notes={[]} /></details>)}
+                                    {previewHistory.filter(owner => owner.sessionId !== preview.flow?.session.sessionId).map(owner => <details key={owner.sessionId}><summary>Previous Preview session</summary><PreviewPanelView session={owner} notes={[]} /></details>)}
                                     <PreviewPanelView session={preview.flow?.session ?? null} notes={preview.notes} />
                                     {previewDetails}
                                 </>
@@ -2896,6 +2881,15 @@ export function App() {
                     </section>
                 </> : workbenchDialog === "contract" ? <>
                     <p>The selected Environment supplies this document's requested profile line. Loose descriptor overrides are for advanced development.</p>
+                    <DocumentProfilePanel key={session.sessionId} document={document} catalog={profileCatalog} onApply={chosen => {
+                        const result = applyGraphEdit(document, { kind: "set-profile", profile: chosen.profileId, profileVersion: chosen.profileVersion }, { descriptor: chosen });
+                        if (result.status === "changed") {
+                            updateDocumentSession(session.sessionId, previous => recordDocumentChange(previous, result.document, "change document profile"));
+                            invalidateRevisionDerivedState();
+                        }
+                        output.append("authoring", result.status === "refused" ? "refusal" : "info", `Document profile ${result.status}`, { ...EMPTY_EVIDENCE_CORRELATION, documentSessionId: session.sessionId, documentRevision: documentRevision(session) }, result.diagnostics);
+                        return result;
+                    }} />
 <DescriptorPanel readOnly={workspace.activeEnvironment !== null} state={workspace.activeEnvironment === null ? descriptorState : descriptor === null ? { kind: "empty" } : { kind: "ready", descriptor }} onStateChange={onDescriptorStateChange} openDescriptorFile={openDescriptorFile} />
                     <Button onClick={() => { setWorkbenchDialog(null); showEvidence("problems"); }}>Show current problems</Button>
                 </> : <>

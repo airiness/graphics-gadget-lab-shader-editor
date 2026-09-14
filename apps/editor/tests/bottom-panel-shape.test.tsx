@@ -133,6 +133,25 @@ function keyboardLift(handle: HTMLElement, steps = 80): void {
 }
 
 describe("the Bottom Panel shell", () => {
+    it("opens the real node chevron menu without a bubbling card click dismissing it", () => {
+        const { root, container, unmount } = mountApp();
+        try {
+            const node = container.querySelector('.react-flow__node[data-id="n.t"]')!;
+            const toggle = within(node as HTMLElement).getByRole("button", { hidden: true });
+            fireEvent.pointerDown(toggle);
+            fireEvent.mouseDown(toggle);
+            fireEvent.mouseUp(toggle);
+            fireEvent.click(toggle);
+            const menu = root.getByRole("menu", { name: "Node actions for n.t" });
+            expect(root.getByRole("complementary", { name: "Selection Inspector" }).textContent).toContain("p.tint");
+            fireEvent.click(within(menu).getByRole("menuitem", { name: /Delete Node/ }));
+            expect(container.querySelector('.react-flow__node[data-id="n.t"]')).toBeNull();
+            expect(root.queryByRole("menu")).toBeNull();
+            fireEvent.click(root.getByRole("button", { name: "Undo" }));
+            expect(container.querySelector('.react-flow__node[data-id="n.t"]')).not.toBeNull();
+        } finally { unmount(); }
+    });
+
     it("a real Canvas node click keeps its selection visible in the Inspector", () => {
         const { root, container, unmount } = mountApp();
         const node = container.querySelector('.react-flow__node[data-id="n.t"]');

@@ -19,7 +19,7 @@ import { useShaderPreview } from "../src/useShaderPreview.js";
 import { WorkspaceStore, type WorkspaceAuthoringState } from "../src/workspace-store.js";
 import { createWorkspaceSession } from "../src/workspace-session.js";
 import { createDocumentSessionId } from "../src/workspace-session.js";
-import { createSession, provenanceFromImport } from "../src/document-session.js";
+import { createSession, provenanceFromImport, documentRevision } from "../src/document-session.js";
 
 const workspaceStore = new WorkspaceStore<WorkspaceAuthoringState>({
     session: createWorkspaceSession(),
@@ -190,7 +190,12 @@ const document: ShaderGraphDocument = {
     unknownFields: {},
 };
 
+function selectedState(): WorkspaceAuthoringState {
+    const owner = createSession(createDocumentSessionId("target"), provenanceFromImport(), document);
+    return { session: { ...createWorkspaceSession(), documents: [owner], activeDocumentId: owner.sessionId, preview: { targetDocumentId: owner.sessionId } }, profileDescriptor: descriptor };
+}
 beforeEach(() => {
+    workspaceStore.apply(() => ({ next: selectedState(), result: null }));
     previewWorld.tool = null;
     previewWorld.observation = null;
     previewWorld.runtime = null;
@@ -240,6 +245,29 @@ describe("attached Shader Preview React surface", () => {
         expect(hook.result.current.notes.at(-1)?.text).toMatch(/changed during compatibility/);
         hook.unmount();
     });
+    it("clears live Preview after target close and refuses actions from stale React props", async () => {
+        const hook = renderHook(({ selected }: { selected: boolean }) => useShaderPreview({ document: selected ? document : null, descriptor, descriptorCompatible: true, emission, configuredTarget: "gglab-dx12", nativeFlow, workspaceStore }), { initialProps: { selected: true } });
+        await waitFor(() => expect(hook.result.current.flow).not.toBeNull());
+        await act(async () => { await hook.result.current.previewHandshake(); await hook.result.current.buildPreview(); });
+        const flow = hook.result.current.flow!, previous = flow.session;
+        expect((previewWorld.runtime as FakePreviewRuntimeBoundary).launchCalls).toBe(1);
+        const owner = workspaceStore.getSnapshot().session.documents[0]!;
+        await act(async () => {
+            expect((await hook.result.current.coordinator.closeTarget(owner.sessionId, "wrong-discard-revision")).ok).toBe(false);
+        });
+        // Use the owner's canonical revision; a wrong discard revision cannot close it.
+        await act(async () => { expect((await hook.result.current.coordinator.closeTarget(owner.sessionId, documentRevision(owner))).ok).toBe(true); });
+        expect(flow.history).toContain(previous);
+        expect(workspaceStore.getSnapshot().session.preview.targetDocumentId).toBeNull();
+        await act(async () => { await hook.result.current.previewHandshake(); await hook.result.current.buildPreview(); await hook.result.current.launchPreview(); });
+        expect((previewWorld.tool as FakeHostBoundary).previewBuildCalls).toBe(1);
+        expect((previewWorld.runtime as FakePreviewRuntimeBoundary).launchCalls).toBe(1);
+        hook.rerender({ selected: false });
+        expect(hook.result.current.gate).toMatchObject({ admitted: false, reasons: [{ reason: "preview-target-unavailable" }] });
+        expect(hook.result.current.projection).toMatchObject({ freshness: "idle", currentPublicationId: null, lastGoodPublicationId: null });
+        expect(hook.result.current.initialPublicationAvailable).toBe(false);
+        hook.unmount();
+    });
     it("proves, publishes, launches, polls Current, and observes process exit", async () => {
         const hook = renderHook(() =>
             useShaderPreview({
@@ -287,7 +315,7 @@ describe("attached Shader Preview React surface", () => {
     });
 
     it("does not auto-launch from an old build delivered after Workspace Environment selection changes", async () => {
-        const store = new WorkspaceStore<WorkspaceAuthoringState>({ session: createWorkspaceSession(), profileDescriptor: null });
+        const store = new WorkspaceStore<WorkspaceAuthoringState>(selectedState());
         const hook = renderHook(() => useShaderPreview({ document, descriptor, descriptorCompatible: true, emission, configuredTarget: "gglab-dx12", nativeFlow, workspaceStore: store }));
         await waitFor(() => expect(hook.result.current.flow).not.toBeNull());
         await act(async () => hook.result.current.previewHandshake());

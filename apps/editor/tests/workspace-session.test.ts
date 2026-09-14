@@ -389,7 +389,7 @@ describe("Save As identity and close transitions", () => {
         });
     });
 
-    it("closing the Preview target re-seeds Preview ownership onto the adjacent active tab", () => {
+    it("closing the Preview target clears ownership while choosing the adjacent active tab", () => {
         const first = document("session-a", null);
         const second = document("session-b", null);
         const third = document("session-c", null);
@@ -409,12 +409,10 @@ describe("Save As identity and close transitions", () => {
         expect(result.accepted).toBe(true);
         expect(result.workspace.documents).toEqual([first, third]);
         expect(result.workspace.activeDocumentId).toBe(third.sessionId);
-        // The target never becomes a live follow: ownership is re-seeded, as a
-        // one-time close-time decision, onto the surviving active document.
-        expect(result.workspace.preview.targetDocumentId).toBe(third.sessionId);
+        expect(result.workspace.preview.targetDocumentId).toBeNull();
     });
 
-    it("closing a background Preview target re-seeds the target onto the preserved active tab", () => {
+    it("closing a background Preview target clears ownership and preserves the active tab", () => {
         const first = document("session-a", null);
         const second = document("session-b", null);
         let workspace = opened(first, second);
@@ -429,7 +427,9 @@ describe("Save As identity and close transitions", () => {
         expect(result.accepted).toBe(true);
         expect(result.workspace.documents).toEqual([second]);
         expect(result.workspace.activeDocumentId).toBe(second.sessionId);
-        expect(result.workspace.preview.targetDocumentId).toBe(second.sessionId);
+        expect(result.workspace.preview.targetDocumentId).toBeNull();
+        const reopened = openWorkspaceDocument(result.workspace, first);
+        expect(reopened.workspace.preview.targetDocumentId).toBeNull();
     });
 
     it("closing the last document leaves no Preview target (there is nothing to own)", () => {

@@ -3,8 +3,10 @@
 The application now consumes the persistent Environment host through
 `use-environment-authoring.ts`. An already selected Workspace Environment drives
 ordinary tool discovery/handshake, Preview build/process controllers, and profile
-resolution. The menu workflow that discovers, publishes/imports and selects an
-Environment remains outstanding; this is not yet the complete one-click UX.
+resolution. The subsequently implemented menu workflow is documented in
+[Desktop Environment import workflow](environment-desktop-workflow.md). The
+verification section below records the historical binding-integration scope;
+current acceptance gaps are tracked in [UX closure](ux-evolution-closure.md).
 
 ## Ownership and calling path
 

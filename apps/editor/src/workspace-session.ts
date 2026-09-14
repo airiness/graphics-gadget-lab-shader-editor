@@ -76,12 +76,9 @@ export interface WorkspaceDocumentHandle {
 }
 
 export interface WorkspacePreviewTargetState {
-    /** The Preview target, always one of the open documents (or null when no
-     * document is open). It is established by OPEN (a Workspace that opens a
-     * first editing context seeds its Preview there) and by an explicit
-     * "Preview this graph" commit, and re-seeded to the surviving active
-     * document when the target tab is closed. It is NEVER live-derived from
-     * activeDocumentId: switching tabs must not change the Preview source. */
+    /** Explicit Preview intent, independent of active-tab selection. The first
+     * open seeds initial intent; closing its owner clears it until an explicit
+     * retarget. Opening another tab must not undo that cleared state. */
     readonly targetDocumentId: DocumentSessionId | null;
 }
 
@@ -242,7 +239,7 @@ export function openWorkspaceDocument<TDocument extends WorkspaceDocumentHandle>
             // target: a one-time ownership decision at open time. After that,
             // only an explicit commit moves the target — never a tab switch.
             preview:
-                workspace.preview.targetDocumentId === null
+                workspace.documents.length === 0
                     ? { targetDocumentId: document.sessionId }
                     : workspace.preview,
         },
@@ -424,13 +421,10 @@ export function closeWorkspaceDocument<TDocument extends WorkspaceDocumentHandle
         workspace.activeDocumentId === documentSessionId
             ? (documents[index]?.sessionId ?? documents[index - 1]?.sessionId ?? null)
             : workspace.activeDocumentId;
-    // Closing the Preview target re-seeds ownership onto the surviving ACTIVE
-    // document (a one-time decision at close time, not a live follow): the
-    // Preview source stays an explicit target at all times and only an
-    // explicit commit moves it. With no surviving document there is no target.
+    // Teardown precedes this commit. A surviving active tab is not Preview intent.
     const targetDocumentId =
         workspace.preview.targetDocumentId === documentSessionId
-            ? (documents.length > 0 ? activeDocumentId : null)
+            ? null
             : workspace.preview.targetDocumentId;
     return {
         accepted: true,

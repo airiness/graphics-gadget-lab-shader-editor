@@ -108,3 +108,16 @@ describe("Environment authoring lifecycle (synthetic IPC, not native proof)", ()
         expect(f.calls.filter(c => c === "shader-environment-close-execution")).toHaveLength(1);
     });
 });
+
+
+it("exposes only the admitted profile catalog and isolates caller mutations", async () => {
+    const f = fixture();
+    expect(() => f.host.profileCatalog()).toThrow();
+    await f.host.open(f.environment, f.state, f.selection, "dx12");
+    const catalog = f.host.profileCatalog();
+    expect(catalog.map(d => [d.profileId, d.profileVersion])).toEqual([["gglab.surface", 1], ["gglab.surface", 2]]);
+    Object.assign(catalog[0]!, { profileVersion: 99 });
+    expect(f.host.profileCatalog()[0]?.profileVersion).toBe(1);
+    await f.host.close();
+    expect(() => f.host.profileCatalog()).toThrow();
+});

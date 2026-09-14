@@ -151,6 +151,7 @@ export function createEnvironmentAuthoringHost(invoke: Invoke) {
     }
     return {
         boundary, observation, runtime, close,
+        profileCatalog(): readonly SurfaceProfileDescriptor[] { return structuredClone(current().profiles); },
         resolveProfile(document: ShaderGraphDocument): SurfaceProfileDescriptor {
             const profile = current().profiles.find(p => p.profileId === document.profile && p.profileVersion === document.profileVersion);
             environmentRequire(profile !== undefined, "profile-incompatible", "Environment does not provide the requested profile line");

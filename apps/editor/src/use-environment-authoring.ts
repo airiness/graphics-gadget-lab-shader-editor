@@ -34,6 +34,7 @@ export function createWorkspaceEnvironmentBinding(invoke: Invoke, selection: Wor
     return {
         selection, backend, native, preview, manager, current,
         retire() { retired = true; },
+        profileCatalog() { guard(); return host.profileCatalog(); },
         resolveProfile(document: ShaderGraphDocument) { guard(); return host.resolveProfile(document); },
         async open() {
             guard();

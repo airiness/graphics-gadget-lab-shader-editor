@@ -114,10 +114,16 @@ export function ShaderNode(props: NodeProps<ShaderNodeT>) {
                         <Button
                             variant="icon"
                             size="icon"
-                            className="gglab-node-menu-toggle"
+                            className="gglab-node-menu-toggle nodrag nopan"
+                            aria-haspopup="menu"
+                            onPointerDown={event => event.stopPropagation()}
+                            onMouseDown={event => event.stopPropagation()}
                             aria-label={`Node actions for ${data.label}`}
                             title="Node actions"
                             onClick={(event) => {
+                                // This intent selects its owner and opens the menu atomically.
+                                // A bubbling card click would select again and dismiss it.
+                                event.stopPropagation();
                                 const rect = (event.currentTarget as HTMLButtonElement).getBoundingClientRect();
                                 openNodeMenu(props.id, { x: rect.right, y: rect.bottom + 6 });
                             }}

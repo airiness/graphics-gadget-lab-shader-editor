@@ -159,20 +159,18 @@ describe("resolvePreviewTarget — the Runtime composes from the explicit target
         expect(resolvePreviewTarget(w2)?.sessionId).toBe(b.sessionId);
     });
 
-    it("closing a tab that is the target RE-SEEDS it onto the surviving active (no live fallback); closing a non-target keeps it", () => {
-        const { workspace, a, b } = twoOpen();
-        // Target A, close A → ownership re-seeds, as a one-time close-time
-        // decision, onto the surviving active document (B). It is still an
-        // explicit target — never a live re-coupling to whatever tab is open.
+    it("closing a target clears it without an active fallback; closing another tab preserves it", () => {
+        const { workspace, a } = twoOpen();
+        // Closing A clears ownership despite the surviving active document.
         const tA = commitWorkspacePreviewTarget(workspace, a.sessionId);
         expect(tA.accepted).toBe(true);
         const wA = tA.accepted ? tA.workspace : workspace;
         const cA = closeWorkspaceDocument(wA, a.sessionId);
         expect(cA.accepted).toBe(true);
         const afterCloseA = cA.accepted ? cA.workspace : wA;
-        expect(hasExplicitPreviewTarget(afterCloseA)).toBe(true);
-        expect(afterCloseA.preview.targetDocumentId).toBe(b.sessionId);
-        expect(resolvePreviewTarget(afterCloseA)?.sessionId).toBe(b.sessionId);
+        expect(hasExplicitPreviewTarget(afterCloseA)).toBe(false);
+        expect(afterCloseA.preview.targetDocumentId).toBeNull();
+        expect(resolvePreviewTarget(afterCloseA)).toBeUndefined();
 
         // Fresh: target B, close A (non-target) → target stays B.
         const { workspace: ws2, a: a2, b: b2 } = twoOpen();
@@ -391,6 +389,20 @@ function nonReadyComposition(): PreviewCompositionInput {
 }
 
 describe("PreviewCoordinator — commit-time CURRENT revalidation", () => {
+    it("rotates session ownership for identical graphs and rejects the prior document owner", async () => {
+        const A = docSession("A", V1_EMIT), B = docSession("B", V1_EMIT);
+        const world = makeWorld({ session: { ...createWorkspaceSession<DocumentSession>(), documents: [A, B], activeDocumentId: B.sessionId, preview: { targetDocumentId: A.sessionId } }, profileDescriptor: D1 }, { launches: [{ kind: "launched" }] });
+        const previous = world.flow.session;
+        expect((await world.coordinator.retargetTo(B.sessionId)).ok).toBe(true);
+        expect(world.flow.session.sessionId).not.toBe(previous.sessionId);
+        expect(world.flow.history).toEqual([previous]);
+        const input: PreviewCompositionInput = { ...readyComposition(), documentOwner: A, document: A.history.present };
+        expect(world.coordinator.gate(input)).toMatchObject({ admitted: false, reasons: [{ reason: "preview-target-unavailable" }] });
+        const newSessionId = world.flow.session.sessionId;
+        expect((await world.coordinator.retargetTo(B.sessionId)).ok).toBe(true);
+        expect(world.flow.session.sessionId).toBe(newSessionId); // Same-owner emission refresh is not a target switch.
+    });
+
     it("does not commit expired resume intent after joining the old Runtime", async () => {
         const A = docSession("A", V1_GRAPH), B = docSession("B", V1_EMIT);
         const state: WorkspaceAuthoringState = { session: { ...createWorkspaceSession<DocumentSession>(), documents: [A, B], activeDocumentId: B.sessionId, preview: { targetDocumentId: A.sessionId } }, profileDescriptor: D1 };
@@ -641,7 +653,7 @@ describe("PreviewCoordinator — target-close transition", () => {
         expect(snapshot.session.preview.targetDocumentId).toBe(A.sessionId);
     });
 
-    it("closes the target only after a PROVEN exit, in one transaction with the target re-seed", async () => {
+    it("closes the target only after a PROVEN exit, in one transaction that clears the target", async () => {
         const A = docSession("A", V1_GRAPH);
         const B = docSession("B", V2_GRAPH);
         const world = makeWorld(
@@ -668,9 +680,9 @@ describe("PreviewCoordinator — target-close transition", () => {
         });
         const snapshot = world.store.getSnapshot();
         expect(snapshot.session.documents.map((document) => document.sessionId)).toEqual([B.sessionId]);
-        // The reducer re-seeded the Preview target from the surviving
-        // ACTIVE document.
-        expect(snapshot.session.preview.targetDocumentId).toBe(B.sessionId);
+        expect(snapshot.session.preview.targetDocumentId).toBeNull();
+        expect(world.flow.session.sessionId).not.toBe(SESSION_ID);
+        expect(world.flow.initialPublicationAvailable).toBe(false);
     });
 
     it("refuses a NON-target close here (that path is a plain Workspace reducer operation) without touching the Runtime", async () => {
@@ -937,7 +949,7 @@ describe("PreviewCoordinator — proven no Runtime (no host) still commits Works
         expect(docB?.presentation.emission).toEqual(emitHlsl(V1_EMIT, D1));
     });
 
-    it("commits a target-close (with the target re-seed) with NO teardown (no host)", async () => {
+    it("commits a target-close that clears ownership with NO teardown (no host)", async () => {
         const A = docSession("A", V1_GRAPH);
         const B = docSession("B", V1_EMIT);
         const { coordinator, store } = hostless(twoDocs(A, B));
@@ -946,7 +958,7 @@ describe("PreviewCoordinator — proven no Runtime (no host) still commits Works
         expect(result).toMatchObject({ ok: true, identity: { kind: "close-target", targetDocumentId: A.sessionId } });
         const snapshot = store.getSnapshot();
         expect(snapshot.session.documents.map((document) => document.sessionId)).toEqual([B.sessionId]);
-        expect(snapshot.session.preview.targetDocumentId).toBe(B.sessionId);
+        expect(snapshot.session.preview.targetDocumentId).toBeNull();
     });
 
     it("is a STRUCTURAL refusal for the build and the gate (preview-host-unavailable), and a neutral projection", async () => {

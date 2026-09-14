@@ -2406,8 +2406,8 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         expect(app).toMatch(/import \{[\s\S]*?resolvePreviewTarget[\s\S]*?\} from "\.\.\/src\/preview-coordinator\.js"|import \{[\s\S]*?resolvePreviewTarget[\s\S]*?\} from "\.\/preview-coordinator\.js"/);
         // The composition source is the resolved target's document + emission.
         expect(app).toMatch(/resolvePreviewTarget\(workspace\)/);
-        expect(app).toMatch(/const previewDocument = previewTargetSession\.history\.present/);
-        expect(app).toMatch(/const previewEmission = previewTargetSession\.presentation\.emission/);
+        expect(app).toMatch(/const previewDocument = previewTargetSession\?\.history\.present \?\? null/);
+        expect(app).toMatch(/const previewEmission = previewTargetSession\?\.presentation\.emission \?\? null/);
         expect(app).toMatch(/useShaderPreview\(\{[\s\S]*?document: previewDocument,[\s\S]*?emission: previewEmission/);
     });
 
@@ -2453,7 +2453,7 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         const coordinator = read("../src/preview-coordinator.ts");
         expect(coordinator).toMatch(/export function resolvePreviewTarget/);
         expect(coordinator).toMatch(/export function hasExplicitPreviewTarget/);
-        expect(coordinator).toMatch(/workspace\.preview\.targetDocumentId \?\? workspace\.activeDocumentId/);
+        expect(coordinator).not.toMatch(/workspace\.preview\.targetDocumentId \?\? workspace\.activeDocumentId/);
         expect(coordinator).toMatch(/export class PreviewCoordinator/);
     });
 
@@ -2508,13 +2508,13 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         expect(managerSource).toMatch(/could not be stopped/);
     });
 
-    it("a Workspace seeds its Preview target at the first open and re-seeds it on a target close (never a live follow)", () => {
+    it("a Workspace seeds its first target and clears ownership on target close", () => {
         const ws = read("../src/workspace-session.ts");
         expect(ws).toMatch(
-            /workspace\.preview\.targetDocumentId === null\s*\? \{ targetDocumentId: document\.sessionId \}/,
+            /workspace\.documents\.length === 0\s*\? \{ targetDocumentId: document\.sessionId \}/,
         );
         expect(ws).toMatch(
-            /workspace\.preview\.targetDocumentId === documentSessionId\s*\? \(documents\.length > 0 \? activeDocumentId : null\)/,
+            /workspace\.preview\.targetDocumentId === documentSessionId\s*\? null/,
         );
     });
 

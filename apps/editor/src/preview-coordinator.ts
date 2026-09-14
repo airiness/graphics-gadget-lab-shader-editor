@@ -1,3 +1,4 @@
+import { createPreviewSessionId } from "./preview-program-contract.js";
 /**
  * Preview ownership-transition authority.
  *
@@ -60,28 +61,18 @@ import {
     type WorkspaceAuthoringState,
 } from "./workspace-store.js";
 
-/** The DocumentSession the Runtime Preview composes from.
- *
- * The explicit Preview target is authoritative at ALL times. The reducer
- * guarantees the invariant: the first document a Workspace opens IS its
- * Preview target (seeded at open time, not followed live), a target close
- * re-seeds the surviving active document, and only "Preview This Graph"
- * commits a different one. The active-document fallback below is therefore
- * defensive only — reachable when no document is open — and never a live
- * re-coupling of the Preview to tab switching. */
+/** Resolve only explicit ownership; an active tab never fills a cleared target. */
 export function resolvePreviewTarget<TDocument extends WorkspaceDocumentHandle>(
     workspace: WorkspaceSession<TDocument>,
 ): TDocument | undefined {
-    const targetId = workspace.preview.targetDocumentId ?? workspace.activeDocumentId;
+    const targetId = workspace.preview.targetDocumentId;
     if (targetId === null) {
         return undefined;
     }
     return workspace.documents.find((candidate) => candidate.sessionId === targetId);
 }
 
-/** Whether an explicit Preview target is present. With the open/close seed
- * invariant this is true whenever any document is open; the UI surfaces the
- * target with the ▶ marker so a user can see WHICH tab the Runtime previews. */
+/** Whether the Workspace currently carries an explicit Preview target intent. */
 export function hasExplicitPreviewTarget(
     workspace: WorkspaceSession<WorkspaceDocumentHandle>,
 ): boolean {
@@ -217,7 +208,13 @@ export class PreviewCoordinator {
      * This gate is the single authoritative admission verdict: `buildPreview`
      * and `runtimeProjection` both consult it, so a pending transition can
      * never project as admitted/Ready while a real Build action would refuse. */
-    gate(input: PreviewCompositionInput): PreviewBuildGate {
+    ownsTarget(input: PreviewCompositionInput | null): boolean {
+        const target = resolvePreviewTarget(this.store.getSnapshot().session);
+        return target !== undefined && input !== null && input.document === target.history.present &&
+            (input.documentOwner === undefined || input.documentOwner.sessionId === target.sessionId);
+    }
+
+    gate(input: PreviewCompositionInput | null): PreviewBuildGate {
         if (this.inFlight !== null) {
             return { admitted: false, reasons: [{ reason: "preview-transition-in-flight" }], request: null, eligibility: null };
         }
@@ -225,6 +222,7 @@ export class PreviewCoordinator {
         if (flow === null || !this.hostAdmitted) {
             return { admitted: false, reasons: [{ reason: "preview-host-unavailable" }], request: null, eligibility: null };
         }
+        if (!this.ownsTarget(input) || input === null) return { admitted: false, reasons: [{ reason: "preview-target-unavailable" }], request: null, eligibility: null };
         const refusal = this.attachedRuntimeRefusal(flow);
         if (refusal !== null) {
             return { admitted: false, reasons: [refusal], request: null, eligibility: null };
@@ -272,10 +270,10 @@ export class PreviewCoordinator {
      * short-circuits to gate-refused — it is not queued and not superseded,
      * and no build lifecycle opens. There is no separate in-flight branch
      * here to drift from the gate. */
-    buildPreview(input: PreviewCompositionInput): Promise<PreviewBuildLaunch> {
+    buildPreview(input: PreviewCompositionInput | null): Promise<PreviewBuildLaunch> {
         const flow = this.flow;
-        if (flow === null) {
-            // No host: the composed gate carries the single structural
+        if (flow === null || input === null) {
+            // No host or target: the composed gate carries the single structural
             // refusal (preview-transition-in-flight if a transition owns the
             // slot, otherwise preview-host-unavailable).
             return Promise.resolve({ issued: false, reason: "gate-refused", gate: this.gate(input) });
@@ -294,9 +292,9 @@ export class PreviewCoordinator {
      * projection is SUSPENDED (the neutral "idle" view): `gate()` refuses with
      * `preview-transition-in-flight`, so the projection must not project as
      * Ready/current for a build line we cannot actually admit. */
-    runtimeProjection(input: PreviewCompositionInput): PreviewRuntimeProjection {
+    runtimeProjection(input: PreviewCompositionInput | null): PreviewRuntimeProjection {
         const flow = this.flow;
-        if (flow === null || this.inFlight !== null || !this.hostAdmitted) {
+        if (flow === null || this.inFlight !== null || !this.hostAdmitted || !this.ownsTarget(input) || input === null) {
             return {
                 freshness: "idle",
                 latestBuildState: null,
@@ -392,6 +390,7 @@ export class PreviewCoordinator {
                 if (commit.refused !== null) {
                     return { next: state, result: { ok: false, refusal: commit.refused } };
                 }
+                if (commit.targetChanged) this.flow?.resetSession(createPreviewSessionId());
                 return { next: commit.next, result: { ok: true, identity, targetChanged: commit.targetChanged } };
             });
         } finally {
@@ -472,6 +471,7 @@ export class PreviewCoordinator {
                         result: { ok: false, refusal: { reason: "document-not-preview-target", documentSessionId } },
                     };
                 }
+                this.flow?.resetSession(createPreviewSessionId());
                 return {
                     next: { ...state, session: closed.workspace },
                     result: { ok: true, identity, targetChanged: true },

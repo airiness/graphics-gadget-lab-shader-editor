@@ -2131,6 +2131,16 @@ button.gglab-diagnostics-item:hover {
 .gglab-node-inline .gglab-node-property-input { width: 100%; min-width: 0; height: 24px; }
 .gglab-node-inline .gglab-node-property-error { font-size: var(--type-meta); overflow-wrap: anywhere; }
 
+/* Float3 components share a vertical reading order on the card and Inspector. */
+.gglab-node-property-editor[data-value-type="float3"] .gglab-node-property-grid {
+    grid-template-columns: minmax(0, 1fr);
+}
+.gglab-node-property-editor[data-value-type="float3"] .gglab-node-property-field {
+    grid-template-columns: 16px minmax(0, 1fr);
+    align-items: center;
+}
+
+
 
 /* Global actions wrap independently of the horizontally scrollable document tabs. */
 .gglab-tabs { flex-wrap: wrap; }

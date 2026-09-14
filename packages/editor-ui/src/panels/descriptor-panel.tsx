@@ -10,7 +10,7 @@
  * button (the desktop-tool surface never shows a raw native file picker
  * control).
  */
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { parseSurfaceProfileDescriptor, type SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
 import { FileIcon } from "../components/icons.js";
 import { Button } from "../components/ui/button.js";
@@ -69,6 +69,27 @@ export interface DescriptorPanelProps {
 export function DescriptorPanel(props: DescriptorPanelProps) {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const state = props.state;
+    const latest = useRef(props);
+    latest.current = props;
+    const generation = useRef(0);
+    const mounted = useRef(false);
+    useEffect(() => {
+        mounted.current = true;
+        return () => { mounted.current = false; generation.current++; };
+    }, [props.readOnly, props.openDescriptorFile]);
+    async function readPickedFile(read: () => Promise<PickedText | null>, fileName: string): Promise<void> {
+        if (latest.current.readOnly) return;
+        const request = ++generation.current;
+        const publish = (next: DescriptorPanelState) => {
+            if (mounted.current && request === generation.current && !latest.current.readOnly) latest.current.onStateChange(next);
+        };
+        try {
+            const picked = await read();
+            if (picked !== null) publish(readDescriptorText(picked.name, picked.text));
+        } catch (error) {
+            publish({ kind: "rejected", fileName, diagnosticCode: "IO", diagnosticMessage: error instanceof Error ? error.message : String(error) });
+        }
+    }
     const onOpenClicked = async (): Promise<void> => {
         if (props.readOnly) return;
         const nativeOpen = props.openDescriptorFile;
@@ -76,23 +97,7 @@ export function DescriptorPanel(props: DescriptorPanelProps) {
             fileInputRef.current?.click();
             return;
         }
-        try {
-            const picked = await nativeOpen();
-            if (picked === null) {
-                return; // user cancelled the native dialog
-            }
-            props.onStateChange(readDescriptorText(picked.name, picked.text));
-        } catch (error) {
-            // Host IO failure (the file vanished after the dialog,
-            // access denied, ...) is an explicit rejected state carrying
-            // the host's message — never an unhandled rejection.
-            props.onStateChange({
-                kind: "rejected",
-                fileName: "host",
-                diagnosticCode: "IO",
-                diagnosticMessage: error instanceof Error ? error.message : String(error),
-            });
-        }
+        await readPickedFile(nativeOpen, "host");
     };
     return (
         <section className="gglab-panel">
@@ -117,14 +122,13 @@ export function DescriptorPanel(props: DescriptorPanelProps) {
                 tabIndex={-1}
                 aria-hidden
                 onChange={async (event) => {
-                    if (props.readOnly) return;
-                    const file = event.currentTarget.files?.[0];
-                    if (file === undefined) {
-                        return;
-                    }
-                    const text = await file.text();
-                    props.onStateChange(readDescriptorText(file.name, text));
-                    event.currentTarget.value = "";
+                    const input = event.currentTarget;
+                    const file = input.files?.[0];
+                    // Capture and reset before awaiting: React releases currentTarget,
+                    // and selecting the same file again must remain a new read intent.
+                    input.value = "";
+                    if (file === undefined || props.readOnly) return;
+                    await readPickedFile(async () => ({ name: file.name, text: await file.text() }), file.name);
                 }}
             />
             {state.kind === "empty" && <p className="gglab-panel-status">No descriptor loaded — compatibility and conformance are not yet judged.</p>}

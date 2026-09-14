@@ -83,6 +83,7 @@ function ConstantValueEditor(props: ConstantValueEditorProps) {
 
     return (
         <div className={props.compact ? "gglab-node-property-editor gglab-node-inline nodrag nopan nowheel" : "gglab-node-property-editor"}
+            data-value-type={props.valueType}
             style={props.compact ? { height: inlineConstantHeight(props.node.type) } : undefined}
             onPointerDown={props.compact ? event => event.stopPropagation() : undefined}
             onClick={props.compact ? event => event.stopPropagation() : undefined}

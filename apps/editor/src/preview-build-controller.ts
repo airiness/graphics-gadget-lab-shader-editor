@@ -159,7 +159,8 @@ export type PreviewBuildGateReason =
      *  any of the facts above: a transition owns the slot, or the desktop
      *  host (and with it this very flow) does not exist for this mount. */
     | { readonly reason: "preview-transition-in-flight" }
-    | { readonly reason: "preview-host-unavailable" };
+    | { readonly reason: "preview-host-unavailable" }
+    | { readonly reason: "preview-target-unavailable" };
 
 export interface PreviewBuildGate {
     readonly admitted: boolean;
@@ -187,6 +188,7 @@ type PreviewObservationCandidateInvalidated = Extract<
 >;
 
 export type PreviewObservationRefresh =
+    | { readonly kind: "session-superseded" }
     | { readonly kind: "no-attempt" }
     | { readonly kind: "candidate-invalidated"; readonly result: PreviewObservationCandidateInvalidated }
     | { readonly kind: "host-refused"; readonly reason: "not-found" | "too-large" | "read-failed" }
@@ -258,6 +260,7 @@ function lineForDeployment(line: PreviewBuildLine, candidate: ToolCandidate): Pr
 
 export class PreviewBuildController {
     private sessionState: PreviewBuildSession;
+    private retiredSessions: readonly PreviewBuildSession[] = [];
     private lastHandshakeState: PreviewHandshakeAttemptRecord | null = null;
     private currentHandshakeLane: {
         readonly key: string;
@@ -290,6 +293,23 @@ export class PreviewBuildController {
         readonly manager: AttachedPreviewRuntimeManager,
     ) {
         this.sessionState = createPreviewBuildSession(sessionId);
+    }
+
+    get history(): readonly PreviewBuildSession[] { return this.retiredSessions; }
+
+    /** Retain chronology, but start an empty ownership coordinate after teardown. */
+    resetSession(sessionId: string): void {
+        if (this.buildInFlight) throw new Error("A Preview build still owns its session");
+        const next = createPreviewBuildSession(sessionId);
+        this.manager.resetSession(sessionId);
+        this.retiredSessions = [...this.retiredSessions, this.sessionState];
+        this.sessionState = next;
+        this.handshakeEpoch++;
+        this.currentHandshakeLane = null;
+        this.lastHandshakeState = null;
+        this.acceptedObservationState = null;
+        this.lastObservationRefreshState = null;
+        this.observationLane = null;
     }
 
     get session(): PreviewBuildSession {
@@ -732,10 +752,9 @@ export class PreviewBuildController {
     }
 
     private async runObservationRefresh(candidate: ToolCandidate): Promise<PreviewObservationRefresh> {
-        const host = await this.observationBoundary.readPreviewObservation(
-            candidate,
-            this.sessionState.sessionId,
-        );
+        const sessionId = this.sessionState.sessionId;
+        const host = await this.observationBoundary.readPreviewObservation(candidate, sessionId);
+        if (sessionId !== this.sessionState.sessionId) return { kind: "session-superseded" };
         let record: PreviewObservationRefresh;
         if (host.kind === "candidate-invalidated") {
             this.toolPort.candidateInvalidated(host);

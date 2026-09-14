@@ -25,7 +25,7 @@ import {
     AttachedPreviewRuntimeManager,
     type AttachedRuntimeState,
 } from "./preview-runtime-manager.js";
-import { PreviewCoordinator } from "./preview-coordinator.js";
+import { PreviewCoordinator, resolvePreviewTarget } from "./preview-coordinator.js";
 import {
     WorkspaceStore,
     type WorkspaceAuthoringState,
@@ -42,7 +42,7 @@ const OBSERVATION_POLL_INTERVAL_MS = 250;
 export interface UseShaderPreviewInput {
     readonly environment?: import("./use-environment-authoring.js").WorkspaceEnvironmentBinding | null;
     readonly documentOwner?: import("./document-session.js").DocumentSession;
-    readonly document: ShaderGraphDocument;
+    readonly document: ShaderGraphDocument | null;
     readonly descriptor: SurfaceProfileDescriptor | null;
     readonly descriptorCompatible: boolean;
     readonly emission: HlslEmission | null;
@@ -179,7 +179,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
         };
     }, [input.nativeFlow, input.environment, note]);
 
-    const composition: PreviewCompositionInput = {
+    const composition: PreviewCompositionInput | null = input.document === null ? null : {
         ...(input.documentOwner === undefined ? {} : { documentOwner: input.documentOwner }),
         document: input.document,
         descriptor: input.descriptor,
@@ -190,6 +190,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
     };
 
     const previewHandshake = useCallback(async (): Promise<void> => {
+        if (composition === null || !coordinator.ownsTarget(composition)) { note("refusal", "Choose Preview this graph to establish a target first."); return; }
         if (!coordinator.hostAdmitted) {
             note("refusal", "Preview handshake requires a host bound to the current Workspace Environment.");
             return;
@@ -215,6 +216,11 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
     }, [flow, composition, note, coordinator]);
 
     const launchPreview = useCallback(async (): Promise<void> => {
+        const latest = inputRef.current;
+        const target = resolvePreviewTarget(latest.workspaceStore.getSnapshot().session);
+        if (target === undefined) {
+            note("refusal", "Attached Preview launch requires the current explicit document target."); return;
+        }
         if (!coordinator.hostAdmitted) {
             note("refusal", "Attached Preview launch requires a host bound to the current Workspace Environment.");
             return;
@@ -257,6 +263,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             note("refusal", "Preview build is unavailable: no desktop Preview host.");
             return;
         }
+        const sessionId = current.session.sessionId;
         setBuildInFlight(true);
         try {
             const launch = await coordinator.buildPreview(requested);
@@ -266,7 +273,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             }
             bump((value) => value + 1);
             const outcome: PreviewAttemptOutcome = await launch.outcome;
-            if (flowRef.current !== current || !coordinator.hostAdmitted) return;
+            if (flowRef.current !== current || current.session.sessionId !== sessionId || !coordinator.hostAdmitted || !coordinator.ownsTarget(requested)) return;
             // The settlement itself is the owner Preview session's record —
             // the Preview panel view renders it as its structured,
             // correlated row. No flattened note copy of the same attempt
@@ -299,7 +306,10 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
         }
     }, [coordinator, launchPreview, note]);
 
-    const buildPreview = useCallback(() => buildPreviewFor(composition), [buildPreviewFor, composition]);
+    const buildPreview = useCallback(async () => {
+        if (composition === null) { note("refusal", "Choose Preview this graph to establish a target first."); return; }
+        await buildPreviewFor(composition);
+    }, [buildPreviewFor, composition, note]);
     const starting = useRef(false);
     const startPreview = useCallback(async (documentId: import("./workspace-session.js").DocumentSessionId): Promise<void> => {
         if (starting.current) return;
@@ -372,7 +382,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
     const managerState = managerRef.current;
     const runtimeKind = flow === null || managerState === null ? "idle" : managerState.state.kind;
     useEffect(() => {
-        if (!coordinator.hostAdmitted || flow === null || managerState === null || runtimeKind !== "running") {
+        if (!coordinator.ownsTarget(composition) || !coordinator.hostAdmitted || flow === null || managerState === null || runtimeKind !== "running") {
             return;
         }
         let disposed = false;
@@ -396,7 +406,7 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
             disposed = true;
             globalThis.clearInterval(timer);
         };
-    }, [flow, managerState, runtimeKind, note, coordinator, input.environment]);
+    }, [flow, managerState, runtimeKind, note, coordinator, input.environment, input.documentOwner?.sessionId, input.document === null]);
 
     return {
         flow,
@@ -408,11 +418,11 @@ export function useShaderPreview(input: UseShaderPreviewInput): ShaderPreviewSur
         gate: flow !== null ? coordinator.gate(composition) : null,
         runtime: flow !== null && managerState !== null ? managerState.state : { kind: "idle" },
         projection: flow !== null ? coordinator.runtimeProjection(composition) : null,
-        lastObservationRefresh: coordinator.hostAdmitted ? flow?.lastObservationRefresh ?? null : null,
+        lastObservationRefresh: coordinator.hostAdmitted && coordinator.ownsTarget(composition) ? flow?.lastObservationRefresh ?? null : null,
         handshakeInFlight: flow?.previewHandshakeInFlight ?? false,
         buildInFlight: flow?.buildInFlight ?? buildInFlight,
         launchInFlight: managerState?.state.kind === "launching" || (flow === null && launchInFlight),
-        initialPublicationAvailable: coordinator.hostAdmitted && (flow?.initialPublicationAvailable ?? false),
+        initialPublicationAvailable: coordinator.hostAdmitted && coordinator.ownsTarget(composition) && (flow?.initialPublicationAvailable ?? false),
         previewHandshake,
         buildPreview,
         startPreview,

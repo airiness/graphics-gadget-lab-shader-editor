@@ -10,11 +10,11 @@ import { graph } from "../tests/environment-probe-documents.js";
 import { createEnvironmentActivationHost } from "./environment-activation-host.js";
 import { PreviewCoordinator } from "./preview-coordinator.js";
 import { WorkspaceStore, type WorkspaceAuthoringState } from "./workspace-store.js";
-import { createWorkspaceSession } from "./workspace-session.js";
+import { createWorkspaceSession, openWorkspaceDocument } from "./workspace-session.js";
 import { emitHlsl, parseShaderGraphDocument } from "@gglab/shader-graph-core";
 import { createWorkspaceEnvironmentBinding } from "./use-environment-authoring.js";
 import { createEnvironmentWorkflow } from "./environment-workflow.js";
-import { createSession, provenanceFromImport } from "./document-session.js";
+import { createSession, provenanceFromImport, documentRevision } from "./document-session.js";
 import { createDocumentSessionId } from "./workspace-session.js";
 import { previewProgramDescriptorIdentity } from "./preview-program-contract.js";
 import { createEnvironmentImportHost } from "./environment-import-host.js";
@@ -103,11 +103,17 @@ describe("Environment import composition", () => {
                     try {
                         await owner.open();
                         const documentOwner = createSession(createDocumentSessionId(`native-${backend}-${source.graphId}`), provenanceFromImport(), source);
+                        workspace.apply(state => {
+                            const opened = openWorkspaceDocument(state.session, documentOwner);
+                            if (!opened.accepted) throw new Error(JSON.stringify(opened.refusal));
+                            return { next: { ...state, session: opened.workspace }, result: undefined };
+                        });
                         const document = documentOwner.history.present, descriptor = owner.resolveProfile(document);
                         owner.native.updateJudgment(descriptor.processContract.tool);
                         await owner.native.discover({ bundled: false }); await owner.native.handshake();
                         const input = { documentOwner, document, descriptor, descriptorCompatible: true, emission: emitHlsl(document, descriptor), configuredTarget: backend === "dx12" ? "gglab-dx12" : "gglab-vulkan13", previewProgramDescriptorIdentity };
                         const bound = new PreviewCoordinator(() => owner.manager, () => owner.preview, workspace, owner.current, d => owner.resolveProfile(d));
+                        expect(await bound.retargetTo(documentOwner.sessionId)).toMatchObject({ ok: true });
                         expect(await owner.preview.previewHandshake(input)).toMatchObject({ kind: "settled", eligibility: { status: "eligible" } });
                         const build = await bound.buildPreview(input);
                         if (!build.issued) throw new Error(`Workspace binding build refused: ${JSON.stringify(build)}`);
@@ -120,6 +126,39 @@ describe("Environment import composition", () => {
                         }
                         expect(owner.preview.acceptedObservation?.status).toBe("loaded");
                         authoringRuns.push({ backend, profileVersion: version, graphId: document.graphId, generatedSourceIdentity: input.emission.sourceMap?.generatedSourceIdentity, sessionId: owner.preview.session.sessionId, observation: owner.preview.acceptedObservation });
+                        if (source === samples[samples.length - 1]) {
+                            const oldSession = owner.preview.session.sessionId;
+                            const nextOwner = createSession(createDocumentSessionId(`native-next-${backend}`), provenanceFromImport(), document);
+                            workspace.apply(state => {
+                                const opened = openWorkspaceDocument(state.session, nextOwner);
+                                if (!opened.accepted) throw new Error(JSON.stringify(opened.refusal));
+                                return { next: { ...state, session: opened.workspace }, result: undefined };
+                            });
+                            expect(await bound.retargetTo(nextOwner.sessionId)).toMatchObject({ ok: true, targetChanged: true });
+                            expect(owner.manager.state.kind).toBe("idle");
+                            expect(owner.preview.session.sessionId).not.toBe(oldSession);
+                            expect(owner.preview.acceptedObservation).toBeNull();
+                            expect(owner.preview.launchCandidate()).toBeNull();
+                            expect(bound.gate(input).admitted).toBe(false);
+                            const nextInput = { ...input, documentOwner: nextOwner };
+                            expect(await owner.preview.previewHandshake(nextInput)).toMatchObject({ kind: "settled", eligibility: { status: "eligible" } });
+                            const nextBuild = await bound.buildPreview(nextInput);
+                            if (!nextBuild.issued) throw new Error(JSON.stringify(nextBuild));
+                            expect(await nextBuild.outcome).toMatchObject({ kind: "published" });
+                            expect(await owner.manager.launch(owner.preview.launchCandidate()!)).toMatchObject({ launched: true });
+                            const until = Date.now() + 30000;
+                            while (owner.preview.acceptedObservation?.status !== "loaded" && Date.now() < until) {
+                                await owner.preview.refreshObservation(); await new Promise(resolve => setTimeout(resolve, 100));
+                            }
+                            expect(owner.preview.acceptedObservation?.status).toBe("loaded");
+                            authoringRuns.push({ backend, profileVersion: version, graphId: document.graphId, generatedSourceIdentity: input.emission.sourceMap?.generatedSourceIdentity, sessionId: owner.preview.session.sessionId, observation: owner.preview.acceptedObservation, previousSessionId: oldSession, transition: "identical-graph-new-document-owner" });
+                            if (backend === "dx12") {
+                                expect(await bound.closeTarget(nextOwner.sessionId, documentRevision(nextOwner))).toMatchObject({ ok: true });
+                                expect(workspace.getSnapshot().session.preview.targetDocumentId).toBeNull();
+                                expect(owner.manager.state.kind).toBe("idle");
+                                expect(owner.preview.launchCandidate()).toBeNull();
+                            }
+                        }
                         if (backend === "vulkan" && source === samples[samples.length - 1]) {
                             const workflow = createEnvironmentWorkflow(async (command, args) => command === "shader-environment-list-mutations" ? [] : invoke(command, args), () => { throw new Error("Registered reuse must not discover a producer"); }, {
                                 coordinator: () => bound, capture: () => () => workspace.getSnapshot().session.activeEnvironment === selection, begin: () => () => {},
