@@ -64,3 +64,23 @@ Computer Use and manual desktop interaction were excluded at the owner's
 request. These automated checks do not claim clean-machine qualification,
 OS-wide source access denial, or pixel-level UI acceptance. Existing Vite
 chunk/directive warnings and one Rust test-fixture unused-field warning remain.
+
+## Final archive acceptance
+
+The published ZIP is `ShaderEditor-v0.1.0-final-win-x64.zip` (449,970,096 bytes).
+SHA-256: `f5fd2d9828eeb1b1c0d47eaa41385f608e1f54080b941a38dc99e51f3dad1867`.
+The exact packaged Editor commit is `404adbe60550ce37e6a4a3855a98a6e9b7c8a54f`.
+
+All 1,969 members passed hash/size verification after extracting the final ZIP
+to a new short local path. Native import/activation and sample authoring passed
+again against that extracted Environment (16 proof runs and 10 authoring runs).
+The immutable Environment was reverified after execution. A process-only desktop
+smoke test started the extracted Editor with development tools removed from PATH
+and confirmed it used the bundled WebView2 executable. No UI interaction occurred.
+The ZIP downloaded again through the repository's authenticated release API had
+exactly the same SHA-256. Repository access permissions were not changed.
+
+Final checks passed: 1,048 TypeScript tests, 101 Rust tests, typecheck and lint.
+Opt-in tests skipped in ordinary runs are qualified separately as described above.
+See `final-release-verification.json` for the public summary. Raw machine paths,
+process logs and full native transcripts remain in ignored local release outputs.

@@ -1,0 +1,34 @@
+{
+  "release": "v0.1.0-final",
+  "editorRevision": "404adbe60550ce37e6a4a3855a98a6e9b7c8a54f",
+  "gglabRevision": "0151ae75c6e88bab17f58aeef8a7e3eee43521bc",
+  "archive": "ShaderEditor-v0.1.0-final-win-x64.zip",
+  "archiveSha256": "f5fd2d9828eeb1b1c0d47eaa41385f608e1f54080b941a38dc99e51f3dad1867",
+  "archiveSize": 449970096,
+  "verifiedMembers": 1969,
+  "typecheckPassed": true,
+  "lintPassed": true,
+  "typescriptTestsPassed": 1048,
+  "rustTestsPassed": 101,
+  "environmentContractTestsPassed": 21,
+  "extractedNativeImportPassed": true,
+  "previewProofRuns": 16,
+  "authoringRuns": 10,
+  "backends": [
+    "dx12",
+    "vulkan"
+  ],
+  "profileVersions": [
+    1,
+    2
+  ],
+  "lastGoodRecoveryPassed": true,
+  "immutableEnvironmentPreserved": true,
+  "desktopProcessStarted": true,
+  "bundledWebViewLoaded": true,
+  "developmentPathRemoved": true,
+  "computerUsePerformed": false,
+  "manualUiAcceptancePerformed": false,
+  "cleanMachineQualificationClaimed": false,
+  "releaseDownloadVerified": true
+}
