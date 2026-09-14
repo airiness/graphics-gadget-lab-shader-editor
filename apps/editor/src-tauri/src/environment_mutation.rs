@@ -524,8 +524,16 @@ mod tests {
             );
         }
         assert!(!saved.target_root.exists());
-        assert!(root.starts_with(std::env::temp_dir()));
-        std::fs::remove_dir_all(root).unwrap();
+        remove_temporary(&root);
+    }
+    fn remove_temporary(root: &Path) {
+        // TEMP may use case or 8.3 aliases; compare both filesystem-resolved paths.
+        let temp = ordinary_path(&std::env::temp_dir()).unwrap();
+        let resolved = ordinary_path(root).unwrap();
+        assert_eq!(resolved.parent(), Some(temp.as_path()));
+        assert!(resolved.file_name().unwrap().to_string_lossy()
+            .starts_with(&format!("gglab-mutation-{}-", std::process::id())));
+        std::fs::remove_dir_all(resolved).unwrap();
     }
     fn temporary() -> PathBuf {
         let root = std::env::temp_dir().join(format!(
@@ -588,8 +596,7 @@ mod tests {
                 .termination_unproven
         );
         assert!(journal(&root, &saved.operation_id).exists());
-        assert!(root.starts_with(std::env::temp_dir()));
-        std::fs::remove_dir_all(root).unwrap();
+        remove_temporary(&root);
     }
     #[test]
     fn compact_state_paths_preserve_identity_and_legacy_recovery() {
@@ -610,7 +617,7 @@ mod tests {
         saved.target_root = root.join("s/other");
         std::fs::write(journal(&root, &saved.operation_id), serde_json::to_vec(&saved).unwrap()).unwrap();
         assert!(load(&root, &saved.operation_id).is_err());
-        assert!(root.starts_with(std::env::temp_dir())); std::fs::remove_dir_all(root).unwrap();
+        remove_temporary(&root);
     }
     #[test]
     fn state_path_limit_counts_windows_utf16_units() {
@@ -632,8 +639,7 @@ mod tests {
         .unwrap();
         assert!(load(&root, &saved.operation_id).is_err());
         assert!(load(&root, "../escape").is_err());
-        assert!(root.starts_with(std::env::temp_dir()));
-        std::fs::remove_dir_all(root).unwrap();
+        remove_temporary(&root);
     }
     #[test]
     #[ignore = "requires pinned producer, built deployment and explicit managed test root"]

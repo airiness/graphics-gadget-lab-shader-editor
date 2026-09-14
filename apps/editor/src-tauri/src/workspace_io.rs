@@ -752,7 +752,7 @@ mod tests {
         };
         assert_eq!(
             snapshot.documents.iter().map(|entry| entry.relative_path.as_str()).collect::<Vec<_>>(),
-            ["SurfaceDiagnostics.shadergraph", "SurfaceTextureGolden.shadergraph", "surface-color-study-preview.shadergraph", "surface-texture-preview.shadergraph"]
+            ["SurfaceDiagnostics.shadergraph", "SurfaceTextureGolden.shadergraph", "surface-color-study-preview.shadergraph", "surface-neon-reactor-preview.shadergraph", "surface-texture-preview.shadergraph"]
         );
         for entry in &snapshot.documents {
             let opened = documents.read_snapshot(&entry.canonical_document_uri).unwrap();
@@ -761,6 +761,8 @@ mod tests {
                 include_str!("../../../../packages/shader-graph-core/tests/fixtures/SurfaceTextureGolden.shadergraph")
             } else if entry.relative_path == "SurfaceDiagnostics.shadergraph" {
                 include_str!("../../../../packages/shader-graph-core/tests/fixtures/SurfaceDiagnostics.shadergraph")
+            } else if entry.relative_path == "surface-neon-reactor-preview.shadergraph" {
+                include_str!("../../../../packages/shader-graph-core/tests/fixtures/surface-neon-reactor-preview.shadergraph")
             } else if entry.relative_path == "surface-color-study-preview.shadergraph" {
                 include_str!("../../../../packages/shader-graph-core/tests/fixtures/surface-color-study-preview.shadergraph")
             } else {

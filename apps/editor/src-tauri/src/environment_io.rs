@@ -494,18 +494,51 @@ mod tests {
     use super::*;
     #[test]
     fn producer_job_reaps_descendants_that_inherit_output_pipes() {
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
+
         let root = Temp::new();
-        let marker = root.0.join("descendant-survived");
-        let descendant = format!("import time,pathlib;time.sleep(1);pathlib.Path({:?}).write_text('survived')", marker.to_string_lossy());
-        let script = format!("import sys,subprocess,time;sys.stdin.buffer.read();p=subprocess.Popen([sys.executable,'-c',{:?}]);print(p.pid,flush=True);time.sleep(30)", descendant);
-        let start = Instant::now();
-        let result = execute(&python_path().unwrap(), &["-c".into(), script], &root.0, b"request".to_vec(), &Arc::new(AtomicBool::new(false)), Duration::from_millis(400)).unwrap();
-        assert!(result.timed_out);
-        assert!(!result.stdout.is_empty(), "The descendant must actually have been spawned");
-        assert!(start.elapsed() < Duration::from_secs(5));
-        std::thread::sleep(Duration::from_millis(1100));
-        assert!(!marker.exists(), "The descendant escaped the producer job");
+        let ready = root.0.join("descendant-ready");
+        // Deliberately exceed the former 400ms budget before the descendant starts.
+        // Its stdout is inherited, so execution must reap it before joining capture.
+        let descendant = format!("import os,time,pathlib;print('descendant-ready',flush=True);pathlib.Path({:?}).write_text(str(os.getpid()));time.sleep(60)", ready.to_string_lossy());
+        let script = format!("import sys,subprocess,time;sys.stdin.buffer.read();time.sleep(1);subprocess.Popen([sys.executable,'-c',{:?}]);time.sleep(60)", descendant);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let ready_cancel = Arc::clone(&cancel);
+        let observer = std::thread::spawn(move || {
+            let started = Instant::now();
+            let result = loop {
+                if let Ok(text) = std::fs::read_to_string(&ready) {
+                    if let Ok(pid) = text.parse::<u32>() {
+                        // Hold this exact process identity before triggering teardown.
+                        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+                        if handle.is_null() { break Err(std::io::Error::last_os_error().to_string()); }
+                        break Ok((unsafe { OwnedHandle::from_raw_handle(handle) }, Instant::now()));
+                    }
+                }
+                if started.elapsed() >= Duration::from_secs(30) {
+                    break Err("Descendant did not report readiness within the startup budget".into());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            ready_cancel.store(true, Ordering::Release);
+            result
+        });
+        let result = execute(&python_path().unwrap(), &["-c".into(), script], &root.0,
+            b"request".to_vec(), &cancel, Duration::from_secs(40));
+        let descendant = observer.join().unwrap();
+        let result = result.unwrap();
+        let (descendant, ready_at) = descendant.expect("The descendant must actually have been spawned");
+        assert!(result.canceled);
+        assert!(!result.timed_out);
+        assert!(String::from_utf8_lossy(&result.stdout).contains("descendant-ready"));
+        assert_eq!(unsafe { WaitForSingleObject(descendant.as_raw_handle(), 5000) }, WAIT_OBJECT_0,
+            "The actual descendant must exit within the teardown budget");
+        assert!(ready_at.elapsed() < Duration::from_secs(15),
+            "Teardown must not wait for the descendant to exit naturally after 60 seconds");
     }
+
     struct Temp(PathBuf);
     impl Temp {
         fn new() -> Self {
