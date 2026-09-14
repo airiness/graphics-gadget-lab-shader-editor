@@ -30,7 +30,6 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HlslEmission, SurfaceProfileDescriptor } from "@gglab/shader-graph-core";
-import type { AttemptOutcome, BuildLineReport } from "@gglab/shader-toolchain-client";
 import { createBuildTargetConfiguration, setBuildTarget, type BuildTargetConfiguration } from "./build-target-config.js";
 import {
     createDiscoveryConfiguration,
@@ -40,7 +39,6 @@ import {
     type DiscoveryConfiguration,
 } from "./discovery-config.js";
 import { projectBuildInspector, type BuildInspectorFacts } from "./build-inspector.js";
-import { sessionReport } from "./native-build-session.js";
 import { NativeBuildFlow } from "./native-build-flow.js";
 import { type NativeBuildReadiness } from "./native-build-readiness.js";
 import { createTauriToolBoundary, toolBoundaryAvailable } from "./toolchain-host.js";
@@ -63,6 +61,10 @@ const PRODUCT_PROGRAM_COMPOSITION = {
 };
 
 export interface UseNativeBuildInput {
+    readonly environment?: import("./use-environment-authoring.js").WorkspaceEnvironmentBinding | null;
+    readonly admitTarget?: (target: string) => boolean;
+    readonly retryHost?: () => void;
+    readonly onOutputEvent?: (level: "ok" | "info" | "refusal", text: string) => void;
     /** The loaded descriptor instance (null = not loaded — the core's
      *  reader's own fact). */
     readonly descriptor: SurfaceProfileDescriptor | null;
@@ -95,15 +97,10 @@ export interface NativeBuildSurface {
     readonly discoveryConfig: DiscoveryConfiguration;
     readonly setToolPath: (path: string) => void;
     readonly setSiblingBuildOutput: (path: string) => void;
-    /** The session's line projection against the current intent. */
-    readonly lineReport: BuildLineReport | null;
-    /** The NEWEST ISSUED attempt's outcome (the client's vocabulary) —
-     *  read from the session line, its single authority: the anchor's
-     *  own record once settled; null (an honest "not yet") while the
-     *  anchor is still in flight. Under out-of-order settlements this
-     *  can never be a different attempt's outcome. */
-    readonly lastOutcome: AttemptOutcome | null;
-    /** The inspector projection (one source of truth per field). */
+    /** The inspector projection (one source of truth per field) — the
+     *  SELECTION-ORIENTED facts only; the session's line (the attempt
+     *  chronology) is projected by the bottom panel's Build view over
+     *  the flow's own build session. */
     readonly inspector: BuildInspectorFacts | null;
     /** Whether a handshake is in flight — the flow's single-flight lane,
      *  observed (shared by the startup bring-up and this surface). */
@@ -129,16 +126,19 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
     const [, bump] = useState(0);
     const [notes, setNotes] = useState<{ level: "ok" | "info" | "refusal"; text: string }[]>([]);
     const flowRef = useRef<NativeBuildFlow | null>(null);
-    const startedRef = useRef(false);
+    const startedRef = useRef<NativeBuildFlow | null>(null);
 
+    const onOutputEvent = input.onOutputEvent;
     const note = useCallback((level: "ok" | "info" | "refusal", text: string) => {
-        setNotes((previous) => [...previous.slice(-23), { level, text }]);
-    }, []);
+        if (onOutputEvent !== undefined) onOutputEvent(level, text);
+        else setNotes((previous) => [...previous.slice(-23), { level, text }]);
+    }, [onOutputEvent]);
 
     // Desktop only: the product boundary is code-split; the absence (web
     // shell) is a structured capability fact, not an exception.
     useEffect(() => {
         let cancelled = false;
+        if (input.environment !== undefined) return;
         void (async () => {
             if (!toolBoundaryAvailable(globalThis)) {
                 return;
@@ -169,9 +169,11 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [input.environment]);
 
-    const flow = flowRef.current;
+    const flow = input.environment === undefined ? flowRef.current : input.environment?.current() ? input.environment.native : null;
+    const liveFlow = useRef(flow);
+    liveFlow.current = flow;
 
     // The descriptor change refreshes the flow's judgment input (the
     // single source of truth for the requirement the verdicts judge
@@ -211,10 +213,10 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
     // stale value for the whole window (the flow moves false → true →
     // false while the surface only ever observes false).
     useEffect(() => {
-        if (flow === null || startedRef.current) {
+        if (flow === null || startedRef.current === flow) {
             return;
         }
-        startedRef.current = true;
+        startedRef.current = flow;
         void (async () => {
             // The discovery request is the configuration itself (rules 1
             // and 2, pass-through verbatim; `bundled` states the
@@ -222,12 +224,14 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
             const discoveryPending = flow.discover(discoveryRequestFor(discoveryConfig));
             bump((n) => n + 1); // lane OPEN — the surface must observe "discovering"
             const discovery = await discoveryPending;
+            if (liveFlow.current !== flow) return;
             bump((n) => n + 1); // lane CLOSED — the surface re-reads the tool state
             if (discovery.candidate !== undefined) {
                 note("info", `Tool discovered (${discovery.candidate.rule}): ${discovery.candidate.toolPath}`);
                 const handshakePending = flow.handshake();
                 bump((n) => n + 1); // lane OPEN — the surface must observe "handshaking"
                 await handshakePending;
+                if (liveFlow.current !== flow) return;
                 const tool = flow.tool;
                 note("info", `Tool state after handshake: ${tool.status}`);
             } else {
@@ -235,7 +239,9 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
                 note("refusal", `Tool unavailable — no candidate resolved (${failures})`);
             }
             bump((n) => n + 1);
-        })();
+        })().catch((error: unknown) => {
+            if (liveFlow.current === flow) note("refusal", `Tool initialization failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
     }, [flow, note, discoveryConfig]);
 
     // The readiness — recomposed from CURRENT facts on every render
@@ -260,39 +266,16 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
 
     const ready = readiness.status === "Ready";
 
-    // The line projection is derived on every render (the session store
-    // is the flow's; a memo keyed on the wrong fact would go stale the
-    // moment the session moves — derivation is the only safe shape).
-    const lineReport =
-        flow === null || flow.buildSession.lastIssued === null ? null : sessionReport(flow.buildSession, flow.buildSession.lastIssued.intent);
-
-    // The attempt outcome is read from the session line — its single
-    // authority ("BuildId → intent → outcome", one record per attempt).
-    // The NEWEST ISSUED attempt is the anchor; read THAT record: settled
-    // means its outcome, still in flight means the honest "not yet".
-    // Under out-of-order settlements a late older settlement can never
-    // masquerade as the newest one here.
-    const lastOutcome: AttemptOutcome | null = (() => {
-        if (flow === null) {
-            return null;
-        }
-        const anchor = flow.buildSession.lastIssued;
-        if (anchor === null) {
-            return null;
-        }
-        const record = flow.buildSession.line.attempts.find((entry) => entry.buildId.sequence === anchor.buildId.sequence);
-        return record?.outcome ?? null;
-    })();
-
     const inspector = useMemo(() => {
         if (flow === null) {
             return null;
         }
-        return projectBuildInspector(flow, input.descriptor, { ok: input.descriptorCompatible, detail: input.descriptorDetail }, target, readiness, input.emission !== null && input.emission.ok === true && input.emission.sourceMap !== null ? { sourceIdentity: input.emission.sourceMap.generatedSourceIdentity } : null, lineReport, lastOutcome);
-    }, [flow, input, target, readiness, lineReport, lastOutcome]);
+        return projectBuildInspector(flow, input.descriptor, { ok: input.descriptorCompatible, detail: input.descriptorDetail }, target, readiness, input.emission !== null && input.emission.ok === true && input.emission.sourceMap !== null ? { sourceIdentity: input.emission.sourceMap.generatedSourceIdentity } : null);
+    }, [flow, input, target, readiness]);
 
     const discoverNow = useCallback(async (): Promise<void> => {
         if (flow === null) {
+            if (input.retryHost) { input.retryHost(); return; }
             note("refusal", "Discover not available: no host boundary in this shell.");
             return;
         }
@@ -301,17 +284,22 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
         // authority; the tick only re-reads it — the Re-discover button's
         // disabled state and label render from this observation). The
         // request is the discovery configuration itself (pass-through).
-        const pending = flow.discover(discoveryRequestFor(discoveryConfig));
-        bump((n) => n + 1);
-        const discovery = await pending;
-        if (discovery.candidate !== undefined) {
-            note("ok", `Tool resolved (${discovery.candidate.rule}): ${discovery.candidate.toolPath}`);
-        } else {
-            const failures = discovery.failures.map((failure) => `${failure.rule}: ${failure.reason}`).join("; ");
-            note("refusal", `Tool unavailable — no candidate resolved (${failures})`);
-        }
-        bump((n) => n + 1);
-    }, [flow, note, discoveryConfig]);
+        try {
+            const pending = flow.discover(discoveryRequestFor(discoveryConfig));
+            bump((n) => n + 1);
+            const discovery = await pending;
+            if (liveFlow.current !== flow) return;
+            if (discovery.candidate !== undefined) {
+                note("ok", `Tool resolved (${discovery.candidate.rule}): ${discovery.candidate.toolPath}`);
+            } else {
+                const failures = discovery.failures.map((failure) => `${failure.rule}: ${failure.reason}`).join("; ");
+                note("refusal", `Tool unavailable — no candidate resolved (${failures})`);
+            }
+            bump((n) => n + 1);
+        } catch (error: unknown) {
+            if (liveFlow.current === flow) note("refusal", `Discovery failed: ${error instanceof Error ? error.message : String(error)}`);
+        } finally { bump((n) => n + 1); }
+    }, [flow, note, discoveryConfig, input.retryHost]);
 
     const handshakeNow = useCallback(async (): Promise<void> => {
         if (flow === null) {
@@ -323,18 +311,23 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
         // second concurrent handshake for the same candidate. Open/join,
         // then make the surface observe the OPEN lane before the window
         // closes (the button's disabled state renders from this).
-        const pending = flow.handshake();
-        bump((n) => n + 1);
-        const record = await pending;
-        const tool = flow.tool;
-        if (record.admission.admitted === false) {
-            note("refusal", `Handshake refused by the client gate: ${record.admission.reasons.map((reason) => reason.reason).join(", ")}`);
-        } else if (record.candidateInvalidated) {
-            note("refusal", "The host refuted the candidate's observation at spawn time; the state re-enters via discovery + handshake.");
-        } else {
-            note("info", `Handshake settled; tool state is now: ${tool.status}`);
-        }
-        bump((n) => n + 1);
+        try {
+            const pending = flow.handshake();
+            bump((n) => n + 1);
+            const record = await pending;
+            if (liveFlow.current !== flow) return;
+            const tool = flow.tool;
+            if (record.admission.admitted === false) {
+                note("refusal", `Handshake refused by the client gate: ${record.admission.reasons.map((reason) => reason.reason).join(", ")}`);
+            } else if (record.candidateInvalidated) {
+                note("refusal", "The host refuted the candidate's observation at spawn time; the state re-enters via discovery + handshake.");
+            } else {
+                note("info", `Handshake settled; tool state is now: ${tool.status}`);
+            }
+            bump((n) => n + 1);
+        } catch (error: unknown) {
+            if (liveFlow.current === flow) note("refusal", `Handshake failed: ${error instanceof Error ? error.message : String(error)}`);
+        } finally { bump((n) => n + 1); }
     }, [flow, note]);
 
     const hostAvailable = flow !== null && toolBoundaryAvailable(globalThis);
@@ -342,9 +335,10 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
     const discoveryInFlight = flow?.discoveryInFlight ?? false;
 
     const setTarget = useCallback((next: string) => {
+        if (input.admitTarget && !input.admitTarget(next)) { note("refusal", "Stop Preview and wait for its build before changing the Environment backend."); return; }
         setTargetConfig((previous) => setBuildTarget(previous, next));
         note("info", `Build target set to: ${next} (explicit configuration — the next BuildIntent carries it).`);
-    }, [note]);
+    }, [note, input.admitTarget]);
 
     // The discovery configuration (design section 5, rules 1 and 2):
     // explicit, visible, changeable session values — an empty value is
@@ -353,14 +347,16 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
     // are explicit: the Re-discover button, never an automatic
     // re-resolution).
     const setToolPath = useCallback((path: string) => {
+        if (input.environment !== undefined) { note("refusal", "Tool discovery is bound to the Workspace Environment."); return; }
         setDiscoveryConfig((previous) => setExplicitToolPath(previous, path));
         note("info", `Tool path (explicit configuration) ${path === "" ? "cleared" : `set to: ${path}`} — the next discovery resolves over it.`);
-    }, [note]);
+    }, [note, input.environment]);
 
     const setSiblingBuildOutput = useCallback((path: string) => {
+        if (input.environment !== undefined) { note("refusal", "Tool discovery is bound to the Workspace Environment."); return; }
         setDiscoveryConfig((previous) => applySiblingBuildOutput(previous, path));
         note("info", `Sibling build-output location ${path === "" ? "cleared" : `set to: ${path}`} — the next discovery resolves over it.`);
-    }, [note]);
+    }, [note, input.environment]);
 
     return {
         readiness,
@@ -372,8 +368,6 @@ export function useNativeBuild(input: UseNativeBuildInput): NativeBuildSurface {
         discoveryConfig,
         setToolPath,
         setSiblingBuildOutput,
-        lineReport,
-        lastOutcome,
         inspector,
         handshakeInFlight,
         discoveryInFlight,

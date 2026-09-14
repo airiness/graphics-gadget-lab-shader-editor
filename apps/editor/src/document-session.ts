@@ -30,7 +30,7 @@ import {
     type CanvasFocus,
     type DocumentHistory,
 } from "@gglab/editor-ui";
-import { serializeShaderGraphDocument, type HlslEmission, type ShaderGraphDocument } from "@gglab/shader-graph-core";
+import { emitHlsl, serializeShaderGraphDocument, type SurfaceProfileDescriptor, type ShaderGraphSourceMap, type HlslEmission, type ShaderGraphDocument } from "@gglab/shader-graph-core";
 import type {
     CanonicalDocumentUri,
     DocumentSessionId,
@@ -131,6 +131,7 @@ export function emptyPresentation(
  * undo stack with another document's save state.
  */
 export interface DocumentSession extends WorkspaceDocumentHandle {
+    readonly [evidenceOwner]: object;
     readonly sessionId: DocumentSessionId;
     /** Null until the native host supplies a canonical document URI. */
     readonly canonicalUri: CanonicalDocumentUri | null;
@@ -156,6 +157,7 @@ export function createSession(
         throw new Error("A persisted DocumentSession requires both canonical URI and file revision token.");
     }
     return {
+        [evidenceOwner]: newEvidenceOwner(sessionId, document),
         sessionId,
         canonicalUri,
         fileRevisionToken,
@@ -177,21 +179,24 @@ export function recordDocumentChange(
     document: ShaderGraphDocument,
     label: string,
 ): DocumentSession {
+    requireEvidenceOwner(session);
     const history = recordHistory(session.history, document, label);
-    return history === session.history ? session : { ...session, history, presentation: emptyPresentation(session.presentation.savedText, session.presentation.viewport) };
+    return history === session.history ? session : { ...session, [evidenceOwner]: newEvidenceOwner(session.sessionId, history.present), history, presentation: emptyPresentation(session.presentation.savedText, session.presentation.viewport) };
 }
 
 /** Move this document one history step back. The restored document's
  * session-local presentation is stale for the new revision — reset it. */
 export function undoDocumentChange(session: DocumentSession): DocumentSession {
+    requireEvidenceOwner(session);
     const history = undoHistory(session.history);
-    return history === session.history ? session : { ...session, history, presentation: emptyPresentation(session.presentation.savedText, session.presentation.viewport) };
+    return history === session.history ? session : { ...session, [evidenceOwner]: newEvidenceOwner(session.sessionId, history.present), history, presentation: emptyPresentation(session.presentation.savedText, session.presentation.viewport) };
 }
 
 /** Move this document one history step forward (same reset rule). */
 export function redoDocumentChange(session: DocumentSession): DocumentSession {
+    requireEvidenceOwner(session);
     const history = redoHistory(session.history);
-    return history === session.history ? session : { ...session, history, presentation: emptyPresentation(session.presentation.savedText, session.presentation.viewport) };
+    return history === session.history ? session : { ...session, [evidenceOwner]: newEvidenceOwner(session.sessionId, history.present), history, presentation: emptyPresentation(session.presentation.savedText, session.presentation.viewport) };
 }
 
 /**
@@ -236,6 +241,7 @@ export function sessionReloaded(
     snapshot: DocumentSnapshot,
     document: ShaderGraphDocument,
 ): DocumentSession {
+    requireEvidenceOwner(session);
     if (session.sessionId !== reloadedSessionId) {
         return session;
     }
@@ -245,6 +251,7 @@ export function sessionReloaded(
     return {
         ...session,
         fileRevisionToken: snapshot.fileRevisionToken,
+        [evidenceOwner]: newEvidenceOwner(session.sessionId, document),
         history: createHistory(document),
         provenance: provenanceFromFile(snapshot.displayPath),
         // The graph reader may accept non-canonical input. Dirty state is a
@@ -357,4 +364,49 @@ export function sessionTitle(session: DocumentSession, dirty: boolean): string {
     const base = "GGLab Shader Graph Editor";
     const name = session.provenance.kind === "file" ? basenameOf(session.provenance.path) : "Untitled";
     return `${base} — ${name}${dirty ? " *" : ""}`;
+}
+
+// A spread may carry an owner token, but cannot rebind its document or identity.
+const evidenceOwner: unique symbol = Symbol("document-evidence-owner");
+const evidenceOwners = new WeakMap<object, { id: DocumentSessionId; revision: string; document: ShaderGraphDocument }>();
+function newEvidenceOwner(id: DocumentSessionId, document: ShaderGraphDocument): object {
+    const token = Object.freeze({});
+    evidenceOwners.set(token, { id, revision: serializeShaderGraphDocument(document), document: structuredClone(document) });
+    return token;
+}
+function requireEvidenceOwner(session: DocumentSession) {
+    const owner = evidenceOwners.get(session[evidenceOwner]);
+    if (owner === undefined || owner.id !== session.sessionId || owner.revision !== documentRevision(session)) {
+        throw new Error("Document evidence origin must belong to the unchanged document owner");
+    }
+    return owner;
+}
+const evidenceOrigins = new WeakSet<object>();
+const originConstructorKey = Object.freeze({});
+/** Opaque, owner-produced projection; no caller-supplied emission or identity. */
+export class DocumentEvidenceOrigin {
+    private readonly opaque = true;
+    private constructor(
+        key: object,
+        readonly documentSessionId: DocumentSessionId,
+        readonly documentRevision: string,
+        readonly sourceMap: ShaderGraphSourceMap,
+    ) {
+        if (key !== originConstructorKey) throw new Error("Document evidence origin requires its owner");
+        evidenceOrigins.add(this); Object.freeze(this);
+    }
+    static isValid(value: DocumentEvidenceOrigin): boolean { return evidenceOrigins.has(value) && value.opaque; }
+    static capture(session: DocumentSession, descriptor: SurfaceProfileDescriptor | null): DocumentEvidenceOrigin | null {
+        const owner = requireEvidenceOwner(session);
+        if (descriptor === null) return null;
+        const emission = emitHlsl(owner.document, descriptor);
+        if (!emission.ok || emission.sourceMap === null) return null;
+        const map = structuredClone(emission.sourceMap);
+        for (const range of map.ranges) Object.freeze(range);
+        Object.freeze(map.ranges); Object.freeze(map);
+        return new DocumentEvidenceOrigin(originConstructorKey, owner.id, owner.revision, map);
+    }
+}
+export function isDocumentEvidenceOrigin(value: DocumentEvidenceOrigin): boolean {
+    return DocumentEvidenceOrigin.isValid(value);
 }

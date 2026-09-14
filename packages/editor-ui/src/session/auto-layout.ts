@@ -11,6 +11,7 @@
  *
  * Layout engine: dagre (LR). Deterministic for a given document + catalog.
  */
+import { inlineConstantHeight } from "../panels/constant-value-presentation.js";
 import dagre from "@dagrejs/dagre";
 import { getNodeDefinition, type ShaderGraphDocument } from "@gglab/shader-graph-core";
 import { FLOW_GEOMETRY, nodeCardHeight, portRowCount } from "../flow/flow-geometry.js";
@@ -25,7 +26,7 @@ export interface AutoLayoutResult {
 function nodeSize(nodeType: string): { width: number; height: number } {
     const definition = getNodeDefinition(nodeType);
     const rows = definition === undefined ? 1 : portRowCount(definition.inputs.length, definition.outputs.length);
-    return { width: FLOW_GEOMETRY.nodeWidth, height: nodeCardHeight(rows, FLOW_GEOMETRY) };
+    return { width: FLOW_GEOMETRY.nodeWidth, height: nodeCardHeight(rows, FLOW_GEOMETRY) + inlineConstantHeight(nodeType) };
 }
 
 /**

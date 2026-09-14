@@ -1,3 +1,4 @@
+import { createPreviewSessionId } from "./preview-program-contract.js";
 /**
  * Preview ownership-transition authority.
  *
@@ -30,6 +31,7 @@
  *
  * A retarget transition itself never auto-launches a Runtime.
  */
+import { consumeEnvironmentActivation, type PreparedEnvironmentActivation } from "./environment-activation-host.js";
 import {
     checkProfileDescriptorCompatibility,
     emitHlsl,
@@ -59,46 +61,38 @@ import {
     type WorkspaceAuthoringState,
 } from "./workspace-store.js";
 
-/** The DocumentSession the Runtime Preview composes from.
- *
- * The explicit Preview target is authoritative at ALL times. The reducer
- * guarantees the invariant: the first document a Workspace opens IS its
- * Preview target (seeded at open time, not followed live), a target close
- * re-seeds the surviving active document, and only "Preview This Graph"
- * commits a different one. The active-document fallback below is therefore
- * defensive only — reachable when no document is open — and never a live
- * re-coupling of the Preview to tab switching. */
+/** Resolve only explicit ownership; an active tab never fills a cleared target. */
 export function resolvePreviewTarget<TDocument extends WorkspaceDocumentHandle>(
     workspace: WorkspaceSession<TDocument>,
 ): TDocument | undefined {
-    const targetId = workspace.preview.targetDocumentId ?? workspace.activeDocumentId;
+    const targetId = workspace.preview.targetDocumentId;
     if (targetId === null) {
         return undefined;
     }
     return workspace.documents.find((candidate) => candidate.sessionId === targetId);
 }
 
-/** Whether an explicit Preview target is present. With the open/close seed
- * invariant this is true whenever any document is open; the UI surfaces the
- * target with the ▶ marker so a user can see WHICH tab the Runtime previews. */
+/** Whether the Workspace currently carries an explicit Preview target intent. */
 export function hasExplicitPreviewTarget(
     workspace: WorkspaceSession<WorkspaceDocumentHandle>,
 ): boolean {
     return workspace.preview.targetDocumentId !== null;
 }
 
-export type PreviewTransitionKind = "retarget" | "close-target";
+export type PreviewTransitionKind = "retarget" | "close-target" | "environment";
 
 /** Identity of one ownership transition (evidence / display only — the
  * sequence is NOT a latest-intent-wins protocol; transitions are not
  * queued or superseded). */
 export interface PreviewTransitionIdentity {
     readonly kind: PreviewTransitionKind;
-    readonly targetDocumentId: DocumentSession["sessionId"];
+    readonly targetDocumentId: DocumentSession["sessionId"] | null;
     readonly sequence: number;
 }
 
 export type PreviewTransitionRefusal =
+    | { readonly reason: "retarget-intent-expired" }
+    | { readonly reason: "environment-activation-refused"; readonly detail: string }
     | { readonly reason: "transition-in-flight"; readonly inFlight: PreviewTransitionIdentity }
     | { readonly reason: "build-in-flight" }
     | { readonly reason: "target-not-open"; readonly targetDocumentId: DocumentSession["sessionId"] }
@@ -115,6 +109,8 @@ export type PreviewTransitionResult =
 /** One human-facing note for a structured transition refusal. */
 export function describeTransitionRefusal(refusal: PreviewTransitionRefusal): string {
     switch (refusal.reason) {
+        case "retarget-intent-expired": return "the Preview target intent was cancelled or its editing context changed";
+        case "environment-activation-refused": return refusal.detail;
         case "transition-in-flight":
             return `another Preview transition (#${refusal.inFlight.sequence}) is in flight — transitions are not queued; retry once it settles`;
         case "build-in-flight":
@@ -177,6 +173,8 @@ export class PreviewCoordinator {
         private readonly managerSource: () => AttachedPreviewRuntimeManager | null,
         private readonly flowSource: () => PreviewBuildController | null,
         private readonly store: WorkspaceStore<WorkspaceAuthoringState>,
+        private readonly environmentHostAdmitted: () => boolean | null = () => null,
+        private readonly environmentDescriptor: (document: import("@gglab/shader-graph-core").ShaderGraphDocument) => import("@gglab/shader-graph-core").SurfaceProfileDescriptor | null = () => null,
     ) {}
 
     private get manager(): AttachedPreviewRuntimeManager | null {
@@ -185,6 +183,15 @@ export class PreviewCoordinator {
 
     private get flow(): PreviewBuildController | null {
         return this.flowSource();
+    }
+
+    /** Ownership admission only; this is not native compatibility or build readiness. */
+    get legacyHostAdmitted(): boolean {
+        return this.inFlight === null && this.store.getSnapshot().session.activeEnvironment === null;
+    }
+
+    get hostAdmitted(): boolean {
+        return this.inFlight === null && (this.environmentHostAdmitted() ?? (this.store.getSnapshot().session.activeEnvironment === null));
     }
 
     /** Build / Runtime gate composition. The STRUCTURAL refusals come
@@ -201,14 +208,21 @@ export class PreviewCoordinator {
      * This gate is the single authoritative admission verdict: `buildPreview`
      * and `runtimeProjection` both consult it, so a pending transition can
      * never project as admitted/Ready while a real Build action would refuse. */
-    gate(input: PreviewCompositionInput): PreviewBuildGate {
+    ownsTarget(input: PreviewCompositionInput | null): boolean {
+        const target = resolvePreviewTarget(this.store.getSnapshot().session);
+        return target !== undefined && input !== null && input.document === target.history.present &&
+            (input.documentOwner === undefined || input.documentOwner.sessionId === target.sessionId);
+    }
+
+    gate(input: PreviewCompositionInput | null): PreviewBuildGate {
         if (this.inFlight !== null) {
             return { admitted: false, reasons: [{ reason: "preview-transition-in-flight" }], request: null, eligibility: null };
         }
         const flow = this.flow;
-        if (flow === null) {
+        if (flow === null || !this.hostAdmitted) {
             return { admitted: false, reasons: [{ reason: "preview-host-unavailable" }], request: null, eligibility: null };
         }
+        if (!this.ownsTarget(input) || input === null) return { admitted: false, reasons: [{ reason: "preview-target-unavailable" }], request: null, eligibility: null };
         const refusal = this.attachedRuntimeRefusal(flow);
         if (refusal !== null) {
             return { admitted: false, reasons: [refusal], request: null, eligibility: null };
@@ -256,10 +270,10 @@ export class PreviewCoordinator {
      * short-circuits to gate-refused — it is not queued and not superseded,
      * and no build lifecycle opens. There is no separate in-flight branch
      * here to drift from the gate. */
-    buildPreview(input: PreviewCompositionInput): Promise<PreviewBuildLaunch> {
+    buildPreview(input: PreviewCompositionInput | null): Promise<PreviewBuildLaunch> {
         const flow = this.flow;
-        if (flow === null) {
-            // No host: the composed gate carries the single structural
+        if (flow === null || input === null) {
+            // No host or target: the composed gate carries the single structural
             // refusal (preview-transition-in-flight if a transition owns the
             // slot, otherwise preview-host-unavailable).
             return Promise.resolve({ issued: false, reason: "gate-refused", gate: this.gate(input) });
@@ -278,9 +292,9 @@ export class PreviewCoordinator {
      * projection is SUSPENDED (the neutral "idle" view): `gate()` refuses with
      * `preview-transition-in-flight`, so the projection must not project as
      * Ready/current for a build line we cannot actually admit. */
-    runtimeProjection(input: PreviewCompositionInput): PreviewRuntimeProjection {
+    runtimeProjection(input: PreviewCompositionInput | null): PreviewRuntimeProjection {
         const flow = this.flow;
-        if (flow === null || this.inFlight !== null) {
+        if (flow === null || this.inFlight !== null || !this.hostAdmitted || !this.ownsTarget(input) || input === null) {
             return {
                 freshness: "idle",
                 latestBuildState: null,
@@ -293,12 +307,55 @@ export class PreviewCoordinator {
         return flow.runtimeProjection(input, (candidate) => this.gate(candidate));
     }
 
+    /** Prepare under the same transition lease, then join the old Runtime before
+     * one synchronous commit. Import/registry success alone never changes selection. */
+    async activateEnvironment(
+        prepare: () => Promise<PreparedEnvironmentActivation>,
+        cancelled: () => boolean = () => false,
+        requiresExclusiveRuntime = false,
+    ): Promise<PreviewTransitionResult> {
+        if (this.inFlight !== null) return { ok: false, refusal: { reason: "transition-in-flight", inFlight: this.inFlight } };
+        if (this.flow?.buildInFlight) return { ok: false, refusal: { reason: "build-in-flight" } };
+        const initial = this.store.getSnapshot().session;
+        const identity: PreviewTransitionIdentity = { kind: "environment", targetDocumentId: initial.preview.targetDocumentId, sequence: ++this.sequence };
+        const refused = (detail: string): PreviewTransitionResult => ({ ok: false, refusal: { reason: "environment-activation-refused", detail } });
+        const stillOwned = () => {
+            const current = this.store.getSnapshot().session;
+            return current.workspaceRoot?.canonicalWorkspaceUri === initial.workspaceRoot?.canonicalWorkspaceUri && current.activeEnvironment === initial.activeEnvironment;
+        };
+        this.inFlight = identity;
+        try {
+            if (cancelled()) return refused("Environment activation cancelled");
+            if (requiresExclusiveRuntime) {
+                // Final-location proof launches its own Runtime; the previous Preview must exit first.
+                const pause = await this.teardownProof();
+                if (pause !== null) return pause;
+                if (cancelled() || !stillOwned()) return refused("Environment activation cancelled or Workspace changed while pausing Preview");
+            }
+            let candidate: ReturnType<typeof consumeEnvironmentActivation>;
+            try { candidate = consumeEnvironmentActivation(await prepare()); }
+            catch (error) { return refused(error instanceof Error ? error.message : String(error)); }
+            if (cancelled() || !stillOwned()) return refused("Environment activation cancelled or Workspace changed during preparation");
+            if (this.flow?.buildInFlight) return { ok: false, refusal: { reason: "build-in-flight" } };
+            const teardown = await this.teardownProof(); // Last await before the atomic selection commit.
+            if (teardown !== null) return teardown;
+            return this.store.apply<PreviewTransitionResult>(state => {
+                if (cancelled() || !stillOwned()) return { next: state, result: refused("Environment activation cancelled or Workspace changed during teardown") };
+                const activeEnvironment = Object.freeze({ ...candidate, activationSequence: identity.sequence });
+                // Preserve current edits, history, selection and tab/Preview target identities.
+                // Descriptor/emission facts from the previous Environment cannot become current.
+                const documents = state.session.documents.map(document => ({ ...document, presentation: { ...document.presentation, emission: null, focus: null } }));
+                return { next: { ...state, profileDescriptor: null, session: { ...state.session, documents, activeEnvironment } }, result: { ok: true, identity, targetChanged: false } };
+            });
+        } finally { this.release(identity); }
+    }
+
     /** `retargetTo(targetDocumentId)` — the ONLY path that moves the
      * Preview-target axis. Claim -> guard (target exists in the CURRENT
      * snapshot) -> [same-target fast path: NO teardown] -> the LAST await
      * is `terminateAndJoin()` -> exactly ONE synchronous apply (revalidate
      * + resolve CURRENT emission + commit) -> release. */
-    async retargetTo(targetDocumentId: DocumentSession["sessionId"]): Promise<PreviewTransitionResult> {
+    async retargetTo(targetDocumentId: DocumentSession["sessionId"], stillRequested: () => boolean = () => true): Promise<PreviewTransitionResult> {
         const existing = this.inFlight;
         if (existing !== null) {
             return { ok: false, refusal: { reason: "transition-in-flight", inFlight: existing } };
@@ -314,6 +371,7 @@ export class PreviewCoordinator {
         };
         this.inFlight = identity;
         try {
+            if (!stillRequested()) return { ok: false, refusal: { reason: "retarget-intent-expired" } };
             if (openDocumentIn(this.store.getSnapshot().session, targetDocumentId) === undefined) {
                 return { ok: false, refusal: { reason: "target-not-open", targetDocumentId } };
             }
@@ -326,10 +384,13 @@ export class PreviewCoordinator {
                 }
             }
             return this.store.apply<PreviewTransitionResult>((state) => {
+                // Restored intent may expire while joining an existing Runtime.
+                if (!stillRequested()) return { next: state, result: { ok: false, refusal: { reason: "retarget-intent-expired" } } };
                 const commit = this.commitTarget(state, targetDocumentId);
                 if (commit.refused !== null) {
                     return { next: state, result: { ok: false, refusal: commit.refused } };
                 }
+                if (commit.targetChanged) this.flow?.resetSession(createPreviewSessionId());
                 return { next: commit.next, result: { ok: true, identity, targetChanged: commit.targetChanged } };
             });
         } finally {
@@ -410,6 +471,7 @@ export class PreviewCoordinator {
                         result: { ok: false, refusal: { reason: "document-not-preview-target", documentSessionId } },
                     };
                 }
+                this.flow?.resetSession(createPreviewSessionId());
                 return {
                     next: { ...state, session: closed.workspace },
                     result: { ok: true, identity, targetChanged: true },
@@ -478,7 +540,7 @@ export class PreviewCoordinator {
         if (target === undefined) {
             return { refused: { reason: "target-not-open", targetDocumentId }, next: state, targetChanged: false };
         }
-        const descriptor = state.profileDescriptor;
+        const descriptor = state.session.activeEnvironment === null ? state.profileDescriptor : this.environmentDescriptor(target.history.present);
         if (descriptor === null) {
             return {
                 refused: {

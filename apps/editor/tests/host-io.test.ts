@@ -58,18 +58,16 @@ interface FakeChannel {
 /// Record every injected host call before delegating to an override/default.
 function fakeHost(
     overrides: Partial<
-        Pick<DesktopHost, "invoke" | "createChannel" | "openDialog" | "readTextFile">
+        Pick<DesktopHost, "invoke" | "createChannel" | "readTextFile">
     > = {},
 ): {
     host: DesktopHost;
     invokes: Array<{ command: string; args?: Record<string, unknown> }>;
     channels: FakeChannel[];
-    opens: Array<Record<string, unknown>>;
     reads: string[];
 } {
     const invokes: Array<{ command: string; args?: Record<string, unknown> }> = [];
     const channels: FakeChannel[] = [];
-    const opens: Array<Record<string, unknown>> = [];
     const reads: string[] = [];
     const host: DesktopHost = {
         invoke: (command, args) => {
@@ -113,13 +111,6 @@ function fakeHost(
             channels.push(channel);
             return channel;
         },
-        openDialog: (options) => {
-            opens.push(options ?? {});
-            if (overrides.openDialog !== undefined) {
-                return Promise.resolve(overrides.openDialog(options));
-            }
-            return Promise.resolve("C:\\gglab\\surface-base.shadergraph");
-        },
         readTextFile: (path) => {
             reads.push(path);
             if (overrides.readTextFile !== undefined) {
@@ -128,7 +119,7 @@ function fakeHost(
             return Promise.resolve(FAKE_DOCUMENT_TEXT);
         },
     };
-    return { host, invokes, channels, opens, reads };
+    return { host, invokes, channels, reads };
 }
 
 describe("host/file abstraction (native document I/O)", () => {
@@ -156,13 +147,12 @@ describe("host/file abstraction (native document I/O)", () => {
     });
 
     it("opens documents through the bounded host command and validates the snapshot", async () => {
-        const { host, invokes, opens } = fakeHost();
+        const { host, invokes } = fakeHost();
         const channel = createDesktopFileChannel(host);
         const snapshot = await channel.openDocument();
 
         expect(snapshot).toEqual(HOST_SNAPSHOT);
         expect(invokes).toEqual([{ command: "shader-document-open" }]);
-        expect(opens).toHaveLength(0); // the Rust service owns this dialog
     });
 
     it("returns null when the host-owned Open dialog is cancelled", async () => {
@@ -251,45 +241,17 @@ describe("host/file abstraction (native document I/O)", () => {
         ).rejects.toThrow(/unexpected document save outcome kind/);
     });
 
-    it("picks descriptor paths with the JSON-only filter", async () => {
-        const { host, opens } = fakeHost({
-            openDialog: async () => "C:\\profiles\\GGLab.Surface\\2\\descriptor.json",
-        });
-        const channel = createDesktopFileChannel(host);
-        expect(await channel.pickDescriptorPath()).toBe("C:\\profiles\\GGLab.Surface\\2\\descriptor.json");
-        const filter = (opens[0] as { filters?: Array<{ extensions?: readonly string[] }> })?.filters?.[0];
-        expect(filter !== undefined).toBe(true);
-        if (filter !== undefined) {
-            expect(filter.extensions).toEqual(["json"]);
-        }
-    });
-
-    it("picks the tool executable as a FILE with the exe-first filter; cancel is null", async () => {
-        const { host, opens } = fakeHost({
-            openDialog: async () => "C:\\tools\\gglab-shaderc.exe",
-        });
-        const channel = createDesktopFileChannel(host);
-        expect(await channel.pickToolExecutablePath()).toBe("C:\\tools\\gglab-shaderc.exe");
-        expect(opens).toHaveLength(1);
-        const opts = opens[0] as { directory?: boolean; multiple?: boolean; filters?: Array<{ name?: string; extensions?: readonly string[] }> };
-        expect(opts.directory).toBe(false);
-        expect(opts.multiple).toBe(false);
-        expect(opts.filters?.[0]?.extensions).toEqual(["exe"]);
-        expect(opts.filters?.[1]?.extensions).toEqual([]); // the honest "all files" escape
-    });
-
-    it("picks the sibling build-output location as a DIRECTORY (single pick); cancel is null", async () => {
-        const { host, opens } = fakeHost({
-            openDialog: async () => "C:\\Projects\\GGLab\\Build\\Output",
-        });
-        const channel = createDesktopFileChannel(host);
-        expect(await channel.pickSiblingBuildOutputDirectory()).toBe("C:\\Projects\\GGLab\\Build\\Output");
-        const opts = opens[0] as { directory?: boolean; multiple?: boolean };
-        expect(opts.directory).toBe(true);
-        expect(opts.multiple).toBe(false);
-
-        const { host: cancelHost } = fakeHost({ openDialog: async () => null });
-        expect(await createDesktopFileChannel(cancelHost).pickSiblingBuildOutputDirectory()).toBeNull();
+    it.each([
+        ["descriptor", "pickDescriptorPath"],
+        ["tool-executable", "pickToolExecutablePath"],
+        ["build-output", "pickSiblingBuildOutputDirectory"],
+    ] as const)("uses the host-owned %s dialog without sending options or paths", async (kind, method) => {
+        const fake = fakeHost({ invoke: async () => "C:/selected/location" });
+        expect(await createDesktopFileChannel(fake.host)[method]()).toBe("C:/selected/location");
+        expect(fake.invokes).toEqual([{ command: "shader-editor-pick-auxiliary", args: { kind } }]);
+        expect(fake.reads).toEqual([]);
+        expect(await createDesktopFileChannel(fakeHost({ invoke: async () => null }).host)[method]()).toBeNull();
+        await expect(createDesktopFileChannel(fakeHost({ invoke: async () => ["C:/one", "C:/two"] }).host)[method]()).rejects.toThrow();
     });
 
     it("surfaces host failures as rejections carrying the host's message", async () => {
@@ -307,13 +269,12 @@ describe("host/file abstraction (native document I/O)", () => {
 
 describe("host/file abstraction (bounded Workspace I/O)", () => {
     it("admits a Workspace root only through the host-owned directory dialog", async () => {
-        const { host, invokes, opens } = fakeHost();
+        const { host, invokes } = fakeHost();
 
         const root = await createDesktopFileChannel(host).chooseWorkspaceRoot();
 
         expect(root).toEqual(HOST_WORKSPACE_ROOT);
         expect(invokes).toEqual([{ command: "shader-workspace-choose-root" }]);
-        expect(opens).toHaveLength(0);
     });
 
     it("returns a cancellable discovery attempt and materializes its changed snapshot", async () => {
@@ -505,11 +466,11 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         // every close and the api's onCloseRequested wrapper destroys
         // the window when the handler does not preventDefault().
         expect([...caps.permissions].sort()).toEqual(
-            ["core:default", "core:window:allow-destroy", "core:window:allow-set-title", "dialog:allow-open", "fs:allow-read-text-file"].sort(),
+            ["core:default", "core:window:allow-destroy", "core:window:allow-set-title", "fs:allow-read-text-file"].sort(),
         );
     });
 
-    it("exposes exactly the bounded Workspace, document, tool, and Preview surface", async () => {
+    it("exposes exactly the bounded Workspace, document, Environment, tool, and Preview surface", async () => {
         const libRs = await readFile(resolve(tauriDir, "src/lib.rs"), "utf8");
         // The document-IO module is split into a shared core plus the two
         // platform-specific save-settlement submodules; the invariants below
@@ -542,7 +503,7 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
         expect(libRs).toContain("tauri_plugin_fs");
         // The web-facing command surface is EXACTLY the four document
         // capabilities, six tool operations, and separately declared bounded
-        // Preview surface. Any additional command is a surface violation.
+        // Preview and read-only Environment surfaces. Any additional command is a surface violation.
         // The attribute is `#[tauri::command(rename = "<id>")]` — the
         // `[` sits inside a character class here: a bare `[` in a regex
         // literal would start a class of its own and swallow the rest
@@ -554,6 +515,28 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
             "shader-document-read-snapshot",
             "shader-document-save",
             "shader-document-save-as",
+            "shader-editor-pick-auxiliary",
+            "shader-editor-read-layout",
+            "shader-editor-save-layout",
+            "shader-environment-cancel-discovery",
+            "shader-environment-cancel-execution",
+            "shader-environment-cancel-mutation",
+            "shader-environment-choose-directory",
+            "shader-environment-choose-repository",
+            "shader-environment-close-execution",
+            "shader-environment-commit-registration",
+            "shader-environment-discard-registration",
+            "shader-environment-discover",
+            "shader-environment-execute",
+            "shader-environment-inspect-mutation",
+            "shader-environment-list-mutations",
+            "shader-environment-observe-directory",
+            "shader-environment-open-execution",
+            "shader-environment-prepare-mutation",
+            "shader-environment-prepare-registration",
+            "shader-environment-registry-open",
+            "shader-environment-registry-scan",
+            "shader-environment-run-mutation",
             "shader-preview-launch-runtime",
             "shader-preview-read-observation",
             "shader-preview-stop-runtime",
@@ -566,6 +549,9 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
             "shader-workspace-cancel-discovery",
             "shader-workspace-choose-root",
             "shader-workspace-discover",
+            "shader-workspace-read-resume",
+            "shader-workspace-reopen-last",
+            "shader-workspace-save-resume",
         ]);
         // No raw arbitrary-path parameter exists on the document command
         // surface. The native service resolves only host-issued URI
@@ -625,5 +611,40 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
             expect(security.csp).toContain("connect-src");
         }
         expect(typeof security?.devCsp).toBe("string");
+    });
+});
+
+
+describe("remembered Workspace admission", () => {
+    it("asks the host to re-admit its own saved root without submitting a path", async () => {
+        const fake = fakeHost({ invoke: async () => HOST_WORKSPACE_ROOT });
+        expect(await createDesktopFileChannel(fake.host).reopenLastWorkspace()).toEqual(HOST_WORKSPACE_ROOT);
+        expect(fake.invokes).toEqual([{ command: "shader-workspace-reopen-last" }]);
+        expect(fake.reads).toEqual([]);
+    });
+    it("keeps a missing root distinct from a malformed host response", async () => {
+        expect(await createDesktopFileChannel(fakeHost({ invoke: async () => null }).host).reopenLastWorkspace()).toBeNull();
+        await expect(createDesktopFileChannel(fakeHost({ invoke: async () => ({ displayPath: "C:/old" }) }).host).reopenLastWorkspace()).rejects.toThrow();
+    });
+});
+
+
+describe("Workspace resume transport", () => {
+    const intent = { workspaceUri: HOST_WORKSPACE_ROOT.canonicalWorkspaceUri, documentUris: [], activeUri: null, previewUri: null, environmentId: null, buildTarget: "dx12" };
+    it("round trips only intent through narrow host commands", async () => {
+        const fake = fakeHost({ invoke: async command => command === "shader-workspace-read-resume" ? intent : undefined });
+        const channel = createDesktopFileChannel(fake.host);
+        expect(await channel.readWorkspaceResume(intent.workspaceUri)).toEqual(intent);
+        await channel.saveWorkspaceResume(intent);
+        expect(fake.invokes).toEqual([
+            { command: "shader-workspace-read-resume", args: { workspaceUri: intent.workspaceUri } },
+            { command: "shader-workspace-save-resume", args: { intent } },
+        ]);
+        expect(fake.reads).toEqual([]);
+    });
+    it("rejects another Workspace's response and unknown runtime state", async () => {
+        const channel = createDesktopFileChannel(fakeHost({ invoke: async () => ({ ...intent, workspaceUri: "file:///other/" }) }).host);
+        await expect(channel.readWorkspaceResume(intent.workspaceUri)).rejects.toThrow();
+        await expect(channel.saveWorkspaceResume({ ...intent, current: true } as typeof intent)).rejects.toThrow();
     });
 });

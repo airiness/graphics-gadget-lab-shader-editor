@@ -27,16 +27,16 @@
     --color-popover: var(--panel-hi);
     --color-popover-foreground: var(--text);
     --color-primary: var(--accent);
-    --color-primary-foreground: #0b1220;
+    --color-primary-foreground: var(--accent-ink);
     --color-secondary: var(--panel-hi);
     --color-secondary-foreground: var(--text);
     --color-muted: var(--panel-2);
     --color-muted-foreground: var(--muted);
     --color-accent: var(--accent);
-    --color-accent-foreground: #0b1220;
+    --color-accent-foreground: var(--accent-ink);
     --color-accent-soft: var(--accent-soft);
     --color-destructive: var(--error);
-    --color-destructive-foreground: #1a0b0b;
+    --color-destructive-foreground: var(--error-ink);
     --color-border: var(--border);
     --color-border-soft: var(--border-soft);
     --color-border-hi: var(--border-hi);
@@ -51,25 +51,28 @@
 
 :root {
     color-scheme: dark;
-    /* neutral scale */
-    --bg: #0f1319;
-    --panel: #151b23;
-    --panel-2: #1a222d;
-    --panel-hi: #202a37;
-    --border: #2b3442;
-    --border-soft: #232d3a;
-    --border-hi: #3b4859;
-    --text: #dde5ef;
-    --muted: #93a0b1;
-    /* ≈4.5:1 on --panel-2 (AA for small text) — raised from #66748a
-       (≈3.4:1) so meta text, hints, and diagnostic paths stay readable. */
-    --faint: #7b89a1;
-    /* semantics */
-    --accent: #5aa9ff;
-    --accent-soft: rgba(90, 169, 255, 0.14);
-    --ok: #6fd39a;
-    --warn: #e8b45a;
-    --error: #ff7a7a;
+    /* Graphite surfaces; Iris is interaction, never a success verdict. */
+    --bg: #141416;
+    --panel: #1b1b1f;
+    --panel-2: #222228;
+    --panel-hi: #2b2b33;
+    --border: #3c3c46;
+    --border-soft: #303038;
+    --border-hi: #555560;
+    --text: #ededf2;
+    --muted: #b3b3c0;
+    --faint: #9c9caa;
+    --accent: #b1a0ff;
+    --accent-ink: #191525;
+    --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+    --info: #80c8e8;
+    --ok: #83d7a2;
+    --warn: #efc174;
+    --error: #ff9292;
+    --error-ink: #281616;
+    --edge-muted: #747483;
+    --edge-mix: #494955;
+    --scrim: rgb(0 0 0 / 55%);
     /* data categories (port handles, dots, edge strokes) — a presentation
        mapping over the core catalog's type vocabulary */
     --kind-scalar: #d9a85f;
@@ -193,7 +196,7 @@ body {
        DOM order. The row list MUST stay in sync with the in-flow children:
        a missing row silently pushes the body into the 30px status row and
        gives the tab strip the flex space. */
-    grid-template-rows: 46px auto minmax(0, 1fr) 30px;
+    grid-template-rows: minmax(46px, auto) auto minmax(0, 1fr) 30px;
     height: 100%;
 }
 
@@ -230,6 +233,11 @@ body {
 .gglab-body {
     display: grid;
     grid-template-columns: 252px minmax(0, 1fr) 336px;
+    /* Row 1 = the three side/canvas panels (fills the remaining height);
+       row 2 = the bottom panel (sized by its own height, or the 30px
+       collapsed strip). The panel spans all three columns (see
+       .gglab-bottom-panel). */
+    grid-template-rows: minmax(0, 1fr) auto;
     min-height: 0;
 }
 
@@ -246,6 +254,145 @@ body {
 
 .gglab-body-library-collapsed.gglab-body-inspector-collapsed {
     grid-template-columns: 48px minmax(0, 1fr) 48px;
+}
+
+/* ---- bottom panel (presentation dock) --------------------------------------
+   A full-width dock at the foot of the body: it spans all three columns on
+   row 2 (the side/canvas/inspector stay on row 1). The panel is a pure
+   PRESENTATION container — its four views project their owners' structured
+   facts (Output / Build / Preview are chronological event projections,
+   Problems is a replaceable current diagnostic snapshot); the panel itself
+   owns only the visible view, the open state, and the drag-resize height. */
+.gglab-bottom-panel {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--panel);
+    border-top: 1px solid var(--border-soft);
+}
+
+/* The resize control: a visible 5px strip along the panel's top edge — an
+   accessible, focusable vertical slider (pointer-drag AND arrow keys). */
+.gglab-bottom-panel-resize {
+    flex: 0 0 5px;
+    cursor: row-resize;
+}
+
+.gglab-bottom-panel-resize:hover {
+    background: var(--accent-soft);
+}
+
+.gglab-bottom-panel-resize:focus-visible {
+    outline: none;
+    background: var(--accent-soft);
+    box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.gglab-bottom-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border-soft);
+}
+
+.gglab-bottom-panel-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.gglab-bottom-panel-tab {
+    flex: 0 0 auto;
+    padding: 4px 10px;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid transparent;
+    border-radius: var(--r-1);
+    cursor: pointer;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-heading);
+    white-space: nowrap;
+}
+
+.gglab-bottom-panel-tab:hover {
+    color: var(--text);
+    background: var(--panel-hi);
+    border-color: var(--border-soft);
+}
+
+.gglab-bottom-panel-tab.active {
+    color: var(--text);
+    background: var(--panel-hi);
+    border-color: var(--border-soft);
+    font-weight: var(--weight-heading);
+}
+
+.gglab-bottom-panel-actions {
+    display: flex;
+    gap: 2px;
+}
+
+.gglab-bottom-panel-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 10px 12px;
+}
+
+.gglab-bottom-panel-placeholder {
+    margin: 0;
+    color: var(--faint);
+    font-size: var(--type-body);
+    line-height: var(--lh-body);
+}
+
+/* Collapsed: a 30px full-width strip with a horizontal re-open affordance. */
+.gglab-bottom-panel-collapsed {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    height: 30px;
+    background: var(--panel);
+    border-top: 1px solid var(--border-soft);
+}
+
+.gglab-bottom-panel-reopen {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid transparent;
+    border-radius: var(--r-1);
+    cursor: pointer;
+    font-size: var(--type-meta);
+    font-weight: var(--weight-heading);
+}
+
+.gglab-bottom-panel-reopen:hover {
+    color: var(--text);
+    background: var(--panel-hi);
+    border-color: var(--border-soft);
+}
+
+/* While a drag-resize is in flight: the whole viewport reads as resize, and
+   text under the pointer is not selected. */
+body.gglab-resizing,
+body.gglab-resizing * {
+    cursor: row-resize !important;
+}
+
+body.gglab-resizing {
+    user-select: none;
 }
 
 /* Document tab strip — the open editing contexts (guidance #4/#5). Each tab
@@ -321,7 +468,7 @@ body {
 }
 
 .gglab-tab-preview {
-    color: var(--ok);
+    color: var(--accent);
     font-size: var(--type-meta);
 }
 
@@ -438,7 +585,7 @@ body {
 }
 
 .gglab-explorer-open {
-    color: var(--ok);
+    color: var(--accent);
 }
 
 .gglab-side {
@@ -866,50 +1013,6 @@ body {
 /* One responsibility per tab (design section 13, surface note). The tab
    carries the zone's LIVE STATE badge — the strip organizes, it never
    hides; a zoned-out zone still states itself on its label. */
-
-/* Two columns of state CARDS instead of one row of squeezed tabs: the
-   inspector is 336px wide, and an all-across row leaves too little per zone —
-   not enough for a zone name plus its live state badge. Two cards per
-   row give each zone the full state at its natural size; nothing is
-   abbreviated, nothing is clipped. */
-.gglab-inspector-tabs {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-    margin-bottom: 10px;
-}
-
-.gglab-inspector-tab {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    padding: 7px 4px;
-    background: transparent;
-    color: var(--muted);
-    border: 1px solid transparent;
-    border-radius: var(--r-1);
-    cursor: pointer;
-    font: inherit;
-    font-size: var(--type-meta);
-    font-weight: var(--weight-heading);
-    text-align: center;
-}
-
-.gglab-inspector-tab:hover {
-    color: var(--text);
-    background: var(--panel-hi);
-    border-color: var(--border-soft);
-}
-
-.gglab-inspector-tab.active {
-    color: var(--text);
-    background: var(--panel-hi);
-    border-color: var(--border-soft);
-    font-weight: 700;
-}
 
 /* ---- contextual node properties -------------------------------------------
    Selection is session state; values still enter the document only through
@@ -1390,47 +1493,47 @@ body {
        --gglab-edge-stroke: the wire's ONE color authority per kind,
        reused by every state (resting, the library's selected hook, and
        our own selected emphasis). */
-    --gglab-edge-glow: color-mix(in srgb, #56637a 55%, transparent);
-    --gglab-edge-stroke: #56637a;
+    --gglab-edge-glow: color-mix(in srgb, var(--edge-muted) 55%, transparent);
+    --gglab-edge-stroke: var(--edge-muted);
 }
 
 .react-flow__edge .react-flow__edge-path {
-    stroke: #56637a;
+    stroke: var(--edge-muted);
     stroke-width: 2;
 }
 
 .react-flow__edge.gglab-edge-kind-scalar {
     --gglab-edge-glow: color-mix(in srgb, var(--kind-scalar) 55%, transparent);
-    --gglab-edge-stroke: color-mix(in srgb, var(--kind-scalar) 70%, #3a4658);
+    --gglab-edge-stroke: color-mix(in srgb, var(--kind-scalar) 70%, var(--edge-mix));
 }
 
 .react-flow__edge.gglab-edge-kind-scalar .react-flow__edge-path {
     stroke: var(--kind-scalar);
-    stroke: color-mix(in srgb, var(--kind-scalar) 70%, #3a4658);
+    stroke: color-mix(in srgb, var(--kind-scalar) 70%, var(--edge-mix));
 }
 
 .react-flow__edge.gglab-edge-kind-vector {
     --gglab-edge-glow: color-mix(in srgb, var(--kind-vector) 55%, transparent);
-    --gglab-edge-stroke: color-mix(in srgb, var(--kind-vector) 70%, #3a4658);
+    --gglab-edge-stroke: color-mix(in srgb, var(--kind-vector) 70%, var(--edge-mix));
 }
 
 .react-flow__edge.gglab-edge-kind-vector .react-flow__edge-path {
     stroke: var(--kind-vector);
-    stroke: color-mix(in srgb, var(--kind-vector) 70%, #3a4658);
+    stroke: color-mix(in srgb, var(--kind-vector) 70%, var(--edge-mix));
 }
 
 .react-flow__edge.gglab-edge-kind-texture {
     --gglab-edge-glow: color-mix(in srgb, var(--kind-texture) 55%, transparent);
-    --gglab-edge-stroke: color-mix(in srgb, var(--kind-texture) 70%, #3a4658);
+    --gglab-edge-stroke: color-mix(in srgb, var(--kind-texture) 70%, var(--edge-mix));
 }
 
 .react-flow__edge.gglab-edge-kind-texture .react-flow__edge-path {
     stroke: var(--kind-texture);
-    stroke: color-mix(in srgb, var(--kind-texture) 70%, #3a4658);
+    stroke: color-mix(in srgb, var(--kind-texture) 70%, var(--edge-mix));
 }
 
 .react-flow__edge.gglab-edge-kind-generic .react-flow__edge-path {
-    stroke: #56637a;
+    stroke: var(--edge-muted);
 }
 
 /* Hover: same hue, slightly brighter (brightness cannot change the hue),
@@ -1443,7 +1546,7 @@ body {
 /* Selected: emphasis ONLY — the kind's own hue thickened + a soft
    same-hue glow. Semantic color is never overwritten by selection. */
 .react-flow__edge.gglab-edge-selected .react-flow__edge-path {
-    stroke: var(--gglab-edge-stroke, #56637a);
+    stroke: var(--gglab-edge-stroke, var(--edge-muted));
     stroke-width: 3;
     filter: drop-shadow(0 0 5px var(--gglab-edge-glow));
 }
@@ -1453,7 +1556,7 @@ body {
    rule so our per-kind color wins regardless of stylesheet order —
    one color authority per edge, in every state. */
 .react-flow__edge.gglab-edge.selected .react-flow__edge-path {
-    stroke: var(--gglab-edge-stroke, #56637a);
+    stroke: var(--gglab-edge-stroke, var(--edge-muted));
 }
 
 .react-flow__edge.gglab-edge-selected:hover .react-flow__edge-path {
@@ -1866,7 +1969,222 @@ button.gglab-diagnostics-item:hover {
     color: var(--muted);
 }
 
-.gglab-native-state-failed,
-.gglab-native-state-canceled {
+.gglab-native-state-failed { color: var(--error); }
+.gglab-native-state-canceled { color: var(--warn); }
+
+/* The Build / Preview panel views: one row per attempt — the identity head
+   (attempt sequence, the owner's own state, the composed request), the session
+   identity line, and the outcome facts carried by the row's record. The state
+   words render in the same badge language as the inspector's build state. */
+.gglab-bottom-view {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    height: 100%;
+    overflow-y: auto;
+}
+
+.gglab-bottom-view-empty {
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--type-body);
+}
+
+.gglab-bottom-view-rows {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.gglab-bottom-view-row {
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.gglab-bottom-view-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.gglab-bottom-view-identity {
+    color: var(--faint);
+    font-size: var(--type-meta);
+}
+
+.gglab-bottom-view-outcome {
+    margin: 0;
+    font-size: var(--type-body);
+}
+
+.gglab-bottom-view-row p {
+    margin: 0;
+    font-size: var(--type-meta);
+    color: var(--muted);
+}
+
+.gglab-view-state {
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+}
+
+.gglab-view-state-current,
+.gglab-view-state-last-good,
+.gglab-view-state-published {
+    color: var(--ok, var(--text));
+}
+
+.gglab-view-state-stale { color: var(--warn); }
+.gglab-view-state-in-flight,
+.gglab-view-state-pending { color: var(--info); }
+.gglab-view-state-failed { color: var(--error); }
+.gglab-view-state-canceled { color: var(--warn); }
+
+/* The Problems view: the replaceable current diagnostic snapshot. The
+   toolbar carries the whole-state count and the presentation-only Clear
+   action; each entry row keeps its severity, owner code, message, and
+   location authority as structured facts. */
+.gglab-bottom-view-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.gglab-bottom-view-count {
+    color: var(--muted);
+    font-size: var(--type-meta);
+}
+
+.gglab-bottom-view-clear {
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    background: transparent;
+    color: var(--text);
+    font-size: var(--type-meta);
+    padding: 3px 10px;
+    cursor: pointer;
+}
+
+.gglab-bottom-view-clear:hover:not(:disabled) {
+    border-color: var(--muted);
+}
+
+.gglab-bottom-view-clear:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.gglab-view-severity {
+    font-family: var(--font-mono);
+    font-size: var(--type-code);
+}
+
+.gglab-view-severity-error {
+    color: var(--error);
+}
+
+.gglab-view-severity-warning {
     color: var(--warn);
+}
+
+.gglab-view-severity-info {
+    color: var(--muted);
+}
+.gglab-environment-dialog {
+    width: min(760px, 90vw);
+    max-height: 85vh;
+    overflow: auto;
+    padding: 24px;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--border-hi);
+    border-radius: 8px;
+    overflow-wrap: anywhere;
+}
+.gglab-environment-dialog::backdrop { background: var(--scrim); }
+.gglab-environment-dialog fieldset { margin: 16px 0; padding: 12px; border: 1px solid var(--border-hi); }
+.gglab-environment-dialog p { margin: 12px 0; }
+.gglab-environment-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0; }
+
+/* Inline drafts sit below the sockets, so edge anchors retain their geometry. */
+.gglab-node-inline {
+    box-sizing: border-box;
+    overflow-y: auto;
+    padding: 6px 12px 10px;
+    border-top: 1px solid var(--border-soft);
+}
+.gglab-node-inline .gglab-node-property-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+}
+.gglab-node-inline .gglab-node-property-field { min-width: 0; }
+.gglab-node-inline .gglab-node-property-input { width: 100%; min-width: 0; height: 24px; }
+.gglab-node-inline .gglab-node-property-error { font-size: var(--type-meta); overflow-wrap: anywhere; }
+
+/* Float3 components share a vertical reading order on the card and Inspector. */
+.gglab-node-property-editor[data-value-type="float3"] .gglab-node-property-grid {
+    grid-template-columns: minmax(0, 1fr);
+}
+.gglab-node-property-editor[data-value-type="float3"] .gglab-node-property-field {
+    grid-template-columns: 16px minmax(0, 1fr);
+    align-items: center;
+}
+
+
+
+/* Global actions wrap independently of the horizontally scrollable document tabs. */
+.gglab-tabs { flex-wrap: wrap; }
+.gglab-tabs-list { flex: 1 1 100%; }
+.gglab-tabs-actions { flex-wrap: wrap; min-width: 0; }
+.gglab-target-control { display: flex; align-items: center; gap: 6px; font-size: var(--type-meta); color: var(--muted); }
+.gglab-target-control select { width: auto; max-width: 220px; }
+.gglab-workbench-dialog {
+    width: min(780px, 92vw);
+    max-height: 86vh;
+    margin: auto;
+    overflow: auto;
+    padding: 20px;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--border-hi);
+    border-radius: var(--r-2);
+    overflow-wrap: anywhere;
+}
+.gglab-workbench-dialog::backdrop { background: var(--scrim); }
+.gglab-workbench-dialog-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.gglab-workbench-dialog-heading h2 { font-size: var(--type-body); font-weight: var(--weight-heading); }
+.gglab-engineering-details { border-top: 1px solid var(--border-soft); margin-top: 12px; }
+.gglab-engineering-details > summary { cursor: pointer; padding: 10px 0; font-weight: var(--weight-heading); }
+.gglab-engineering-details .gglab-panel { max-width: 960px; }
+.gglab-selection-problem { background: none; border: 0; padding: 0; color: var(--text); text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+
+
+/* Status categories are independent of focus/selection and graph type hues. */
+.gglab-note-info > .mono:first-child,
+.gglab-view-severity-info { color: var(--info); }
+.gglab-header { flex-wrap: wrap; padding-block: 8px; }
+.gglab-header-group { flex-wrap: wrap; }
+.gglab-fact { flex-wrap: wrap; }
+.gglab-fact dd, .gglab-bottom-view-row, .gglab-status-item { overflow-wrap: anywhere; min-width: 0; }
+.gglab-bottom-panel-body > .gglab-bottom-view { height: auto; overflow: visible; }
+.gglab-statusbar { overflow-x: auto; }
+.gglab-status-group { flex-shrink: 0; }
+@media (max-width: 1100px) {
+    .gglab-body { grid-template-columns: 212px minmax(0, 1fr) 280px; }
+    .gglab-body-library-collapsed { grid-template-columns: 48px minmax(0, 1fr) 280px; }
+    .gglab-body-inspector-collapsed { grid-template-columns: 212px minmax(0, 1fr) 48px; }
+    .gglab-body-library-collapsed.gglab-body-inspector-collapsed { grid-template-columns: 48px minmax(0, 1fr) 48px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0s !important; animation-duration: 0s !important; }
 }

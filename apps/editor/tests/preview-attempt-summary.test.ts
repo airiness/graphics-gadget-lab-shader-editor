@@ -3,7 +3,7 @@ import type { PreviewAttemptOutcome } from "@gglab/shader-toolchain-client";
 import { describePreviewAttemptOutcome } from "../src/preview-attempt-summary.js";
 
 describe("Preview attempt summaries", () => {
-    it("shows the tool failure status, exit code, and every diagnostic", () => {
+    it("shows the tool failure status and exit code — and does NOT flatten the diagnostics into the headline", () => {
         const outcome: PreviewAttemptOutcome = {
             kind: "failed",
             envelope: {
@@ -19,9 +19,13 @@ describe("Preview attempt summaries", () => {
             },
         };
 
-        expect(describePreviewAttemptOutcome(4, outcome)).toBe(
-            `Preview attempt #4 failed — compile-failed (exit 1): DXC rejected the generated program. | [source ${"ab".repeat(32)}] unknown identifier`,
-        );
+        // THE NO-FLATTENING PIN: the headline carries the status and
+        // exit code only. The structured diagnostics render as their own
+        // rows in the display surface (each a fact with its location
+        // identity), never joined into this string.
+        expect(describePreviewAttemptOutcome(4, outcome)).toBe("Preview attempt #4 failed — compile-failed (exit 1).");
+        expect(describePreviewAttemptOutcome(4, outcome)).not.toContain("DXC");
+        expect(describePreviewAttemptOutcome(4, outcome)).not.toContain("unknown identifier");
     });
 
     it("shows a rejected machine-document reason and detail", () => {

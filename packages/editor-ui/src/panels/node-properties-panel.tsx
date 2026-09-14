@@ -3,12 +3,7 @@ import { getNodeDefinition, type GraphNode, type GraphType, type JsonValue } fro
 import type { ConstantValue } from "../session/authoring-operations.js";
 import { Input } from "../components/ui/input.js";
 
-const CONSTANT_COMPONENT_LABELS: Readonly<Partial<Record<GraphType, readonly string[]>>> = {
-    float: ["Value"],
-    float2: ["X", "Y"],
-    float3: ["X", "Y", "Z"],
-    float4: ["X", "Y", "Z", "W"],
-};
+import { CONSTANT_COMPONENT_LABELS, inlineConstantHeight } from "./constant-value-presentation.js";
 
 export interface NodePropertiesPanelProps {
     readonly node: GraphNode | null;
@@ -34,6 +29,7 @@ interface ConstantValueEditorProps {
     readonly valueType: GraphType;
     readonly componentLabels: readonly string[];
     readonly onCommit: NodePropertiesPanelProps["onConstantValueCommit"];
+    readonly compact?: boolean;
 }
 
 function ConstantValueEditor(props: ConstantValueEditorProps) {
@@ -57,6 +53,7 @@ function ConstantValueEditor(props: ConstantValueEditorProps) {
     };
 
     const commit = (): void => {
+        if (draft.every((component, index) => component === initialDraft[index])) return;
         const parsed = draft.map((component) =>
             component.trim() === "" ? Number.NaN : Number(component),
         );
@@ -75,15 +72,22 @@ function ConstantValueEditor(props: ConstantValueEditorProps) {
     const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
         if (event.key === "Enter") {
             event.preventDefault();
+            event.stopPropagation();
             commit();
         } else if (event.key === "Escape") {
             event.preventDefault();
+            event.stopPropagation();
             reset();
         }
     };
 
     return (
-        <div className="gglab-node-property-editor">
+        <div className={props.compact ? "gglab-node-property-editor gglab-node-inline nodrag nopan nowheel" : "gglab-node-property-editor"}
+            data-value-type={props.valueType}
+            style={props.compact ? { height: inlineConstantHeight(props.node.type) } : undefined}
+            onPointerDown={props.compact ? event => event.stopPropagation() : undefined}
+            onClick={props.compact ? event => event.stopPropagation() : undefined}
+            onDoubleClick={props.compact ? event => event.stopPropagation() : undefined}>
             <div className="gglab-node-property-grid">
                 {props.componentLabels.map((label, index) => (
                     <label className="gglab-node-property-field" key={label}>
@@ -105,9 +109,9 @@ function ConstantValueEditor(props: ConstantValueEditorProps) {
                     </label>
                 ))}
             </div>
-            <p className="gglab-node-property-hint">
+            {!props.compact && <p className="gglab-node-property-hint">
                 {props.valueType} constant · Enter or leave the field to commit · Esc restores the current value
-            </p>
+            </p>}
             {error !== null && (
                 <p className="gglab-node-property-error" role="alert">
                     {error}
@@ -175,4 +179,13 @@ export function NodePropertiesPanel(props: NodePropertiesPanelProps) {
             )}
         </section>
     );
+}
+
+/** A compact projection of the same constant draft editor used by the Inspector. */
+export function InlineConstantEditor(props: { readonly node: GraphNode; readonly onCommit: NodePropertiesPanelProps["onConstantValueCommit"] }) {
+    const definition = getNodeDefinition(props.node.type);
+    const property = definition?.category === "constant" ? definition.properties.find(p => p.name === "value") : undefined;
+    const labels = property === undefined ? undefined : CONSTANT_COMPONENT_LABELS[property.type];
+    if (property === undefined || labels === undefined) return null;
+    return <ConstantValueEditor node={props.node} valueType={property.type} componentLabels={labels} onCommit={props.onCommit} compact />;
 }

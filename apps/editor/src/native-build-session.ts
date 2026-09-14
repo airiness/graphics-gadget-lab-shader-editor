@@ -29,6 +29,7 @@ import {
     type BuildLine,
     type BuildLineReport,
 } from "@gglab/shader-toolchain-client";
+import { isDocumentEvidenceOrigin, type DocumentEvidenceOrigin } from "./document-evidence.js";
 
 /** One attempt that was issued and has not settled yet: its identity
  *  and the intent it belongs to (fixed at issue — the intent is the
@@ -41,6 +42,7 @@ export interface InFlightBuild {
 
 /** The session's build-line state. */
 export interface NativeBuildSession {
+    readonly origins?: ReadonlyMap<BuildId["sequence"], DocumentEvidenceOrigin>;
     /** The ordered line of SETTLED attempts (the client's value). */
     readonly line: BuildLine;
     /** The attempts issued and not yet settled (the `in flight` set). */
@@ -68,12 +70,19 @@ function hasBuildId(line: BuildLine, buildId: BuildId): boolean {
  * attempt — issuing a duplicate identity is a programming error, not a
  * state.
  */
-export function sessionIssue(session: NativeBuildSession, buildId: BuildId, intent: BuildIntent): NativeBuildSession {
+export function sessionIssue(session: NativeBuildSession, buildId: BuildId, intent: BuildIntent, origin: DocumentEvidenceOrigin | null = null): NativeBuildSession {
     if (hasBuildId(session.line, buildId) || findInFlight(session, buildId) !== undefined) {
         throw new Error(`build id ${buildId.sequence} already names an attempt; one BuildId is one attempt`);
     }
     const issued: InFlightBuild = { buildId, intent };
+    if (origin !== null && !isDocumentEvidenceOrigin(origin)) throw new Error("Invalid document evidence origin");
+    if (origin !== null && origin.sourceMap.generatedSourceIdentity !== intent.sourceIdentity) {
+        throw new Error("Build origin must name the admitted generated source");
+    }
+    const origins = new Map(session.origins);
+    if (origin !== null) origins.set(buildId.sequence, origin);
     return {
+        origins,
         line: session.line,
         inFlight: [...session.inFlight, issued],
         lastIssued: issued,
@@ -99,7 +108,7 @@ export function sessionSettle(session: NativeBuildSession, buildId: BuildId, out
     // as stale (or failed) evidence. Moving the anchor back to the older
     // attempt would be the "slow old completion becomes current" bug this
     // store exists to prevent (§11). Only a new issue ever moves it.
-    return { line, inFlight, lastIssued: session.lastIssued };
+    return { ...session, line, inFlight, lastIssued: session.lastIssued };
 }
 
 /**

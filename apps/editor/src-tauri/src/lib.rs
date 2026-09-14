@@ -1,9 +1,10 @@
 //! GGLab Shader Graph Editor — desktop shell and bounded native services.
 //!
-//! Three bounded service groups in one crate (see the crate-level note in
+//! Bounded service groups in one crate (see the crate-level note in
 //! `Cargo.toml`): the thin shell and scoped auxiliary-file plugins, the
 //! Workspace/revisioned-document boundary, and the six tool commands plus
-//! compiler-free observation and attached Runtime lifecycle commands. The
+//! compiler-free observation and attached Runtime lifecycle commands, plus
+//! Environment selection, filesystem observation, registry reads and guarded discovery. The
 //! thin layer of commands below owns
 //! no logic of its own: it takes the client's values in, hands them to
 //! the service, and returns the service's values back — the service is
@@ -21,12 +22,21 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod application_preferences;
 mod document_io;
+mod environment_io;
+mod environment_process_job;
+mod environment_mutation;
+mod environment_storage;
+mod environment_registration;
+mod environment_execution;
 mod shader_tool;
 mod workspace_io;
 
 use std::sync::Arc;
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_fs::FsExt;
+use tauri::Manager;
 
 use document_io::{
     DocumentFileService, DocumentIoError, DocumentSaveOutcome, DocumentSnapshot,
@@ -36,6 +46,12 @@ use workspace_io::{
     WorkspaceDiscoveryCancelOutcome, WorkspaceDiscoveryId, WorkspaceDiscoveryRequest,
     WorkspaceDiscoverySettlement, WorkspaceFileService, WorkspaceIoError, WorkspaceRoot,
 };
+
+struct EnvironmentMutationShared(Arc<environment_mutation::MutationService>);
+struct EnvironmentRegistrationShared(Arc<environment_registration::RegistrationService>);
+struct EnvironmentShared(Arc<environment_io::EnvironmentService>);
+struct EnvironmentStorageShared(Arc<environment_storage::EnvironmentStorageService>);
+struct EnvironmentExecutionShared(Arc<environment_execution::EnvironmentExecutionService>);
 
 struct ServiceShared(Arc<ShaderToolService>);
 struct DocumentFileShared(Arc<DocumentFileService>);
@@ -47,6 +63,84 @@ impl ServiceShared {
     }
 }
 
+fn preferences(app: &tauri::AppHandle) -> Result<application_preferences::PreferencesStore, String> {
+    Ok(application_preferences::PreferencesStore::new(app.path().app_data_dir().map_err(|e| e.to_string())?))
+}
+
+fn history_dialog(app: &tauri::AppHandle, kind: application_preferences::DialogKind) -> Result<tauri_plugin_dialog::FileDialogBuilder<tauri::Wry>, String> {
+    let dialog = app.dialog().file();
+    Ok(match preferences(app)?.directory(kind)? { Some(path) => dialog.set_directory(path), None => dialog })
+}
+
+fn remember_directory(app: &tauri::AppHandle, kind: application_preferences::DialogKind, path: &std::path::Path) -> Result<(), String> {
+    preferences(app)?.remember(kind, path)
+}
+
+/// A saved location is only intent. Re-admit it through the normal Workspace
+/// host before returning a fresh capability; no caller-supplied path is accepted.
+#[tauri::command(rename = "shader-workspace-reopen-last")]
+async fn shader_workspace_reopen_last(app: tauri::AppHandle, state: tauri::State<'_, WorkspaceFileShared>) -> Result<Option<WorkspaceRoot>, WorkspaceIoError> {
+    let service = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = preferences(&app).and_then(|p| p.directory(application_preferences::DialogKind::Workspace))
+            .map_err(|detail| WorkspaceIoError::HostTask { detail })?;
+        path.map(|path| service.register_selected_root(path)).transpose()
+    }).await.map_err(|e| WorkspaceIoError::HostTask { detail: e.to_string() })?
+}
+
+#[tauri::command(rename = "shader-editor-read-layout")]
+async fn shader_editor_read_layout(app: tauri::AppHandle) -> Result<Option<application_preferences::LayoutPreferences>, String> {
+    tauri::async_runtime::spawn_blocking(move || preferences(&app)?.layout()).await.map_err(|e| e.to_string())?
+}
+#[tauri::command(rename = "shader-editor-save-layout")]
+async fn shader_editor_save_layout(app: tauri::AppHandle, layout: application_preferences::LayoutPreferences) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || preferences(&app)?.save_layout(layout)).await.map_err(|e| e.to_string())?
+}
+
+#[derive(Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum AuxiliarySelection { Descriptor, ToolExecutable, BuildOutput }
+
+/// Selection purpose is allowlisted; dialog options, remembered paths and scope
+/// admission belong to the host. Picking an executable never launches it.
+#[tauri::command(rename = "shader-editor-pick-auxiliary")]
+async fn shader_editor_pick_auxiliary(app: tauri::AppHandle, kind: AuxiliarySelection) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use application_preferences::DialogKind;
+        let history = match kind {
+            AuxiliarySelection::Descriptor => DialogKind::DescriptorOverride,
+            AuxiliarySelection::ToolExecutable => DialogKind::ToolExecutable,
+            AuxiliarySelection::BuildOutput => DialogKind::BuildOutput,
+        };
+        let dialog = history_dialog(&app, history)?;
+        let selected = match kind {
+            AuxiliarySelection::Descriptor => dialog.set_title("Open surface profile descriptor").add_filter("Surface profile descriptor", &["json"]).blocking_pick_file(),
+            AuxiliarySelection::ToolExecutable => dialog.set_title("Select the gglab-shaderc executable").add_filter("Executables", &["exe"]).add_filter("All files", &["*"]).blocking_pick_file(),
+            AuxiliarySelection::BuildOutput => dialog.set_title("Select the sibling GGLab build-output directory").blocking_pick_folder(),
+        };
+        let Some(selected) = selected else { return Ok(None); };
+        let path = selected.into_path().map_err(|e| e.to_string())?;
+        let directory = if matches!(kind, AuxiliarySelection::BuildOutput) { path.as_path() }
+            else { path.parent().ok_or("Selected file has no parent directory")? };
+        remember_directory(&app, history, directory)?;
+        // Only the chosen descriptor may be read through the scoped auxiliary
+        // read plugin. Tool/deployment selections grant no recursive file access.
+        if matches!(kind, AuxiliarySelection::Descriptor) { app.fs_scope().allow_file(&path).map_err(|e| e.to_string())?; }
+        Ok(Some(path.to_str().ok_or("Selected path is not UTF-8")?.to_owned()))
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command(rename = "shader-workspace-read-resume")]
+async fn shader_workspace_read_resume(app: tauri::AppHandle, state: tauri::State<'_, WorkspaceFileShared>, workspace_uri: String) -> Result<Option<application_preferences::WorkspaceResume>, String> {
+    let service = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || { service.validate_resume_root(&workspace_uri)?; preferences(&app)?.workspace(&workspace_uri) }).await.map_err(|e| e.to_string())?
+}
+#[tauri::command(rename = "shader-workspace-save-resume")]
+async fn shader_workspace_save_resume(app: tauri::AppHandle, state: tauri::State<'_, WorkspaceFileShared>, intent: application_preferences::WorkspaceResume) -> Result<(), String> {
+    let service = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || preferences(&app)?.save_workspace(service.resume_intent(intent)?)).await.map_err(|e| e.to_string())?
+}
+
 /// Host-owned Open dialog followed by one canonical, revisioned snapshot.
 /// No caller-supplied path crosses this command boundary.
 #[tauri::command(rename = "shader-document-open")]
@@ -56,9 +150,8 @@ async fn shader_document_open(
 ) -> Result<Option<DocumentSnapshot>, DocumentIoError> {
     let service = Arc::clone(&state.0);
     tauri::async_runtime::spawn_blocking(move || {
-        let selected = app
-            .dialog()
-            .file()
+        let selected = history_dialog(&app, application_preferences::DialogKind::Graph)
+            .map_err(|detail| DocumentIoError::HostTask { detail })?
             .set_title("Open shader graph document")
             .add_filter("Shader graph document", &["shadergraph", "json"])
             .blocking_pick_file();
@@ -68,6 +161,8 @@ async fn shader_document_open(
         let path = selected.into_path().map_err(|error| DocumentIoError::InvalidRequest {
             detail: format!("the selected document is not a local filesystem path: {error}"),
         })?;
+        remember_directory(&app, application_preferences::DialogKind::Graph, path.parent().ok_or_else(|| DocumentIoError::InvalidRequest { detail: "Selected graph has no parent directory".into() })?)
+            .map_err(|detail| DocumentIoError::HostTask { detail })?;
         service.open_selected_path(path).map(Some)
     })
     .await
@@ -124,9 +219,8 @@ async fn shader_document_save_as(
                 detail: "defaultName must be one file name, not a path".to_string(),
             });
         }
-        let selected = app
-            .dialog()
-            .file()
+        let selected = history_dialog(&app, application_preferences::DialogKind::Graph)
+            .map_err(|detail| DocumentIoError::HostTask { detail })?
             .set_title("Save shader graph document")
             .set_file_name(request.default_name)
             .add_filter("Shader graph document", &["shadergraph", "json"])
@@ -137,6 +231,8 @@ async fn shader_document_save_as(
         let path = selected.into_path().map_err(|error| DocumentIoError::InvalidRequest {
             detail: format!("the selected destination is not a local filesystem path: {error}"),
         })?;
+        remember_directory(&app, application_preferences::DialogKind::Graph, path.parent().ok_or_else(|| DocumentIoError::InvalidRequest { detail: "Save destination has no parent directory".into() })?)
+            .map_err(|detail| DocumentIoError::HostTask { detail })?;
         service.save_as_selected_path(path, &request.text)
     })
     .await
@@ -154,9 +250,8 @@ async fn shader_workspace_choose_root(
 ) -> Result<Option<WorkspaceRoot>, WorkspaceIoError> {
     let service = Arc::clone(&state.0);
     tauri::async_runtime::spawn_blocking(move || {
-        let selected = app
-            .dialog()
-            .file()
+        let selected = history_dialog(&app, application_preferences::DialogKind::Workspace)
+            .map_err(|detail| WorkspaceIoError::HostTask { detail })?
             .set_title("Open Shader Graph Workspace")
             .blocking_pick_folder();
         let Some(selected) = selected else {
@@ -167,7 +262,10 @@ async fn shader_workspace_choose_root(
             .map_err(|error| WorkspaceIoError::InvalidRequest {
                 detail: format!("the selected Workspace is not a local directory: {error}"),
             })?;
-        service.register_selected_root(path).map(Some)
+        let root = service.register_selected_root(path.clone())?;
+        remember_directory(&app, application_preferences::DialogKind::Workspace, &path)
+            .map_err(|detail| WorkspaceIoError::HostTask { detail })?;
+        Ok(Some(root))
     })
     .await
     .map_err(|error| WorkspaceIoError::HostTask {
@@ -386,6 +484,140 @@ fn shader_preview_stop_runtime(
     Ok(state.service().stop_preview_runtime(runtime_id))
 }
 
+#[tauri::command(rename = "shader-environment-prepare-mutation")]
+async fn shader_environment_prepare_mutation(app: tauri::AppHandle, state: tauri::State<'_, EnvironmentMutationShared>, producer: tauri::State<'_, EnvironmentShared>, storage: tauri::State<'_, EnvironmentStorageShared>, request: environment_mutation::Prepare) -> Result<environment_mutation::Intent, environment_io::EnvironmentHostError> {
+    let root=app.path().app_data_dir().map_err(|e|environment_io::error("io-error",e))?;
+    let service=state.0.clone(); let producer=producer.0.clone(); let storage=storage.0.clone();
+    tauri::async_runtime::spawn_blocking(move ||service.prepare(&root,&producer,&storage,request)).await.map_err(|e|environment_io::error("host-task-failed",e))?
+}
+#[tauri::command(rename = "shader-environment-run-mutation")]
+async fn shader_environment_run_mutation(app: tauri::AppHandle, state: tauri::State<'_, EnvironmentMutationShared>, producer: tauri::State<'_, EnvironmentShared>, repository_id:String, operation_id:String) -> Result<serde_json::Value, environment_io::EnvironmentHostError> {
+    let root=app.path().app_data_dir().map_err(|e|environment_io::error("io-error",e))?; let service=state.0.clone(); let producer=producer.0.clone();
+    tauri::async_runtime::spawn_blocking(move ||service.run(&root,&producer,&repository_id,&operation_id)).await.map_err(|e|environment_io::error("host-task-failed",e))?
+}
+#[tauri::command(rename = "shader-environment-inspect-mutation")]
+async fn shader_environment_inspect_mutation(app: tauri::AppHandle, state: tauri::State<'_, EnvironmentMutationShared>, storage: tauri::State<'_, EnvironmentStorageShared>, operation_id:String) -> Result<environment_mutation::Inspection, environment_io::EnvironmentHostError> {
+    let root=app.path().app_data_dir().map_err(|e|environment_io::error("io-error",e))?; let service=state.0.clone(); let storage=storage.0.clone();
+    tauri::async_runtime::spawn_blocking(move ||service.inspect(&root,&storage,&operation_id)).await.map_err(|e|environment_io::error("host-task-failed",e))?
+}
+#[tauri::command(rename = "shader-environment-list-mutations")]
+async fn shader_environment_list_mutations(app: tauri::AppHandle, state: tauri::State<'_, EnvironmentMutationShared>) -> Result<Vec<String>, environment_io::EnvironmentHostError> {
+    let root=app.path().app_data_dir().map_err(|e|environment_io::error("io-error",e))?; let service=state.0.clone();
+    tauri::async_runtime::spawn_blocking(move ||service.list(&root)).await.map_err(|e|environment_io::error("host-task-failed",e))?
+}
+#[tauri::command(rename = "shader-environment-cancel-mutation")]
+fn shader_environment_cancel_mutation(state: tauri::State<'_, EnvironmentMutationShared>, operation_id:String) -> Result<bool, environment_io::EnvironmentHostError> { state.0.cancel(&operation_id) }
+
+#[tauri::command(rename = "shader-environment-prepare-registration")]
+async fn shader_environment_prepare_registration(state: tauri::State<'_, EnvironmentRegistrationShared>, storage: tauri::State<'_, EnvironmentStorageShared>, environment_directory_id:String, state_directory_id:String) -> Result<environment_registration::Admission, environment_io::EnvironmentHostError> {
+    let service=state.0.clone(); let storage=storage.0.clone();
+    tauri::async_runtime::spawn_blocking(move || service.prepare(&storage,&environment_directory_id,&state_directory_id)).await.map_err(|e|environment_io::error("host-task-failed",e))?
+}
+#[tauri::command(rename = "shader-environment-commit-registration")]
+async fn shader_environment_commit_registration(app:tauri::AppHandle, state:tauri::State<'_,EnvironmentRegistrationShared>, storage:tauri::State<'_,EnvironmentStorageShared>, registration_id:String) -> Result<environment_registration::Settlement,environment_io::EnvironmentHostError> {
+    let root=app.path().app_data_dir().map_err(|e|environment_io::error("io-error",e))?.join("environment-registry");
+    let service=state.0.clone(); let storage=storage.0.clone();
+    tauri::async_runtime::spawn_blocking(move ||service.commit(&storage,&environment_storage::RegistryStorage::new(root)?,&registration_id)).await.map_err(|e|environment_io::error("host-task-failed",e))?
+}
+#[tauri::command(rename = "shader-environment-discard-registration")]
+fn shader_environment_discard_registration(state:tauri::State<'_,EnvironmentRegistrationShared>,registration_id:String) -> Result<(),environment_io::EnvironmentHostError> { state.0.discard(&registration_id) }
+
+/// Selection is the only path admission surface; subsequent calls carry opaque IDs.
+#[tauri::command(rename = "shader-environment-open-execution")]
+async fn shader_environment_open_execution(
+    state: tauri::State<'_, EnvironmentExecutionShared>, storage: tauri::State<'_, EnvironmentStorageShared>, tools: tauri::State<'_, ServiceShared>,
+    environment_directory_id: String, state_directory_id: String,
+) -> Result<environment_execution::Admission, environment_io::EnvironmentHostError> {
+    let service = state.0.clone(); let storage = storage.0.clone(); let tools = tools.0.clone();
+    tauri::async_runtime::spawn_blocking(move || service.open(&storage, &tools, &environment_directory_id, &state_directory_id)).await.map_err(|e| environment_io::error("host-task-failed", e))?
+}
+#[tauri::command(rename = "shader-environment-execute")]
+async fn shader_environment_execute(state: tauri::State<'_, EnvironmentExecutionShared>, execution_id: String, operation: environment_execution::Operation) -> Result<serde_json::Value, environment_io::EnvironmentHostError> {
+    let service = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || service.execute(&execution_id, operation)).await.map_err(|e| environment_io::error("host-task-failed", e))?
+}
+#[tauri::command(rename = "shader-environment-cancel-execution")]
+fn shader_environment_cancel_execution(state: tauri::State<'_, EnvironmentExecutionShared>, execution_id: String) -> Result<(), environment_io::EnvironmentHostError> { state.0.cancel(&execution_id) }
+#[tauri::command(rename = "shader-environment-close-execution")]
+async fn shader_environment_close_execution(state: tauri::State<'_, EnvironmentExecutionShared>, execution_id: String) -> Result<(), environment_io::EnvironmentHostError> {
+    let service = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || service.close(&execution_id)).await.map_err(|e| environment_io::error("host-task-failed", e))?
+}
+#[tauri::command(rename = "shader-environment-choose-directory")]
+async fn shader_environment_choose_directory(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EnvironmentStorageShared>,
+    kind: environment_storage::DirectoryKind,
+) -> Result<Option<environment_storage::DirectoryHandle>, environment_io::EnvironmentHostError> {
+    let service = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let history = match kind { environment_storage::DirectoryKind::Environment => application_preferences::DialogKind::PublishedEnvironment, environment_storage::DirectoryKind::State => application_preferences::DialogKind::WritableState };
+        let Some(selected) = history_dialog(&app, history).map_err(|e| environment_io::error("preferences-error", e))?.blocking_pick_folder() else { return Ok(None); };
+        let path = selected.into_path().map_err(|e| environment_io::error("invalid-path", e))?;
+        let selected = service.select(&path, kind)?;
+        remember_directory(&app, history, &path).map_err(|e| environment_io::error("preferences-error", e))?;
+        Ok(Some(selected))
+    }).await.map_err(|e| environment_io::error("host-task-failed", e))?
+}
+#[tauri::command(rename = "shader-environment-observe-directory")]
+async fn shader_environment_observe_directory(
+    state: tauri::State<'_, EnvironmentStorageShared>, directory_id: String,
+) -> Result<environment_storage::DirectoryObservation, environment_io::EnvironmentHostError> {
+    let service = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || service.observe(&directory_id))
+        .await.map_err(|e| environment_io::error("host-task-failed", e))?
+}
+#[tauri::command(rename = "shader-environment-registry-scan")]
+async fn shader_environment_registry_scan(app: tauri::AppHandle) -> Result<environment_storage::RegistryScan, environment_io::EnvironmentHostError> {
+    let root = app.path().app_data_dir().map_err(|e| environment_io::error("io-error", e))?.join("environment-registry");
+    tauri::async_runtime::spawn_blocking(move || environment_storage::RegistryStorage::new(root)?.scan())
+        .await.map_err(|e| environment_io::error("host-task-failed", e))?
+}
+#[tauri::command(rename = "shader-environment-registry-open")]
+async fn shader_environment_registry_open(
+    app: tauri::AppHandle, state: tauri::State<'_, EnvironmentStorageShared>, key: String,
+) -> Result<environment_storage::RecoverySelection, environment_io::EnvironmentHostError> {
+    let root = app.path().app_data_dir().map_err(|e| environment_io::error("io-error", e))?.join("environment-registry");
+    let service = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || service.open_registration(&environment_storage::RegistryStorage::new(root)?, &key))
+        .await.map_err(|e| environment_io::error("host-task-failed", e))?
+}
+#[tauri::command(rename = "shader-environment-choose-repository")]
+async fn shader_environment_choose_repository(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EnvironmentShared>,
+) -> Result<Option<environment_io::EnvironmentRepository>, environment_io::EnvironmentHostError> {
+    let service = Arc::clone(&state.0);
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(selected) = history_dialog(&app, application_preferences::DialogKind::EnvironmentSource).map_err(|e| environment_io::error("preferences-error", e))?.set_title("Select GGLab source repository").blocking_pick_folder() else { return Ok(None); };
+        let path = selected.into_path().map_err(|e| environment_io::EnvironmentHostError { code: "invalid-path".into(), message: e.to_string(), data_path: "$".into() })?;
+        let repository = service.register_selected_repository(path.clone())?;
+        remember_directory(&app, application_preferences::DialogKind::EnvironmentSource, &path).map_err(|e| environment_io::error("preferences-error", e))?;
+        Ok(Some(repository))
+    }).await.map_err(|e| environment_io::EnvironmentHostError { code: "host-task-failed".into(), message: e.to_string(), data_path: "$".into() })?
+}
+#[tauri::command(rename = "shader-environment-discover")]
+fn shader_environment_discover(
+    state: tauri::State<'_, EnvironmentShared>,
+    repository_id: String,
+    channel: tauri::ipc::Channel<environment_io::EnvironmentDiscoverySettlement>,
+) -> Result<String, environment_io::EnvironmentHostError> {
+    let job = state.0.discover(&repository_id)?;
+    let id = job.id.clone();
+    std::thread::spawn(move || {
+        let result = job.settle.join().unwrap_or_else(|_| environment_io::EnvironmentDiscoverySettlement::Failed {
+            discovery_id: job.id, repository_id,
+            error: environment_io::EnvironmentHostError { code: "host-task-failed".into(), message: "Discovery worker ended unexpectedly".into(), data_path: "$".into() },
+        });
+        let _ = channel.send(result);
+    });
+    Ok(id)
+}
+#[tauri::command(rename = "shader-environment-cancel-discovery")]
+fn shader_environment_cancel_discovery(
+    state: tauri::State<'_, EnvironmentShared>, discovery_id: String,
+) -> Result<bool, environment_io::EnvironmentHostError> { state.0.cancel(&discovery_id) }
+
 /// The boundary's public surface: six tool operations plus compiler-free
 /// observation and attached Runtime lifecycle capabilities. This is the
 /// host-side contract that the toolchain client declares and tests with its
@@ -417,14 +649,44 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(ServiceShared(Arc::new(ShaderToolService::production())))
+        .manage(EnvironmentMutationShared(Arc::new(environment_mutation::MutationService::default())))
+        .manage(EnvironmentRegistrationShared(Arc::new(environment_registration::RegistrationService::default())))
+        .manage(EnvironmentShared(Arc::new(environment_io::EnvironmentService::new())))
+        .manage(EnvironmentStorageShared(Arc::new(environment_storage::EnvironmentStorageService::default())))
+        .manage(EnvironmentExecutionShared(Arc::new(environment_execution::EnvironmentExecutionService::default())))
         .manage(DocumentFileShared(document_files))
         .manage(WorkspaceFileShared(workspace_files))
         .invoke_handler(tauri::generate_handler![
+            shader_environment_prepare_mutation,
+            shader_environment_run_mutation,
+            shader_environment_inspect_mutation,
+            shader_environment_list_mutations,
+            shader_environment_cancel_mutation,
+            shader_environment_prepare_registration,
+            shader_environment_commit_registration,
+            shader_environment_discard_registration,
+            shader_environment_open_execution,
+            shader_environment_execute,
+            shader_environment_cancel_execution,
+            shader_environment_close_execution,
+            shader_environment_choose_directory,
+            shader_environment_observe_directory,
+            shader_environment_registry_scan,
+            shader_environment_registry_open,
+            shader_environment_choose_repository,
+            shader_environment_discover,
+            shader_environment_cancel_discovery,
             shader_document_open,
             shader_document_read_snapshot,
             shader_document_save,
             shader_document_save_as,
             shader_workspace_choose_root,
+            shader_workspace_reopen_last,
+            shader_workspace_read_resume,
+            shader_workspace_save_resume,
+            shader_editor_pick_auxiliary,
+            shader_editor_read_layout,
+            shader_editor_save_layout,
             shader_workspace_discover,
             shader_workspace_cancel_discovery,
             shader_tool_discover,

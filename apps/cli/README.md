@@ -37,10 +37,38 @@ commands:
       profile line, texture-signature contract presence, sampling posture,
       deferred sets, tool identity).
 
+  edit <document> --commands <commands.json> [--descriptor <descriptor.json>]
+      Apply the core's atomic edit batch and return canonical documentText.
+      No input files are modified. A descriptor is required for set-profile.
+
+  edit-commands
+      Serialize the core-owned command catalog (required field kinds and
+      optional string identity fields); no positional argument.
+
 options:
   --help     print usage (exit code 2)
   --pretty   indent the JSON envelope
 ```
+
+An edit command file is a JSON array, for example:
+
+```json
+[
+  { "kind": "add-node", "nodeType": "Float", "nodeId": "roughness" },
+  { "kind": "set-constant-value", "nodeId": "roughness", "value": 0.4 }
+]
+```
+
+On success, `payload` contains `{ status, createdIds, documentText }`, directly
+from the core result and canonical serializer. `createdIds` aligns with the
+commands; parameter creation reports the created node ID. Use explicit
+`parameterId` and `nodeId` when later commands must reference a new parameter.
+The returned text can be reviewed or saved by the caller. A refused batch
+returns no partial payload and identifies the refusing command through
+`EDIT_TRANSACTION_REFUSED`. Invalid command-file data uses core diagnostics
+and exit 1; malformed CLI options use exit 2. Edit success means the requested
+transaction was accepted, not that the resulting graph validates or emits.
+Run `validate` and `emit` separately for those checks.
 
 ## Machine contract
 
@@ -102,3 +130,19 @@ node apps/cli/bin/shader-graph.js <command> ...             # equivalent direct 
 
 `main()` is also importable (it takes the argv slice and an optional
 stdout sink), which is what this package's tests drive.
+
+## Environment proposal inspection
+
+`environment-discover <absolute-repository-root>` reads the producer bootstrap
+and returns deployment candidates without selection.
+`environment-verify <absolute-environment-root>` independently validates the
+manifest and filesystem closure; `--profiles` additionally validates final
+Surface Profile descriptors through core. Both accept `--pretty` and use the existing
+JSON envelope/exit convention. Windows, PowerShell, and (for discovery) Python
+3.12+ are required. No environment is imported, registered, activated, or
+claimed natively ready. See `../../docs/environment-import-readiness.md`.
+
+`environment-registry <absolute-registry-root>` inspects Editor-owned saved
+Environment/state bindings without creating directories or activating them.
+Every restored record is `unverified`; malformed records produce structured
+CLI failure diagnostics. See `../../docs/environment-registry.md`.

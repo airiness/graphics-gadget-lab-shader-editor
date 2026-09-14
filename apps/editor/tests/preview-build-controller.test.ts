@@ -1,3 +1,6 @@
+import { previewChronology } from "../src/panel-vocabulary.js";
+import { graph as evidenceGraph, descriptor as evidenceDescriptor, emission as evidenceEmission } from "./evidence-fixture.js";
+import { createSession, provenanceFromImport } from "../src/document-session.js";
 import { describe, expect, it } from "vitest";
 import {
     FakeHostBoundary,
@@ -31,11 +34,12 @@ function manager(boundary: FakePreviewRuntimeBoundary): AttachedPreviewRuntimeMa
 
 /** The Coordinator reads the host bindings through accessors; the test
  * world has both, so simple constant accessors stand in for the live refs. */
-function coordinator(manager: AttachedPreviewRuntimeManager, flow: PreviewBuildController): PreviewCoordinator {
+function coordinator(manager: AttachedPreviewRuntimeManager, flow: PreviewBuildController, input: PreviewCompositionInput): PreviewCoordinator {
+    const owner = createSession(createDocumentSessionId("target"), provenanceFromImport(), input.document);
     return new PreviewCoordinator(
         () => manager,
         () => flow,
-        new WorkspaceStore<WorkspaceAuthoringState>({ session: createWorkspaceSession(), profileDescriptor: null }),
+        new WorkspaceStore<WorkspaceAuthoringState>({ session: { ...createWorkspaceSession(), documents: [owner], activeDocumentId: owner.sessionId, preview: { targetDocumentId: owner.sessionId } }, profileDescriptor: null }),
     );
 }
 
@@ -278,6 +282,45 @@ async function publish(flow: PreviewBuildController, input = composition()): Pro
     await expect(launch.outcome).resolves.toMatchObject({ kind: "published" });
 }
 
+describe("Preview session retirement", () => {
+    it("retains old chronology but cannot reuse its publication or late observation", async () => {
+        const boundary = fake();
+        const observation = observations([{ kind: "read", bytes: observationBytes(1, PUBLICATION_ID) }], true);
+        const runtime = runtimes(), owned = manager(runtime);
+        const flow = new PreviewBuildController(boundary, new TestToolPort(), SESSION_ID, observation, owned);
+        const input = composition();
+        await publish(flow, input);
+        const previous = flow.session;
+        expect(flow.initialPublicationAvailable).toBe(true);
+        const reading = flow.refreshObservation();
+        flow.resetSession("ab".repeat(16));
+        expect(flow.history).toEqual([previous]);
+        expect(previous.line.attempts).toHaveLength(1);
+        expect(flow.session.line.attempts).toHaveLength(0);
+        expect(flow.initialPublicationAvailable).toBe(false);
+        expect(flow.launchCandidate()).toBeNull();
+        expect(flow.buildGate(input).admitted).toBe(false);
+        expect(observation.releasePending()).toBe(true);
+        expect(await reading).toEqual({ kind: "session-superseded" });
+        expect(flow.acceptedObservation).toBeNull();
+        expect(flow.lastObservationRefresh).toBeNull();
+        // The manager uses the same new coordinate as native build requests.
+        await owned.launch(CANDIDATE_A);
+        expect(runtime.lastLaunch?.sessionId).toBe(flow.session.sessionId);
+        await owned.terminateAndJoin();
+    });
+    it("does not restore an old handshake into a new target session", async () => {
+        const boundary = fake({ keepPreviewHandshakePending: true });
+        const flow = new PreviewBuildController(boundary, new TestToolPort(), SESSION_ID, observations(), manager(runtimes()));
+        const input = composition(), pending = flow.previewHandshake(input);
+        flow.resetSession("ab".repeat(16));
+        boundary.releasePreviewHandshake();
+        expect(await pending).toMatchObject({ stale: true });
+        expect(flow.lastPreviewHandshake).toBeNull();
+        expect(flow.buildGate(input)).toMatchObject({ admitted: false, reasons: [{ reason: "preview-proof-missing" }] });
+    });
+});
+
 describe("Preview handshake orchestration", () => {
     it("joins one candidate + requirement lane and closes it on settlement", async () => {
         const boundary = fake({ keepPreviewHandshakePending: true });
@@ -349,6 +392,28 @@ describe("Preview handshake orchestration", () => {
 });
 
 describe("Preview build orchestration", () => {
+    it("keeps the issuing document and source map when another same-source document becomes active before settlement", async () => {
+        const boundary = fake({ keepCompilePending: true });
+        const flow = new PreviewBuildController(boundary, new TestToolPort(), SESSION_ID, observations(), manager(runtimes()));
+        const id = createDocumentSessionId("issuing-document");
+        const owner = createSession(id, provenanceFromImport(), evidenceGraph);
+        const input = composition({ documentOwner: owner, document: evidenceGraph, descriptor: evidenceDescriptor, emission: evidenceEmission });
+        expect(() => flow.buildPreview({ ...input, document: { ...evidenceGraph } }, selfGate(flow))).toThrow("owner snapshot");
+        await prove(flow, input);
+        const launch = await flow.buildPreview(input, selfGate(flow));
+        if (!launch.issued) throw new Error("fixture must issue");
+        const origin = flow.session.origins?.get(launch.buildId.sequence);
+        expect(origin?.documentSessionId).toBe(id);
+        expect(origin?.sourceMap).toEqual(input.emission?.sourceMap);
+        // Gate reads for the new active context cannot relabel pending evidence.
+        flow.buildGate({ ...input, documentOwner: createSession(createDocumentSessionId("same-source-other-document"), provenanceFromImport(), evidenceGraph) });
+        boundary.releasePending(launch.buildId);
+        await launch.outcome;
+        expect(flow.session.origins?.get(launch.buildId.sequence)).toBe(origin);
+        const reconstructed = { ...flow.session, line: { ...flow.session.line, attempts: flow.session.line.attempts.map(record => ({ ...record, buildId: { sequence: record.buildId.sequence } })) } };
+        expect(previewChronology(reconstructed)[0]?.origin).toBe(origin);
+    });
+
     it("derives and issues the exact candidate-bound request after the gate", async () => {
         const boundary = fake();
         const flow = new PreviewBuildController(boundary, new TestToolPort(), SESSION_ID, observations(), manager(runtimes()));
@@ -662,7 +727,7 @@ describe("Attached Preview Runtime authority - composition facts read by the flo
         await publish(flow);
         const launching = manager.launch(CANDIDATE_A);
         expect(manager.launchInFlight).toBe(true);
-        expect(coordinator(manager, flow).gate(input)).toMatchObject({
+        expect(coordinator(manager, flow, input).gate(input)).toMatchObject({
             admitted: false,
             reasons: [{ reason: "attached-runtime-launching" }],
         });
@@ -671,7 +736,7 @@ describe("Attached Preview Runtime authority - composition facts read by the flo
         expect(launched.launched).toBe(true);
         expect(manager.launchInFlight).toBe(false);
         // the build-side verdict is back once the launch settles
-        expect(coordinator(manager, flow).gate(input)).toMatchObject({ admitted: true });
+        expect(coordinator(manager, flow, input).gate(input)).toMatchObject({ admitted: true });
     });
 
     it("keeps a live session on its launch deployment and refuses cross-deployment updates", async () => {
@@ -689,7 +754,7 @@ describe("Attached Preview Runtime authority - composition facts read by the flo
         }
 
         port.state = compatible(CANDIDATE_C);
-        expect(coordinator(manager, flow).gate(input)).toMatchObject({
+        expect(coordinator(manager, flow, input).gate(input)).toMatchObject({
             admitted: false,
             reasons: [{ reason: "attached-runtime-deployment-mismatch" }],
         });
@@ -723,7 +788,7 @@ describe("Attached Preview Runtime authority - composition facts read by the flo
         // The current tool has since moved to a DIFFERENT deployment (C):
         // the build gate still refuses against the owned deployment A.
         port.state = compatible(CANDIDATE_C);
-        expect(coordinator(manager, flow).gate(input)).toMatchObject({
+        expect(coordinator(manager, flow, input).gate(input)).toMatchObject({
             admitted: false,
             reasons: [{ reason: "attached-runtime-deployment-mismatch" }],
         });
@@ -747,7 +812,7 @@ describe("Attached Preview Runtime authority - composition facts read by the flo
 
         // A single, exact structured refusal — not deployment-mismatch
         // (there is no owned binding to compare against).
-        expect(coordinator(manager, flow).gate(input)).toMatchObject({
+        expect(coordinator(manager, flow, input).gate(input)).toMatchObject({
             admitted: false,
             reasons: [{ reason: "attached-runtime-ownership-conflict" }],
         });
@@ -768,7 +833,7 @@ describe("Attached Preview Runtime authority - composition facts read by the flo
 
         // One exact structured refusal — never admission on the assumption
         // that no Runtime exists.
-        expect(coordinator(manager, flow).gate(input)).toMatchObject({
+        expect(coordinator(manager, flow, input).gate(input)).toMatchObject({
             admitted: false,
             reasons: [{ reason: "attached-runtime-launch-outcome-unproven" }],
         });

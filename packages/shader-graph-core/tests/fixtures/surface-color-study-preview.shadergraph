@@ -1,0 +1,631 @@
+{
+  "schemaVersion": 1,
+  "profile": "gglab.surface",
+  "profileVersion": 2,
+  "parameters": [
+    {
+      "id": "p.rough",
+      "name": "Roughness",
+      "class": "ScalarParameter",
+      "valueType": "float"
+    },
+    {
+      "id": "p.tex",
+      "name": "Preview Texture",
+      "class": "Texture2DParameter",
+      "valueType": "Texture2D"
+    }
+  ],
+  "graphId": "graph.surface-color-study-preview",
+  "nodes": [
+    {
+      "id": "n.uv",
+      "type": "UV0",
+      "version": 1,
+      "label": "Mesh UV",
+      "properties": {}
+    },
+    {
+      "id": "n.tiles",
+      "type": "Float",
+      "version": 1,
+      "label": "Texture Tiling",
+      "properties": {
+        "value": 3
+      }
+    },
+    {
+      "id": "n.tile-uv",
+      "type": "Multiply",
+      "version": 1,
+      "label": "Tile UV",
+      "properties": {}
+    },
+    {
+      "id": "n.texture",
+      "type": "Texture2DParameter",
+      "version": 1,
+      "label": "Runtime Texture",
+      "properties": {
+        "parameterId": "p.tex"
+      }
+    },
+    {
+      "id": "n.sample",
+      "type": "SampleTexture2D",
+      "version": 1,
+      "label": "Tiled Texture",
+      "properties": {}
+    },
+    {
+      "id": "n.direction",
+      "type": "Float2",
+      "version": 1,
+      "label": "Gradient Direction",
+      "properties": {
+        "value": [
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "id": "n.gradient",
+      "type": "Dot",
+      "version": 1,
+      "label": "UV Gradient",
+      "properties": {}
+    },
+    {
+      "id": "n.mask-product",
+      "type": "Multiply",
+      "version": 1,
+      "label": "Texture x Gradient",
+      "properties": {}
+    },
+    {
+      "id": "n.mask",
+      "type": "Saturate",
+      "version": 1,
+      "label": "Palette Mask",
+      "properties": {}
+    },
+    {
+      "id": "n.cool",
+      "type": "Float3",
+      "version": 1,
+      "label": "Cool Color",
+      "properties": {
+        "value": [
+          0.01,
+          0.7,
+          0.95
+        ]
+      }
+    },
+    {
+      "id": "n.warm",
+      "type": "Float3",
+      "version": 1,
+      "label": "Warm Color",
+      "properties": {
+        "value": [
+          1,
+          0.08,
+          0.01
+        ]
+      }
+    },
+    {
+      "id": "n.palette",
+      "type": "Lerp",
+      "version": 1,
+      "label": "Two Color Palette",
+      "properties": {}
+    },
+    {
+      "id": "n.glow",
+      "type": "Float",
+      "version": 1,
+      "label": "Glow Strength",
+      "properties": {
+        "value": 0.65
+      }
+    },
+    {
+      "id": "n.glow-mask",
+      "type": "Multiply",
+      "version": 1,
+      "label": "Masked Glow",
+      "properties": {}
+    },
+    {
+      "id": "n.emission",
+      "type": "Multiply",
+      "version": 1,
+      "label": "Colored Emission",
+      "properties": {}
+    },
+    {
+      "id": "n.roughness",
+      "type": "ScalarParameter",
+      "version": 1,
+      "label": "Runtime Roughness",
+      "properties": {
+        "parameterId": "p.rough"
+      }
+    },
+    {
+      "id": "n.polish",
+      "type": "Float",
+      "version": 1,
+      "label": "Polished Roughness",
+      "properties": {
+        "value": 0.08
+      }
+    },
+    {
+      "id": "n.rough-mix",
+      "type": "Lerp",
+      "version": 1,
+      "label": "Rough to Polished",
+      "properties": {}
+    },
+    {
+      "id": "n.metal",
+      "type": "Float",
+      "version": 1,
+      "label": "Metal Strength",
+      "properties": {
+        "value": 0.85
+      }
+    },
+    {
+      "id": "n.metal-mask",
+      "type": "Multiply",
+      "version": 1,
+      "label": "Masked Metal",
+      "properties": {}
+    },
+    {
+      "id": "n.opacity",
+      "type": "Float",
+      "version": 1,
+      "label": "Opaque Surface",
+      "properties": {
+        "value": 1
+      }
+    },
+    {
+      "id": "n.output",
+      "type": "SurfaceOutput",
+      "version": 1,
+      "label": "Color Study Surface",
+      "properties": {}
+    }
+  ],
+  "connections": [
+    {
+      "id": "c.tile-uv.a",
+      "from": {
+        "nodeId": "n.uv",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.tile-uv",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c.tile-uv.b",
+      "from": {
+        "nodeId": "n.tiles",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.tile-uv",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c.sample.texture",
+      "from": {
+        "nodeId": "n.texture",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.sample",
+        "portId": "texture"
+      }
+    },
+    {
+      "id": "c.sample.uv",
+      "from": {
+        "nodeId": "n.tile-uv",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.sample",
+        "portId": "uv"
+      }
+    },
+    {
+      "id": "c.gradient.a",
+      "from": {
+        "nodeId": "n.uv",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.gradient",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c.gradient.b",
+      "from": {
+        "nodeId": "n.direction",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.gradient",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c.mask-product.a",
+      "from": {
+        "nodeId": "n.sample",
+        "portId": "R"
+      },
+      "to": {
+        "nodeId": "n.mask-product",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c.mask-product.b",
+      "from": {
+        "nodeId": "n.gradient",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.mask-product",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c.mask.value",
+      "from": {
+        "nodeId": "n.mask-product",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.mask",
+        "portId": "value"
+      }
+    },
+    {
+      "id": "c.palette.a",
+      "from": {
+        "nodeId": "n.cool",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.palette",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c.palette.b",
+      "from": {
+        "nodeId": "n.warm",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.palette",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c.palette.t",
+      "from": {
+        "nodeId": "n.mask",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.palette",
+        "portId": "t"
+      }
+    },
+    {
+      "id": "c.glow-mask.a",
+      "from": {
+        "nodeId": "n.glow",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.glow-mask",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c.glow-mask.b",
+      "from": {
+        "nodeId": "n.mask",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.glow-mask",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c.emission.a",
+      "from": {
+        "nodeId": "n.palette",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.emission",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c.emission.b",
+      "from": {
+        "nodeId": "n.glow-mask",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.emission",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c.rough-mix.a",
+      "from": {
+        "nodeId": "n.roughness",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.rough-mix",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c.rough-mix.b",
+      "from": {
+        "nodeId": "n.polish",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.rough-mix",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c.rough-mix.t",
+      "from": {
+        "nodeId": "n.mask",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.rough-mix",
+        "portId": "t"
+      }
+    },
+    {
+      "id": "c.metal-mask.a",
+      "from": {
+        "nodeId": "n.metal",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.metal-mask",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c.metal-mask.b",
+      "from": {
+        "nodeId": "n.mask",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.metal-mask",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c.output.BaseColor",
+      "from": {
+        "nodeId": "n.palette",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.output",
+        "portId": "BaseColor"
+      }
+    },
+    {
+      "id": "c.output.Emissive",
+      "from": {
+        "nodeId": "n.emission",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.output",
+        "portId": "Emissive"
+      }
+    },
+    {
+      "id": "c.output.Roughness",
+      "from": {
+        "nodeId": "n.rough-mix",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.output",
+        "portId": "Roughness"
+      }
+    },
+    {
+      "id": "c.output.Metallic",
+      "from": {
+        "nodeId": "n.metal-mask",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.output",
+        "portId": "Metallic"
+      }
+    },
+    {
+      "id": "c.output.Opacity",
+      "from": {
+        "nodeId": "n.opacity",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.output",
+        "portId": "Opacity"
+      }
+    }
+  ],
+  "editorMetadata": {
+    "nodes": {
+      "n.uv": {
+        "position": {
+          "x": 40,
+          "y": 60
+        }
+      },
+      "n.tiles": {
+        "position": {
+          "x": 40,
+          "y": 240
+        }
+      },
+      "n.tile-uv": {
+        "position": {
+          "x": 360,
+          "y": 60
+        }
+      },
+      "n.texture": {
+        "position": {
+          "x": 360,
+          "y": 270
+        }
+      },
+      "n.sample": {
+        "position": {
+          "x": 680,
+          "y": 60
+        }
+      },
+      "n.direction": {
+        "position": {
+          "x": 40,
+          "y": 450
+        }
+      },
+      "n.gradient": {
+        "position": {
+          "x": 360,
+          "y": 470
+        }
+      },
+      "n.mask-product": {
+        "position": {
+          "x": 1000,
+          "y": 70
+        }
+      },
+      "n.mask": {
+        "position": {
+          "x": 1320,
+          "y": 70
+        }
+      },
+      "n.cool": {
+        "position": {
+          "x": 1000,
+          "y": 360
+        }
+      },
+      "n.warm": {
+        "position": {
+          "x": 1000,
+          "y": 550
+        }
+      },
+      "n.palette": {
+        "position": {
+          "x": 1640,
+          "y": 70
+        }
+      },
+      "n.glow": {
+        "position": {
+          "x": 1320,
+          "y": 400
+        }
+      },
+      "n.glow-mask": {
+        "position": {
+          "x": 1640,
+          "y": 360
+        }
+      },
+      "n.emission": {
+        "position": {
+          "x": 1960,
+          "y": 360
+        }
+      },
+      "n.roughness": {
+        "position": {
+          "x": 1000,
+          "y": 780
+        }
+      },
+      "n.polish": {
+        "position": {
+          "x": 1000,
+          "y": 960
+        }
+      },
+      "n.rough-mix": {
+        "position": {
+          "x": 1640,
+          "y": 690
+        }
+      },
+      "n.metal": {
+        "position": {
+          "x": 1320,
+          "y": 970
+        }
+      },
+      "n.metal-mask": {
+        "position": {
+          "x": 1960,
+          "y": 680
+        }
+      },
+      "n.opacity": {
+        "position": {
+          "x": 1960,
+          "y": 960
+        }
+      },
+      "n.output": {
+        "position": {
+          "x": 2280,
+          "y": 130
+        }
+      }
+    }
+  }
+}

@@ -18,6 +18,8 @@ import type { NativeBuildFlow } from "../src/native-build-flow.js";
 import { useShaderPreview } from "../src/useShaderPreview.js";
 import { WorkspaceStore, type WorkspaceAuthoringState } from "../src/workspace-store.js";
 import { createWorkspaceSession } from "../src/workspace-session.js";
+import { createDocumentSessionId } from "../src/workspace-session.js";
+import { createSession, provenanceFromImport, documentRevision } from "../src/document-session.js";
 
 const workspaceStore = new WorkspaceStore<WorkspaceAuthoringState>({
     session: createWorkspaceSession(),
@@ -188,7 +190,12 @@ const document: ShaderGraphDocument = {
     unknownFields: {},
 };
 
+function selectedState(): WorkspaceAuthoringState {
+    const owner = createSession(createDocumentSessionId("target"), provenanceFromImport(), document);
+    return { session: { ...createWorkspaceSession(), documents: [owner], activeDocumentId: owner.sessionId, preview: { targetDocumentId: owner.sessionId } }, profileDescriptor: descriptor };
+}
 beforeEach(() => {
+    workspaceStore.apply(() => ({ next: selectedState(), result: null }));
     previewWorld.tool = null;
     previewWorld.observation = null;
     previewWorld.runtime = null;
@@ -197,6 +204,70 @@ beforeEach(() => {
 });
 
 describe("attached Shader Preview React surface", () => {
+    it("starts the committed target in one action even before React receives its new props", async () => {
+        const initial = createSession(createDocumentSessionId("selected-golden"), provenanceFromImport(), document);
+        const owner = { ...initial, presentation: { ...initial.presentation, emission } };
+        const store = new WorkspaceStore<WorkspaceAuthoringState>({ session: { ...createWorkspaceSession(), documents: [owner], activeDocumentId: owner.sessionId, preview: { targetDocumentId: owner.sessionId } }, profileDescriptor: descriptor });
+        const hook = renderHook(() => useShaderPreview({ document: { ...document, graphId: "previous-tab" }, descriptor, descriptorCompatible: true, emission: null, configuredTarget: "gglab-dx12", nativeFlow, workspaceStore: store }));
+        await waitFor(() => expect(hook.result.current.flow).not.toBeNull());
+        await act(async () => hook.result.current.startPreview(owner.sessionId));
+        expect((previewWorld.tool as FakeHostBoundary).previewBuildCalls).toBe(1);
+        expect((previewWorld.runtime as FakePreviewRuntimeBoundary).launchCalls).toBe(1);
+        hook.unmount();
+    });
+    it("does not build or launch when the requested graph is no longer the target", async () => {
+        const hook = renderHook(() => useShaderPreview({ document, descriptor, descriptorCompatible: true, emission, configuredTarget: "gglab-dx12", nativeFlow, workspaceStore }));
+        await waitFor(() => expect(hook.result.current.flow).not.toBeNull());
+        await act(async () => hook.result.current.startPreview(createDocumentSessionId("closed-target")));
+        expect((previewWorld.tool as FakeHostBoundary).previewBuildCalls).toBe(0);
+        expect((previewWorld.runtime as FakePreviewRuntimeBoundary).launchCalls).toBe(0);
+        expect(hook.result.current.notes.at(-1)?.level).toBe("refusal");
+        hook.unmount();
+    });
+    it("drops a start request when its target changes during the handshake", async () => {
+        const initial = createSession(createDocumentSessionId("pending-target"), provenanceFromImport(), document);
+        const owner = { ...initial, presentation: { ...initial.presentation, emission } };
+        const store = new WorkspaceStore<WorkspaceAuthoringState>({ session: { ...createWorkspaceSession(), documents: [owner], activeDocumentId: owner.sessionId, preview: { targetDocumentId: owner.sessionId } }, profileDescriptor: descriptor });
+        const hook = renderHook(() => useShaderPreview({ document, descriptor, descriptorCompatible: true, emission, configuredTarget: "gglab-dx12", nativeFlow, workspaceStore: store }));
+        await waitFor(() => expect(hook.result.current.flow).not.toBeNull());
+        const flow = hook.result.current.flow!;
+        const handshake = flow.previewHandshake.bind(flow);
+        let release!: () => void;
+        const delayed = new Promise<void>(resolve => { release = resolve; });
+        const spy = vi.spyOn(flow, "previewHandshake").mockImplementation(async input => { const record = await handshake(input); await delayed; return record; });
+        let pending!: Promise<void>;
+        act(() => { pending = hook.result.current.startPreview(owner.sessionId); });
+        await waitFor(() => expect(spy).toHaveBeenCalledOnce());
+        store.apply(state => ({ next: { ...state, session: { ...state.session, preview: { targetDocumentId: null } } }, result: null }));
+        await act(async () => { release(); await pending; });
+        expect((previewWorld.tool as FakeHostBoundary).previewBuildCalls).toBe(0);
+        expect((previewWorld.runtime as FakePreviewRuntimeBoundary).launchCalls).toBe(0);
+        expect(hook.result.current.notes.at(-1)?.text).toMatch(/changed during compatibility/);
+        hook.unmount();
+    });
+    it("clears live Preview after target close and refuses actions from stale React props", async () => {
+        const hook = renderHook(({ selected }: { selected: boolean }) => useShaderPreview({ document: selected ? document : null, descriptor, descriptorCompatible: true, emission, configuredTarget: "gglab-dx12", nativeFlow, workspaceStore }), { initialProps: { selected: true } });
+        await waitFor(() => expect(hook.result.current.flow).not.toBeNull());
+        await act(async () => { await hook.result.current.previewHandshake(); await hook.result.current.buildPreview(); });
+        const flow = hook.result.current.flow!, previous = flow.session;
+        expect((previewWorld.runtime as FakePreviewRuntimeBoundary).launchCalls).toBe(1);
+        const owner = workspaceStore.getSnapshot().session.documents[0]!;
+        await act(async () => {
+            expect((await hook.result.current.coordinator.closeTarget(owner.sessionId, "wrong-discard-revision")).ok).toBe(false);
+        });
+        // Use the owner's canonical revision; a wrong discard revision cannot close it.
+        await act(async () => { expect((await hook.result.current.coordinator.closeTarget(owner.sessionId, documentRevision(owner))).ok).toBe(true); });
+        expect(flow.history).toContain(previous);
+        expect(workspaceStore.getSnapshot().session.preview.targetDocumentId).toBeNull();
+        await act(async () => { await hook.result.current.previewHandshake(); await hook.result.current.buildPreview(); await hook.result.current.launchPreview(); });
+        expect((previewWorld.tool as FakeHostBoundary).previewBuildCalls).toBe(1);
+        expect((previewWorld.runtime as FakePreviewRuntimeBoundary).launchCalls).toBe(1);
+        hook.rerender({ selected: false });
+        expect(hook.result.current.gate).toMatchObject({ admitted: false, reasons: [{ reason: "preview-target-unavailable" }] });
+        expect(hook.result.current.projection).toMatchObject({ freshness: "idle", currentPublicationId: null, lastGoodPublicationId: null });
+        expect(hook.result.current.initialPublicationAvailable).toBe(false);
+        hook.unmount();
+    });
     it("proves, publishes, launches, polls Current, and observes process exit", async () => {
         const hook = renderHook(() =>
             useShaderPreview({
@@ -240,6 +311,29 @@ describe("attached Shader Preview React surface", () => {
         // A PROVEN natural exit releases ownership: the state is `idle`
         // (no `exited` state; `exit-unproven` exists only for wait-failed).
         await waitFor(() => expect(hook.result.current.runtime.kind).toBe("idle"));
+        hook.unmount();
+    });
+
+    it("does not auto-launch from an old build delivered after Workspace Environment selection changes", async () => {
+        const store = new WorkspaceStore<WorkspaceAuthoringState>(selectedState());
+        const hook = renderHook(() => useShaderPreview({ document, descriptor, descriptorCompatible: true, emission, configuredTarget: "gglab-dx12", nativeFlow, workspaceStore: store }));
+        await waitFor(() => expect(hook.result.current.flow).not.toBeNull());
+        await act(async () => hook.result.current.previewHandshake());
+        let release!: () => void;
+        const delivery = new Promise<void>(resolve => { release = resolve; });
+        const coordinator = hook.result.current.coordinator;
+        const issue = coordinator.buildPreview.bind(coordinator);
+        vi.spyOn(coordinator, "buildPreview").mockImplementation(async input => {
+            const launch = await issue(input);
+            return launch.issued ? { ...launch, outcome: launch.outcome.then(async outcome => { await delivery; return outcome; }) } : launch;
+        });
+        let pending!: Promise<void>;
+        act(() => { pending = hook.result.current.buildPreview(); });
+        await waitFor(() => expect(hook.result.current.flow?.initialPublicationAvailable).toBe(true));
+        store.apply(state => ({ next: { ...state, session: { ...state.session, activeEnvironment: { environmentId: "sha256:" + "a".repeat(64), environmentRoot: "D:/new", stateRoot: "D:/state", activationSequence: 1, tool: { path: "D:/new/tool.exe", sha256: "b".repeat(64) }, runtime: { path: "D:/new/runtime.exe", sha256: "c".repeat(64) } } } }, result: null }));
+        await act(async () => { release(); await pending; });
+        expect((previewWorld.runtime as FakePreviewRuntimeBoundary).launchCalls).toBe(0);
+        expect(coordinator.hostAdmitted).toBe(false);
         hook.unmount();
     });
 

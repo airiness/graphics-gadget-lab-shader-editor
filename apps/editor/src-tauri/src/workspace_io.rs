@@ -296,6 +296,30 @@ impl WorkspaceFileService {
         }
     }
 
+    pub(crate) fn validate_resume_root(&self, uri: &str) -> Result<(), String> {
+        let root = self.authorized_workspace(uri).map_err(|e| format!("{e:?}"))?;
+        if !root.canonical_path.is_dir() || root.canonical_path.canonicalize().map_err(|e| e.to_string())? != root.canonical_path {
+            return Err("Workspace root changed since admission".into());
+        }
+        Ok(())
+    }
+    /// Remember only admitted files within this Workspace. A URI is looked up,
+    /// never parsed into a new caller-selected filesystem path.
+    pub(crate) fn resume_intent(&self, mut intent: crate::application_preferences::WorkspaceResume) -> Result<crate::application_preferences::WorkspaceResume, String> {
+        intent.validate()?;
+        self.validate_resume_root(&intent.workspace_uri)?;
+        let root = self.authorized_workspace(&intent.workspace_uri).map_err(|e| format!("{e:?}"))?;
+        let mut contained = Vec::new();
+        for uri in intent.document_uris {
+            let path = self.documents.registered_path(&uri).map_err(|e| format!("{e:?}"))?;
+            if path.starts_with(&root.canonical_path) { contained.push(uri); }
+        }
+        intent.active_uri = intent.active_uri.filter(|uri| contained.contains(uri));
+        intent.preview_uri = intent.preview_uri.filter(|uri| contained.contains(uri));
+        intent.document_uris = contained;
+        Ok(intent)
+    }
+
     fn authorized_workspace(
         &self,
         canonical_workspace_uri: &str,
@@ -681,6 +705,75 @@ mod tests {
             .settle
             .join()
             .unwrap()
+    }
+
+    #[test]
+    fn resume_requires_fresh_admission_and_filters_files_outside_the_workspace() {
+        let dir = test_directory("resume");
+        let inside = dir.join("inside"); std::fs::create_dir(&inside).unwrap();
+        let graph = inside.join("a.shadergraph"); std::fs::write(&graph, "old bytes").unwrap();
+        let outside = dir.join("b.shadergraph"); std::fs::write(&outside, "outside").unwrap();
+        let documents = Arc::new(DocumentFileService::new());
+        let service = WorkspaceFileService::new(Arc::clone(&documents));
+        let root = service.register_selected_root(inside.clone()).unwrap();
+        let WorkspaceDiscoverySettlement::Changed { snapshot, .. } = settle(&service, &root, None) else { panic!("complete scan expected") };
+        let inside_uri = snapshot.documents[0].canonical_document_uri.clone();
+        let outer = service.register_selected_root(dir.clone()).unwrap();
+        let WorkspaceDiscoverySettlement::Changed { snapshot, .. } = settle(&service, &outer, None) else { panic!("complete scan expected") };
+        let outside_uri = snapshot.documents.iter().find(|doc| doc.relative_path == "b.shadergraph").unwrap().canonical_document_uri.clone();
+        let intent = crate::application_preferences::WorkspaceResume { workspace_uri: root.canonical_workspace_uri.clone(), document_uris: vec![inside_uri.clone(), outside_uri.clone()], active_uri: Some(outside_uri), preview_uri: Some(inside_uri.clone()), environment_id: None, build_target: "dx12".into() };
+        let admitted = service.resume_intent(intent.clone()).unwrap();
+        assert_eq!(admitted.document_uris, vec![inside_uri.clone()]); assert!(admitted.active_uri.is_none());
+        assert_eq!(admitted.preview_uri, Some(inside_uri.clone()));
+        let fresh_documents = Arc::new(DocumentFileService::new());
+        let fresh = WorkspaceFileService::new(Arc::clone(&fresh_documents));
+        assert!(fresh.validate_resume_root(&intent.workspace_uri).is_err());
+        assert!(fresh.resume_intent(intent.clone()).is_err());
+        let fresh_root = fresh.register_selected_root(inside).unwrap();
+        assert!(fresh.resume_intent(admitted.clone()).is_err()); // Persisted URI is not a new host capability.
+        std::fs::write(&graph, "current bytes").unwrap();
+        let _ = settle(&fresh, &fresh_root, None);
+        assert!(fresh.resume_intent(admitted).is_ok());
+        assert_eq!(fresh_documents.read_snapshot(&inside_uri).unwrap().text, "current bytes");
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(fresh.validate_resume_root(&intent.workspace_uri).is_err());
+    }
+    #[test]
+    fn golden_fixture_directory_is_a_workspace_with_readable_documents() {
+        // Exercise the same checked-in scenes used by core and GUI tests through native authority.
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../packages/shader-graph-core/tests/fixtures");
+        let documents = Arc::new(DocumentFileService::new());
+        let service = WorkspaceFileService::new(Arc::clone(&documents));
+        let root = service.register_selected_root(directory).unwrap();
+        let WorkspaceDiscoverySettlement::Changed { snapshot, .. } = settle(&service, &root, None)
+        else {
+            panic!("the golden fixture directory must be discoverable without a project manifest");
+        };
+        assert_eq!(
+            snapshot.documents.iter().map(|entry| entry.relative_path.as_str()).collect::<Vec<_>>(),
+            ["SurfaceDiagnostics.shadergraph", "SurfaceTextureGolden.shadergraph", "surface-color-study-preview.shadergraph", "surface-neon-reactor-preview.shadergraph", "surface-texture-preview.shadergraph"]
+        );
+        for entry in &snapshot.documents {
+            let opened = documents.read_snapshot(&entry.canonical_document_uri).unwrap();
+            assert_eq!(opened.canonical_document_uri, entry.canonical_document_uri);
+            let expected = if entry.relative_path == "SurfaceTextureGolden.shadergraph" {
+                include_str!("../../../../packages/shader-graph-core/tests/fixtures/SurfaceTextureGolden.shadergraph")
+            } else if entry.relative_path == "SurfaceDiagnostics.shadergraph" {
+                include_str!("../../../../packages/shader-graph-core/tests/fixtures/SurfaceDiagnostics.shadergraph")
+            } else if entry.relative_path == "surface-neon-reactor-preview.shadergraph" {
+                include_str!("../../../../packages/shader-graph-core/tests/fixtures/surface-neon-reactor-preview.shadergraph")
+            } else if entry.relative_path == "surface-color-study-preview.shadergraph" {
+                include_str!("../../../../packages/shader-graph-core/tests/fixtures/surface-color-study-preview.shadergraph")
+            } else {
+                include_str!("../../../../packages/shader-graph-core/tests/fixtures/surface-texture-preview.shadergraph")
+            };
+            assert_eq!(opened.text, expected);
+        }
+        assert!(matches!(
+            settle(&service, &root, Some(snapshot.discovery_revision_token)),
+            WorkspaceDiscoverySettlement::Unchanged { .. }
+        ));
     }
 
     #[test]

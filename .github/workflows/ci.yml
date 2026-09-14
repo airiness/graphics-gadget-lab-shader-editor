@@ -46,6 +46,10 @@ jobs:
         # (owned by the main repository's build and self-test suites).
         # The Tauri service itself — the host boundary — is checked and
         # tested on its own platform in the native-service job below.
+        env:
+          # An absent checkout must not be read by ordinary unit tests.
+          GGLAB_ENVIRONMENT_SOURCE: ${{ runner.temp }}/absent-main-checkout
+          GGLAB_ENVIRONMENT_QUALIFICATION: "0"
         run: pnpm test
 
       - name: Lint the repository
@@ -90,4 +94,11 @@ jobs:
 
       - name: Test the service (including the shared conformance fixture)
         working-directory: apps/editor/src-tauri
-        run: cargo test
+        run: |
+          # Exercise canonical storage cleanup with a differently spelled TEMP path.
+          # The directory is private to this job; no machine-level settings change.
+          $testTemp = Join-Path $env:RUNNER_TEMP "GGLab-Native-Test-Temp"
+          New-Item -ItemType Directory -Force -Path $testTemp | Out-Null
+          $env:TEMP = $testTemp.ToLowerInvariant()
+          $env:TMP = $env:TEMP
+          cargo test

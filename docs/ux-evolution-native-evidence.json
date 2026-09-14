@@ -1,0 +1,402 @@
+{
+  "recordedAt": "2026-09-13T06:39:39.669369+00:00",
+  "kind": "working-tree-ux-qualification",
+  "editorBaseRevision": "3ecb28abf975237ad961392eb544bed95f587d7d",
+  "editorState": "Uncommitted changes; not a clean committed replay.",
+  "producerRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec",
+  "sourceSha256": {
+    "apps/editor/src/app.tsx": "d63584ed31d6f35bc54e6c1fc782aaa9ef75e68059a59118f3d2bb91193c3d32",
+    "apps/editor/src/document-profile-panel.tsx": "91982a2e84cbceb08050f36f5beb7ed098fcf50453636a7e98283de3f5082768",
+    "apps/editor/src/environment-authoring-host.test.ts": "a3b291d458743501b3e4f1d955258eb1d6fb17e53f18ff054e5ee2a2b3ca4221",
+    "apps/editor/src/environment-authoring-host.ts": "de2bb65c2431f6a729e53795ecf334dee1f2cd6d66be692421c854b5eb5bf826",
+    "apps/editor/src/environment-import-host.test.ts": "8f4ca517e1ebd02ad6952d25ed200252ac2f91fbf126f5c2357b67b3a41506c3",
+    "apps/editor/src/preview-build-controller.ts": "e5c4627e91665297db4826409f9a05575bb7840bc95a1ecad5e8b7279a01d78e",
+    "apps/editor/src/preview-coordinator.ts": "aa7df3c2b04e756e9e3e24dba24c8b09dca23573d8cde45b7f23fe3d806b8bd0",
+    "apps/editor/src/preview-runtime-manager.ts": "2bdbe50e638abc9d36ee7430ac8b0b353cb85a3688be5cb1e3765841f6af8ff9",
+    "apps/editor/src/tab-keyboard.ts": "1c1dbcd51d7f734edd4d44b60c266e1736545f621a586d85e60691606ede875e",
+    "apps/editor/src/use-environment-authoring.ts": "45434a8dad3e954b2ed5a2ac89166ad515ef0697b3f8415ca3eb3b2f4da62dd1",
+    "apps/editor/src/useShaderPreview.ts": "ea36881fb73d3ad74a3cda1fa3f7f6683470d56277973a4d7b0c0beb8d8f3cb3",
+    "apps/editor/src/workspace-session.ts": "8caf88698612e2cf878e47a2f823fcb180acd09dcc60ef02f72a50bd4aaa7e8d",
+    "apps/editor/tests/document-profile-panel.test.tsx": "9a94e1084f7030e158d779f150eeadcbd38449b8edd2b785eb09dda80aa24e97",
+    "apps/editor/tests/gui-surface.test.tsx": "8c1e5834aa9591b789ef2b9e37561e54f292355e38c0b9459c920374daf590a6",
+    "apps/editor/tests/preview-build-controller.test.ts": "ffaf357de7dfb188304550e39e1aa6534ee6d9ea785c3ff50df4d0602e09fb43",
+    "apps/editor/tests/preview-coordinator.test.ts": "fbcc6f8f260ed17e50456bb201aa85ae121b4c852e90e37d34abd7ed61c76ea3",
+    "apps/editor/tests/preview-runtime-manager.test.ts": "68a0b24a4b0bb98099698db66980fea8da3c9fc25eaf5d8fd8571294e36858ee",
+    "apps/editor/tests/shader-preview-surface.test.tsx": "4d028216081835b9571917b27b60136331a32c36ca86b38bec3c028c07a66727",
+    "apps/editor/tests/workbench-shell.test.tsx": "d2252e444215db500de5d8d3674994f674c85863ac2885704b1b837eeddf5caf",
+    "apps/editor/tests/workspace-session.test.ts": "969a3603fa631eb290a596a9ef492ed631032fec740c3ed05bd11ee8834fb664"
+  },
+  "command": "pnpm --filter @gglab/editor test src/environment-import-host.test.ts",
+  "setup": "Pinned clean producer checkout and previously published Debug/Release closures; fresh independent state and registry roots per configuration. Qualification flags are documented in environment-workspace-authoring.md.",
+  "gates": {
+    "typecheck": "passed",
+    "tests": {
+      "passed": 1041,
+      "skipped": 9
+    },
+    "lint": "passed",
+    "editorBuild": "passed with third-party directive and chunk-size warnings",
+    "rust": {
+      "passed": 74,
+      "ignored": 3
+    },
+    "diffCheck": "passed"
+  },
+  "cases": [
+    {
+      "configuration": "debug",
+      "selection": {
+        "environmentId": "sha256:f16290e99f195e15b368393ffa44b571e34480d3bdc3c3beb1b3f23f44e916ed",
+        "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000",
+        "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\s\\ux-review-debug",
+        "tool": {
+          "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000\\payload\\gglab-shaderc.exe",
+          "sha256": "3ef4ffd5297777f6fe1088fb228f040e0ec95f5df57f1063b8cd312384410cb7"
+        },
+        "runtime": {
+          "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000\\payload\\GraphicsGadgetLab.exe",
+          "sha256": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+        },
+        "activationSequence": 1
+      },
+      "authoringRuns": [
+        {
+          "backend": "dx12",
+          "profileVersion": 1,
+          "graphId": "graph.emit",
+          "generatedSourceIdentity": "b702b5a5483d97342cdbe5c4bd5aa36d3d16c9f8d42d1b10ca03128ae56db5d3",
+          "sessionId": "c2b60ebcd0dd8000f8b6988a195d2298",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+            "loadedPublicationRef": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "graphId": "graph.surface-texture-preview",
+          "generatedSourceIdentity": "62d0f6cc26dccdaafd734c3ab30a01424bccfeec6f728c768b672c7a93706d2f",
+          "sessionId": "a37a1b6887485e64def6eff74a6100d7",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "03cdadd4fae4b8aa9792ef95ed29349c516636a77ca2a014c16014dae2a925f4",
+            "loadedPublicationRef": "03cdadd4fae4b8aa9792ef95ed29349c516636a77ca2a014c16014dae2a925f4",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "graphId": "graph.surface-color-study-preview",
+          "generatedSourceIdentity": "7dae1dcfa224f8bf54617033790414843b43c0e9994970da9f7c641a7aa2f913",
+          "sessionId": "0e7c4d6c69fcd2bafe495022ea28d123",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "b2133ca27c69b9f161d64b5d6b3666baf1315dfd966bb6a76bc0fbed5a196083",
+            "loadedPublicationRef": "b2133ca27c69b9f161d64b5d6b3666baf1315dfd966bb6a76bc0fbed5a196083",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "graphId": "graph.surface-color-study-preview",
+          "generatedSourceIdentity": "7dae1dcfa224f8bf54617033790414843b43c0e9994970da9f7c641a7aa2f913",
+          "sessionId": "ffee6522f13609c5dd0ef399408fac59",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "b2133ca27c69b9f161d64b5d6b3666baf1315dfd966bb6a76bc0fbed5a196083",
+            "loadedPublicationRef": "b2133ca27c69b9f161d64b5d6b3666baf1315dfd966bb6a76bc0fbed5a196083",
+            "rejectionCode": "none"
+          },
+          "previousSessionId": "0e7c4d6c69fcd2bafe495022ea28d123",
+          "transition": "identical-graph-new-document-owner"
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "graphId": "graph.emit",
+          "generatedSourceIdentity": "b702b5a5483d97342cdbe5c4bd5aa36d3d16c9f8d42d1b10ca03128ae56db5d3",
+          "sessionId": "3e656f1beae31788b499dba2efad1712",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+            "loadedPublicationRef": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "graphId": "graph.surface-texture-preview",
+          "generatedSourceIdentity": "62d0f6cc26dccdaafd734c3ab30a01424bccfeec6f728c768b672c7a93706d2f",
+          "sessionId": "1edf8cb14b320d0ea77516c5319d75ea",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "5bc2efc9f210f4f25435b98359bc93a9ec6514f07fd58ca62c209813d0f84e0c",
+            "loadedPublicationRef": "5bc2efc9f210f4f25435b98359bc93a9ec6514f07fd58ca62c209813d0f84e0c",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "graphId": "graph.surface-color-study-preview",
+          "generatedSourceIdentity": "7dae1dcfa224f8bf54617033790414843b43c0e9994970da9f7c641a7aa2f913",
+          "sessionId": "55e9d3e7fef6776b80bc8ca19f820d06",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "899c866ceb9425c5e0742dcc1d144c27ef68317e0c8f2939b87887af3e23fefc",
+            "loadedPublicationRef": "899c866ceb9425c5e0742dcc1d144c27ef68317e0c8f2939b87887af3e23fefc",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "graphId": "graph.surface-color-study-preview",
+          "generatedSourceIdentity": "7dae1dcfa224f8bf54617033790414843b43c0e9994970da9f7c641a7aa2f913",
+          "sessionId": "0e0df1e5a9f98ec43683ebcfca97bf63",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "899c866ceb9425c5e0742dcc1d144c27ef68317e0c8f2939b87887af3e23fefc",
+            "loadedPublicationRef": "899c866ceb9425c5e0742dcc1d144c27ef68317e0c8f2939b87887af3e23fefc",
+            "rejectionCode": "none"
+          },
+          "previousSessionId": "55e9d3e7fef6776b80bc8ca19f820d06",
+          "transition": "identical-graph-new-document-owner"
+        }
+      ],
+      "proofBuilds": 16,
+      "identicalGraphOwnerTransitions": "DX12 and Vulkan: stop/await, new session, old input refused, new publication Loaded",
+      "targetClose": "DX12: stop/await, target cleared, old publication unavailable",
+      "registeredEnvironmentReuse": "qualified",
+      "closureVerification": {
+        "error": null,
+        "operation": "verify",
+        "result": {
+          "environmentId": "sha256:f16290e99f195e15b368393ffa44b571e34480d3bdc3c3beb1b3f23f44e916ed",
+          "roles": {
+            "assets": "payload/Assets",
+            "baseArtifacts": "payload/BaseArtifacts",
+            "previewProgram": "payload/Shaders/Programs/ShaderGraphPreview/descriptor.json",
+            "runtime": "payload/GraphicsGadgetLab.exe",
+            "shaderSources": "payload/Shaders",
+            "surfaceProfile1": "payload/Shaders/Profiles/GGLab.Surface/1/descriptor.json",
+            "surfaceProfile2": "payload/Shaders/Profiles/GGLab.Surface/2/descriptor.json",
+            "tool": "payload/gglab-shaderc.exe",
+            "vulkanLayers": "payload/VulkanLayers"
+          },
+          "writableState": {
+            "roles": {
+              "artifacts": "ShaderArtifacts",
+              "derivedData": "DerivedDataCache",
+              "generatedSources": "Generated",
+              "logs": "Logs",
+              "observations": "ShaderArtifacts/shader-preview-sessions",
+              "previewPublications": "ShaderArtifacts/shader-preview",
+              "previewSessions": "ShaderArtifacts/shader-preview-sessions",
+              "settings": "Settings",
+              "shaderCache": "ShaderCache"
+            },
+            "root": "external"
+          }
+        },
+        "resultVersion": 1,
+        "success": true
+      },
+      "reportSha256": "f3c1f88629691dac6af3b34769fdb0a15568672a86148d4c53218819a70859cc"
+    },
+    {
+      "configuration": "release",
+      "selection": {
+        "environmentId": "sha256:641093ddf5acffcfe2c9ae7f0816971658cc39e3a4486c47c46b2c218b3bed91",
+        "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000",
+        "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\s\\ux-review-release",
+        "tool": {
+          "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000\\payload\\gglab-shaderc.exe",
+          "sha256": "421926487ee7290be858077eadc295348d403644856e1ebd56af4840fc2e36e5"
+        },
+        "runtime": {
+          "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000\\payload\\GraphicsGadgetLab.exe",
+          "sha256": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175"
+        },
+        "activationSequence": 1
+      },
+      "authoringRuns": [
+        {
+          "backend": "dx12",
+          "profileVersion": 1,
+          "graphId": "graph.emit",
+          "generatedSourceIdentity": "b702b5a5483d97342cdbe5c4bd5aa36d3d16c9f8d42d1b10ca03128ae56db5d3",
+          "sessionId": "1a866dfd7b0fc8953967fd36d0ab6b91",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+            "loadedPublicationRef": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "graphId": "graph.surface-texture-preview",
+          "generatedSourceIdentity": "62d0f6cc26dccdaafd734c3ab30a01424bccfeec6f728c768b672c7a93706d2f",
+          "sessionId": "52b00638c687ed4f8d6019b1fa954c99",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "03cdadd4fae4b8aa9792ef95ed29349c516636a77ca2a014c16014dae2a925f4",
+            "loadedPublicationRef": "03cdadd4fae4b8aa9792ef95ed29349c516636a77ca2a014c16014dae2a925f4",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "graphId": "graph.surface-color-study-preview",
+          "generatedSourceIdentity": "7dae1dcfa224f8bf54617033790414843b43c0e9994970da9f7c641a7aa2f913",
+          "sessionId": "f33d305890ea6b41a4fc75f71952d603",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "b2133ca27c69b9f161d64b5d6b3666baf1315dfd966bb6a76bc0fbed5a196083",
+            "loadedPublicationRef": "b2133ca27c69b9f161d64b5d6b3666baf1315dfd966bb6a76bc0fbed5a196083",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "graphId": "graph.surface-color-study-preview",
+          "generatedSourceIdentity": "7dae1dcfa224f8bf54617033790414843b43c0e9994970da9f7c641a7aa2f913",
+          "sessionId": "c55ecb7ca4a32e981abf2403b0758266",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "b2133ca27c69b9f161d64b5d6b3666baf1315dfd966bb6a76bc0fbed5a196083",
+            "loadedPublicationRef": "b2133ca27c69b9f161d64b5d6b3666baf1315dfd966bb6a76bc0fbed5a196083",
+            "rejectionCode": "none"
+          },
+          "previousSessionId": "f33d305890ea6b41a4fc75f71952d603",
+          "transition": "identical-graph-new-document-owner"
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "graphId": "graph.emit",
+          "generatedSourceIdentity": "b702b5a5483d97342cdbe5c4bd5aa36d3d16c9f8d42d1b10ca03128ae56db5d3",
+          "sessionId": "0e4b7179803ca72b72bdded031ff9eff",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+            "loadedPublicationRef": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "graphId": "graph.surface-texture-preview",
+          "generatedSourceIdentity": "62d0f6cc26dccdaafd734c3ab30a01424bccfeec6f728c768b672c7a93706d2f",
+          "sessionId": "b4346d4cf78a00deb58b76afeaa1d989",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "5bc2efc9f210f4f25435b98359bc93a9ec6514f07fd58ca62c209813d0f84e0c",
+            "loadedPublicationRef": "5bc2efc9f210f4f25435b98359bc93a9ec6514f07fd58ca62c209813d0f84e0c",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "graphId": "graph.surface-color-study-preview",
+          "generatedSourceIdentity": "7dae1dcfa224f8bf54617033790414843b43c0e9994970da9f7c641a7aa2f913",
+          "sessionId": "82344118497bf6bfd7bc9318f17baa4a",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "899c866ceb9425c5e0742dcc1d144c27ef68317e0c8f2939b87887af3e23fefc",
+            "loadedPublicationRef": "899c866ceb9425c5e0742dcc1d144c27ef68317e0c8f2939b87887af3e23fefc",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "graphId": "graph.surface-color-study-preview",
+          "generatedSourceIdentity": "7dae1dcfa224f8bf54617033790414843b43c0e9994970da9f7c641a7aa2f913",
+          "sessionId": "fa4cb5811b205897ac49a43594ad2025",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "899c866ceb9425c5e0742dcc1d144c27ef68317e0c8f2939b87887af3e23fefc",
+            "loadedPublicationRef": "899c866ceb9425c5e0742dcc1d144c27ef68317e0c8f2939b87887af3e23fefc",
+            "rejectionCode": "none"
+          },
+          "previousSessionId": "82344118497bf6bfd7bc9318f17baa4a",
+          "transition": "identical-graph-new-document-owner"
+        }
+      ],
+      "proofBuilds": 16,
+      "identicalGraphOwnerTransitions": "DX12 and Vulkan: stop/await, new session, old input refused, new publication Loaded",
+      "targetClose": "DX12: stop/await, target cleared, old publication unavailable",
+      "registeredEnvironmentReuse": "qualified",
+      "closureVerification": {
+        "error": null,
+        "operation": "verify",
+        "result": {
+          "environmentId": "sha256:641093ddf5acffcfe2c9ae7f0816971658cc39e3a4486c47c46b2c218b3bed91",
+          "roles": {
+            "assets": "payload/Assets",
+            "baseArtifacts": "payload/BaseArtifacts",
+            "previewProgram": "payload/Shaders/Programs/ShaderGraphPreview/descriptor.json",
+            "runtime": "payload/GraphicsGadgetLab.exe",
+            "shaderSources": "payload/Shaders",
+            "surfaceProfile1": "payload/Shaders/Profiles/GGLab.Surface/1/descriptor.json",
+            "surfaceProfile2": "payload/Shaders/Profiles/GGLab.Surface/2/descriptor.json",
+            "tool": "payload/gglab-shaderc.exe",
+            "vulkanLayers": "payload/VulkanLayers"
+          },
+          "writableState": {
+            "roles": {
+              "artifacts": "ShaderArtifacts",
+              "derivedData": "DerivedDataCache",
+              "generatedSources": "Generated",
+              "logs": "Logs",
+              "observations": "ShaderArtifacts/shader-preview-sessions",
+              "previewPublications": "ShaderArtifacts/shader-preview",
+              "previewSessions": "ShaderArtifacts/shader-preview-sessions",
+              "settings": "Settings",
+              "shaderCache": "ShaderCache"
+            },
+            "root": "external"
+          }
+        },
+        "resultVersion": 1,
+        "success": true
+      },
+      "reportSha256": "4f4ffc12b39e6f7e59b99de7287f2a6bb53f75c7dc8c84baa33f27ab7136cb7a"
+    }
+  ],
+  "notExecuted": [
+    "Fresh Main Debug/Release builds and Main self-test suites",
+    "Clean committed Editor replay",
+    "Source checkout access denial or syscall tracing",
+    "New validation-layer diagnostic audit",
+    "Rendered desktop, keyboard/screen-reader and restart acceptance: Computer Use native pipe unavailable"
+  ]
+}

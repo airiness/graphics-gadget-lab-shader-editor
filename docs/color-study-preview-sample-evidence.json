@@ -1,0 +1,136 @@
+{
+  "recordedAt": "2026-09-12T11:05:32.4734293+09:00",
+  "editorBaseRevision": "86cf0a6793b0259723b8fdc540a2f0781c5aad65",
+  "editorState": "uncommitted sample and qualification changes; not a clean committed replay",
+  "producerRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec",
+  "sample": "packages/shader-graph-core/tests/fixtures/surface-color-study-preview.shadergraph",
+  "sampleSha256": "d16f5b3b37765211aac31453a87f2638ee68574acd2f5d6a81f6a3fa38fb687d",
+  "nativeTest": "apps/editor/src/environment-import-host.test.ts",
+  "nativeTestSha256": "693cb0290c6ce582d90f18316a393a94010dcfb778a9040392d07b1e9863457a",
+  "nativeCommand": "pnpm --filter @gglab/editor test src/environment-import-host.test.ts",
+  "setup": "Use the pinned clean producer and published Debug/Release closures, explicit import/activation qualification flags and a fresh registry root per run; see docs/environment-workspace-authoring.md.",
+  "checks": {
+    "typecheck": "passed",
+    "diffCheck": "passed",
+    "workspaceRustTests": {
+      "passed": 10
+    },
+    "lint": "passed",
+    "unitTests": {
+      "passed": 1005,
+      "skipped": 9
+    }
+  },
+  "cases": [
+    {
+      "configuration": "debug",
+      "backend": "dx12",
+      "profileVersion": 2,
+      "generatedSourceIdentity": "7dae1dcfa224f8bf54617033790414843b43c0e9994970da9f7c641a7aa2f913",
+      "sessionId": "818fcd0aafb3c8ba272b1ffb13a7cd4f",
+      "observation": {
+        "status": "loaded",
+        "observedAttemptSequence": 1,
+        "observedPublicationRef": "b2133ca27c69b9f161d64b5d6b3666baf1315dfd966bb6a76bc0fbed5a196083",
+        "loadedPublicationRef": "b2133ca27c69b9f161d64b5d6b3666baf1315dfd966bb6a76bc0fbed5a196083",
+        "rejectionCode": "none"
+      },
+      "environmentId": "sha256:f16290e99f195e15b368393ffa44b571e34480d3bdc3c3beb1b3f23f44e916ed",
+      "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000",
+      "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\s\\qtg81elcv6egsl1wjl",
+      "tool": {
+        "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000\\payload\\gglab-shaderc.exe",
+        "sha256": "3ef4ffd5297777f6fe1088fb228f040e0ec95f5df57f1063b8cd312384410cb7"
+      },
+      "runtime": {
+        "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000\\payload\\GraphicsGadgetLab.exe",
+        "sha256": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+      },
+      "reportSha256": "8df90dc4c55b158984a11d98a067a891cf0ce594ce97cc7cbc4cbc831565fa2d"
+    },
+    {
+      "configuration": "debug",
+      "backend": "vulkan",
+      "profileVersion": 2,
+      "generatedSourceIdentity": "7dae1dcfa224f8bf54617033790414843b43c0e9994970da9f7c641a7aa2f913",
+      "sessionId": "6852fefc0dadd077015f114bf7014e57",
+      "observation": {
+        "status": "loaded",
+        "observedAttemptSequence": 1,
+        "observedPublicationRef": "899c866ceb9425c5e0742dcc1d144c27ef68317e0c8f2939b87887af3e23fefc",
+        "loadedPublicationRef": "899c866ceb9425c5e0742dcc1d144c27ef68317e0c8f2939b87887af3e23fefc",
+        "rejectionCode": "none"
+      },
+      "environmentId": "sha256:f16290e99f195e15b368393ffa44b571e34480d3bdc3c3beb1b3f23f44e916ed",
+      "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000",
+      "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\s\\qtg81elcv6egsl1wjl",
+      "tool": {
+        "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000\\payload\\gglab-shaderc.exe",
+        "sha256": "3ef4ffd5297777f6fe1088fb228f040e0ec95f5df57f1063b8cd312384410cb7"
+      },
+      "runtime": {
+        "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000\\payload\\GraphicsGadgetLab.exe",
+        "sha256": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+      },
+      "reportSha256": "8df90dc4c55b158984a11d98a067a891cf0ce594ce97cc7cbc4cbc831565fa2d"
+    },
+    {
+      "configuration": "release",
+      "backend": "dx12",
+      "profileVersion": 2,
+      "generatedSourceIdentity": "7dae1dcfa224f8bf54617033790414843b43c0e9994970da9f7c641a7aa2f913",
+      "sessionId": "504c81d782be67bf0c124c905b417ab5",
+      "observation": {
+        "status": "loaded",
+        "observedAttemptSequence": 1,
+        "observedPublicationRef": "b2133ca27c69b9f161d64b5d6b3666baf1315dfd966bb6a76bc0fbed5a196083",
+        "loadedPublicationRef": "b2133ca27c69b9f161d64b5d6b3666baf1315dfd966bb6a76bc0fbed5a196083",
+        "rejectionCode": "none"
+      },
+      "environmentId": "sha256:641093ddf5acffcfe2c9ae7f0816971658cc39e3a4486c47c46b2c218b3bed91",
+      "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000",
+      "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\s\\qtg8294qbvl8bv2ebl",
+      "tool": {
+        "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000\\payload\\gglab-shaderc.exe",
+        "sha256": "421926487ee7290be858077eadc295348d403644856e1ebd56af4840fc2e36e5"
+      },
+      "runtime": {
+        "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000\\payload\\GraphicsGadgetLab.exe",
+        "sha256": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175"
+      },
+      "reportSha256": "8de40a4d6d991e71cdd8544caa87ff3df0545abcfdd8dde1553cffaf4540516e"
+    },
+    {
+      "configuration": "release",
+      "backend": "vulkan",
+      "profileVersion": 2,
+      "generatedSourceIdentity": "7dae1dcfa224f8bf54617033790414843b43c0e9994970da9f7c641a7aa2f913",
+      "sessionId": "673a34934ab1ba31c3b71ad3312e6ed8",
+      "observation": {
+        "status": "loaded",
+        "observedAttemptSequence": 1,
+        "observedPublicationRef": "899c866ceb9425c5e0742dcc1d144c27ef68317e0c8f2939b87887af3e23fefc",
+        "loadedPublicationRef": "899c866ceb9425c5e0742dcc1d144c27ef68317e0c8f2939b87887af3e23fefc",
+        "rejectionCode": "none"
+      },
+      "environmentId": "sha256:641093ddf5acffcfe2c9ae7f0816971658cc39e3a4486c47c46b2c218b3bed91",
+      "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000",
+      "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\s\\qtg8294qbvl8bv2ebl",
+      "tool": {
+        "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000\\payload\\gglab-shaderc.exe",
+        "sha256": "421926487ee7290be858077eadc295348d403644856e1ebd56af4840fc2e36e5"
+      },
+      "runtime": {
+        "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000\\payload\\GraphicsGadgetLab.exe",
+        "sha256": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175"
+      },
+      "reportSha256": "8de40a4d6d991e71cdd8544caa87ff3df0545abcfdd8dde1553cffaf4540516e"
+    }
+  ],
+  "limitations": [
+    "Controller/native integration reads the exact sample file; desktop picker/button interactions and visual appearance were not automated.",
+    "Uses the frozen two-parameter Preview contract and Runtime-owned deterministic texture fixture, not arbitrary material binding.",
+    "Existing pinned Main builds and published closures were reused; no fresh Main build or validation-layer qualification was performed.",
+    "The original four-parameter SurfaceTextureGolden remains an authoring golden and is not admitted by the frozen native Preview contract."
+  ]
+}

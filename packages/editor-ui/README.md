@@ -3,9 +3,8 @@
 Presentation components for the GGLab shader graph editor.
 
 Owns: canvas node/edge presentation (the React Flow projection), the node
-palette, panels (diagnostics, descriptor instance), the document
-authoring operations (pure data construction on the core's document
-model), the one-click auto layout (positions for `editorMetadata`), the
+palette, panels (diagnostics, descriptor instance), GUI adapters over the
+core's document edit commands, the one-click auto layout (positions for `editorMetadata`), the
 single geometry source for the node card, and the small editor chrome
 kit (button / badge / input / collapsible / separator).
 
@@ -14,6 +13,14 @@ the node palette is the core's node catalog itself (there is no UI-side
 node registry), descriptor loading is the core's strict reader, and
 connection validity / conformance / compatibility verdicts are the core's.
 This package never redefines graph semantics.
+
+`session/authoring-operations.ts` forwards edits to core `applyGraphEdit`.
+It maps changed/unchanged/refused results to the existing GUI transaction
+shape and retains structured refusal diagnostics. Creation adapters may add
+an initial canvas position after a successful core edit; a refused edit never
+writes placement. Node IDs, constant shapes, parameter declarations and node
+deletion semantics are owned by core. History, selection and gestures remain
+GUI responsibilities.
 
 Rules this slice implements (mirrored in `apps/editor`'s composition
 root):

@@ -1,0 +1,295 @@
+{
+  "qualificationDate": "2026-09-09",
+  "handoffDate": "2026-09-10",
+  "kind": "working-tree-import-qualification",
+  "editorBaseRevision": "d6bd50b3d355a1829dfbd00b31fb6f6d810e8619",
+  "editorCleanRevision": null,
+  "producerRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec",
+  "sourceSha256": {
+    "apps/editor/src-tauri/src/environment_execution.rs": "58a5993744e4cd0760109c4c9c323332131b2b8d7e9ad653ff970b61516a94fb",
+    "apps/editor/src-tauri/src/environment_registration.rs": "730ebbd2bbca7ec7223891e06ecd7f97c5323118ab8d926eb4a08461ada642d4",
+    "apps/editor/src-tauri/src/environment_storage.rs": "42ca275b3d9a28821410b82f7f0002b379a892d0d3e13aa22f2207c691824c52",
+    "apps/editor/src-tauri/src/lib.rs": "9f6604efd846bfb5e66485335609e6def05aa92f8d748e09321a51f729fe5e94",
+    "apps/editor/src/environment-import-host.test.ts": "7c4f81738646ae21e6ed7981b0705eed32ff42cb33284a9e25cd50c261f86e1a",
+    "apps/editor/src/environment-import-host.ts": "abdd9e1824e08412334c95f7b843e6886e159f2acc862e0b6c50ecd786168a27",
+    "apps/editor/src/environment-proof-host.test.ts": "28042e4c0805ac166de0165194009dbfcbae7a09db8e91ee909e44358d1f5959",
+    "apps/editor/tests/environment-probe-documents.ts": "5304deadd6fdc3e8a09fcea151d12a862979a6221228efbc2a9b9f0c11b3f970",
+    "apps/editor/tests/host-io.test.ts": "318a9eb74b9b7996292928fc812e16f25da2dabf03eb5f9aa95079551127b0cd",
+    "packages/shader-toolchain-client/src/environment-import.ts": "b7a219aa6d0520eb9dfdfc1a8c4cfefe46b7c5ab4d36b639e091d5de64756e9e"
+  },
+  "gates": {
+    "typecheck": "passed",
+    "typescriptTests": {
+      "passed": 965,
+      "skipped": 9
+    },
+    "lint": "passed",
+    "gitDiffCheck": "passed",
+    "rustTests": {
+      "passed": 91,
+      "ignored": 3
+    },
+    "realProducerDiscovery": "passed",
+    "editorWebBuild": "passed"
+  },
+  "configurations": {
+    "debug": {
+      "firstStatus": "already-registered",
+      "retryStatus": "already-registered",
+      "proof": {
+        "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3a0a15ae0966400000000",
+        "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\isd",
+        "environmentId": "sha256:f16290e99f195e15b368393ffa44b571e34480d3bdc3c3beb1b3f23f44e916ed",
+        "tool": {
+          "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3a0a15ae0966400000000\\payload\\gglab-shaderc.exe",
+          "sha256": "3ef4ffd5297777f6fe1088fb228f040e0ec95f5df57f1063b8cd312384410cb7"
+        },
+        "runtime": {
+          "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3a0a15ae0966400000000\\payload\\GraphicsGadgetLab.exe",
+          "sha256": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+        },
+        "ordinaryHandshake": "compatible",
+        "previewHandshake": "compatible",
+        "profiles": [
+          1,
+          2
+        ],
+        "runtimeObservation": "loaded"
+      },
+      "manifestProducer": {
+        "deployment": "Build/Output/x64/Debug",
+        "publisherSha256": "cfbe8fa0caf0c0683fa7a010067fb03dd2c50d61a5d09137123793e50e9f7f5b",
+        "publisherVersion": "1.0.0",
+        "sourceDirty": false,
+        "sourceRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec"
+      },
+      "snapshot": {
+        "records": [
+          {
+            "record": {
+              "environmentId": "sha256:f16290e99f195e15b368393ffa44b571e34480d3bdc3c3beb1b3f23f44e916ed",
+              "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3a0a15ae0966400000000",
+              "registryVersion": 1,
+              "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\isd"
+            },
+            "readiness": "unverified"
+          }
+        ],
+        "diagnostics": [],
+        "pending": []
+      },
+      "phases": [
+        "verify",
+        "state",
+        "proof",
+        "register",
+        "settled"
+      ],
+      "nativePreviewRuns": [
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 1,
+          "sessionId": "6163ffe695084d8c9203f3194af37d59"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 1,
+          "sessionId": "0f971f6e7d1045058c9d0db62e502f90"
+        },
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 2,
+          "sessionId": "1fee8739324447e69be9ef23c62d4e18"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 2,
+          "sessionId": "277a9a6d297940d5b19011d647238b56"
+        },
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 1,
+          "sessionId": "de82465e58e646ca90db35d3ee3a3593"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 1,
+          "sessionId": "b295cca9b43a4ee29f5d8b36abd8387a"
+        },
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 2,
+          "sessionId": "8617e021c2bc41cdbb49dba463d62eeb"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 2,
+          "sessionId": "83fcdd9acca5451f812d1ede868687d5"
+        }
+      ],
+      "failedProof": {
+        "status": "refused",
+        "diagnostic": {
+          "code": "profile-incompatible",
+          "severity": "error",
+          "message": "Exactly two probe graphs are required",
+          "dataPath": "$"
+        },
+        "retainedStateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\isd",
+        "registrationMayHaveCommitted": false
+      },
+      "cancellation": {
+        "status": "refused",
+        "diagnostic": {
+          "code": "cancelled",
+          "severity": "error",
+          "message": "Import cancelled; existing registration and state are preserved",
+          "dataPath": "$"
+        },
+        "retainedStateRoot": null,
+        "registrationMayHaveCommitted": false
+      },
+      "lostAcknowledgementRecovered": true
+    },
+    "release": {
+      "firstStatus": "already-registered",
+      "retryStatus": "already-registered",
+      "proof": {
+        "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3a0ada608e10800000000",
+        "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\isr",
+        "environmentId": "sha256:641093ddf5acffcfe2c9ae7f0816971658cc39e3a4486c47c46b2c218b3bed91",
+        "tool": {
+          "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3a0ada608e10800000000\\payload\\gglab-shaderc.exe",
+          "sha256": "421926487ee7290be858077eadc295348d403644856e1ebd56af4840fc2e36e5"
+        },
+        "runtime": {
+          "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3a0ada608e10800000000\\payload\\GraphicsGadgetLab.exe",
+          "sha256": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175"
+        },
+        "ordinaryHandshake": "compatible",
+        "previewHandshake": "compatible",
+        "profiles": [
+          1,
+          2
+        ],
+        "runtimeObservation": "loaded"
+      },
+      "manifestProducer": {
+        "deployment": "Build/Output/x64/Release",
+        "publisherSha256": "cfbe8fa0caf0c0683fa7a010067fb03dd2c50d61a5d09137123793e50e9f7f5b",
+        "publisherVersion": "1.0.0",
+        "sourceDirty": false,
+        "sourceRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec"
+      },
+      "snapshot": {
+        "records": [
+          {
+            "record": {
+              "environmentId": "sha256:641093ddf5acffcfe2c9ae7f0816971658cc39e3a4486c47c46b2c218b3bed91",
+              "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3a0ada608e10800000000",
+              "registryVersion": 1,
+              "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\isr"
+            },
+            "readiness": "unverified"
+          }
+        ],
+        "diagnostics": [],
+        "pending": []
+      },
+      "phases": [
+        "verify",
+        "state",
+        "proof",
+        "register",
+        "settled"
+      ],
+      "nativePreviewRuns": [
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 1,
+          "sessionId": "5292871c57e04886b7482b48ef9bcfc1"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 1,
+          "sessionId": "bc13133da2534e2491e13fc44482024b"
+        },
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 2,
+          "sessionId": "c0af09f6d4894e6c86b48f73a8538661"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 2,
+          "sessionId": "d8eba66f02114a92a616973815692680"
+        },
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 1,
+          "sessionId": "5afdd7a036b44867989278877a58027f"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 1,
+          "sessionId": "fdafb3ac09d1466698c4277c9319590d"
+        },
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 2,
+          "sessionId": "2289045f7711431d96b39dfb27831144"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 2,
+          "sessionId": "34cdd34c45ce4898ab10a15365fc708b"
+        }
+      ],
+      "failedProof": {
+        "status": "refused",
+        "diagnostic": {
+          "code": "profile-incompatible",
+          "severity": "error",
+          "message": "Exactly two probe graphs are required",
+          "dataPath": "$"
+        },
+        "retainedStateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\isr",
+        "registrationMayHaveCommitted": false
+      },
+      "cancellation": {
+        "status": "refused",
+        "diagnostic": {
+          "code": "cancelled",
+          "severity": "error",
+          "message": "Import cancelled; existing registration and state are preserved",
+          "dataPath": "$"
+        },
+        "retainedStateRoot": null,
+        "registrationMayHaveCommitted": false
+      },
+      "lostAcknowledgementRecovered": true
+    }
+  },
+  "retainedLongStateFailure": {
+    "configuration": "debug",
+    "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environment-state\\0000000018d3a0a744b00af400000001",
+    "code": "native-failed",
+    "message": "Preview native probe failed: Generated Preview source staging failed.",
+    "registrationMayHaveCommitted": false,
+    "recovery": "Original state retained; same final Environment qualified with a newly initialized short independent state root."
+  },
+  "notExecuted": [
+    "Fresh Main build or producer regression suite",
+    "Clean committed Editor replay",
+    "Live desktop UI/IPC walkthrough",
+    "Installer packaging",
+    "Full OS process restart",
+    "New last-good native regression",
+    "Long-path success qualification"
+  ],
+  "limitations": [
+    "Only trusted application/host composition, not a hostile WebView security boundary",
+    "Lost prepare acknowledgement can retain a bounded admission until host restart",
+    "Existing web dependency-directive/chunk-size and Rust unused fixture-field warnings"
+  ]
+}

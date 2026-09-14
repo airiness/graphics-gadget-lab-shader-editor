@@ -47,7 +47,7 @@ use std::sync::Arc;
 
 use super::discovery::discover as discover_core;
 use super::error::ServiceError;
-use super::execution::{spawn, ExecutionBudget, SpawnError};
+use super::execution::{spawn_in, ExecutionBudget, SpawnError};
 use super::provenance::{observe_and_hold, verify_and_hold, GuardRefusal};
 use super::staging::ToolchainRoots;
 use super::types::{
@@ -65,8 +65,9 @@ pub struct ShaderToolService {
     handshake_budget: ExecutionBudget,
     compile_budget: ExecutionBudget,
     service_executable_dir: Option<std::path::PathBuf>,
-    next_build_id: AtomicU64,
-    next_runtime_id: AtomicU64,
+    next_build_id: Arc<AtomicU64>,
+    next_runtime_id: Arc<AtomicU64>,
+    owns_runtime_registry: bool,
     /// Single-flight for discovery: held for the (cheap) discovery walk,
     /// released after — the rule, not a scheduler.
     discovery_gate: std::sync::Mutex<()>,
@@ -108,6 +109,7 @@ impl std::fmt::Debug for CompileAttempt {
 
 impl Drop for ShaderToolService {
     fn drop(&mut self) {
+        if !self.owns_runtime_registry { return; }
         if let Ok(runtimes) = self.preview_runtimes.lock() {
             for (_, stop) in runtimes.values() {
                 stop.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -132,6 +134,9 @@ impl Drop for ShaderToolService {
 }
 
 impl ShaderToolService {
+    pub(crate) fn cancel_all_builds(&self) {
+        if let Ok(attempts) = self.in_flight.lock() { for flag in attempts.values() { flag.store(true, std::sync::atomic::Ordering::SeqCst); } }
+    }
     /// The host's **allowance** step, on its own: the allowlisted request
     /// shape, judged exactly as the client package's
     /// `isWellFormedRequest` declares it (the client is the authority;
@@ -164,8 +169,9 @@ impl ShaderToolService {
             handshake_budget,
             compile_budget,
             service_executable_dir,
-            next_build_id: AtomicU64::new(1),
-            next_runtime_id: AtomicU64::new(1),
+            next_build_id: Arc::new(AtomicU64::new(1)),
+            next_runtime_id: Arc::new(AtomicU64::new(1)),
+            owns_runtime_registry: true,
             discovery_gate: std::sync::Mutex::new(()),
             in_flight: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             preview_runtimes: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
@@ -188,12 +194,24 @@ impl ShaderToolService {
             handshake_budget,
             compile_budget,
             service_executable_dir,
-            next_build_id: AtomicU64::new(1),
-            next_runtime_id: AtomicU64::new(1),
+            next_build_id: Arc::new(AtomicU64::new(1)),
+            next_runtime_id: Arc::new(AtomicU64::new(1)),
+            owns_runtime_registry: true,
             discovery_gate: std::sync::Mutex::new(()),
             in_flight: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             preview_runtimes: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
+    }
+
+    /// A private execution view shares process identities and Runtime exclusion with the desktop service.
+    pub(crate) fn for_environment(&self, roots: ToolchainRoots) -> Self {
+        let mut service = Self::production();
+        service.roots = roots;
+        service.next_build_id = self.next_build_id.clone();
+        service.next_runtime_id = self.next_runtime_id.clone();
+        service.preview_runtimes = self.preview_runtimes.clone();
+        service.owns_runtime_registry = false;
+        service
     }
 
     /// `discover`: bookkeeping only — it neither executes the tool nor
@@ -245,7 +263,7 @@ impl ShaderToolService {
         let Some(deployment_root) = executable.parent() else {
             return Ok(PreviewObservationHostReadResult::ReadFailed);
         };
-        let path = deployment_root
+        let path = self.roots.environment.as_ref().map(|e| e.state.as_path()).unwrap_or(deployment_root)
             .join("ShaderArtifacts")
             .join("shader-preview-sessions")
             .join(session_id)
@@ -284,12 +302,21 @@ impl ShaderToolService {
         candidate: &ToolCandidate,
         session_id: &str,
     ) -> Result<PreviewRuntimeLaunchAdmission, ServiceError> {
+        self.launch_runtime(candidate, session_id, None)
+    }
+
+    pub(crate) fn launch_environment_runtime(&self, candidate: &ToolCandidate, session_id: &str, backend: &str) -> Result<PreviewRuntimeLaunchAdmission, ServiceError> {
+        if self.roots.environment.is_none() || !["dx12", "vulkan"].contains(&backend) { return Err(request_shape("backend", "Invalid Environment Runtime backend")); }
+        self.launch_runtime(candidate, session_id, Some(backend))
+    }
+
+    fn launch_runtime(&self, candidate: &ToolCandidate, session_id: &str, backend: Option<&str>) -> Result<PreviewRuntimeLaunchAdmission, ServiceError> {
         validate_preview_session_id(session_id)?;
         let mut runtimes = self
             .preview_runtimes
             .lock()
             .expect("no panic path holds the Preview Runtime registry");
-        if let Some((runtime_id, _)) = runtimes.get(session_id) {
+        if let Some((runtime_id, _)) = runtimes.values().next() {
             return Ok(PreviewRuntimeLaunchAdmission {
                 result: PreviewRuntimeLaunchResult::SessionAlreadyRunning {
                     runtime_id: *runtime_id,
@@ -328,19 +355,26 @@ impl ShaderToolService {
                 });
             }
         };
-        let child = std::process::Command::new(&runtime_path)
-            .args([
-                "--lab",
-                "gglab.lab.shader_graph_preview",
-                "--shader-preview-session",
-                session_id,
-                "--absolute-mouse",
-            ])
-            .current_dir(deployment_root)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
+        if let Some(e) = &self.roots.environment {
+            if runtime_identity != e.runtime_identity { return Err(request_shape("runtimeIdentity", "Environment Runtime bytes changed")); }
+        }
+        let runtime_id = PreviewRuntimeId {
+            sequence: self.next_runtime_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+        };
+        let mut command = std::process::Command::new(&runtime_path);
+        command.args(["--lab", "gglab.lab.shader_graph_preview", "--shader-preview-session", session_id, "--absolute-mouse"])
+            .stdin(std::process::Stdio::null());
+        if let Some(e) = &self.roots.environment {
+            command.arg("--state-root").arg(&e.state).args(["--rhi", backend.unwrap_or("dx12")])
+                .current_dir(&e.state).env("VK_LAYER_PATH", &e.vulkan_layers);
+            for (suffix, stdout) in [("stdout", true), ("stderr", false)] {
+                let file = std::fs::OpenOptions::new().create_new(true).write(true).open(e.state.join("Logs").join(format!("runtime-{session_id}-{}-{}.{suffix}.log", self.roots.private().file_name().unwrap_or_default().to_string_lossy(), runtime_id.sequence)))
+                    .map_err(|e| ServiceError::Host { detail: e.to_string() })?;
+                if stdout { command.stdout(file); } else { command.stderr(file); }
+            }
+            #[cfg(windows)] { use std::os::windows::process::CommandExt; command.creation_flags(0x08000000); }
+        } else { command.current_dir(deployment_root).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
+        let child = command.spawn();
         let child = match child {
             Ok(child) => child,
             Err(_) => {
@@ -353,11 +387,6 @@ impl ShaderToolService {
         drop(runtime_guard);
         drop(candidate_guard);
 
-        let runtime_id = PreviewRuntimeId {
-            sequence: self
-                .next_runtime_id
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-        };
         let stop = Arc::new(AtomicBool::new(false));
         runtimes.insert(session_id.to_string(), (runtime_id, Arc::clone(&stop)));
         drop(runtimes);
@@ -369,7 +398,7 @@ impl ShaderToolService {
             let mut registry = runtime_registry
                 .lock()
                 .expect("no panic path holds the Preview Runtime registry");
-            if registry
+            if exit.kind != PreviewRuntimeExitKind::WaitFailed && registry
                 .get(&session_id)
                 .is_some_and(|(current, _)| *current == runtime_id)
             {
@@ -406,6 +435,17 @@ impl ShaderToolService {
         }
     }
 
+    /// Compile a deployed contract probe without copying or overwriting immutable inputs.
+    pub(crate) fn compile_environment_probe(&self, candidate: &ToolCandidate, profile: u32, target: &str, cancel: Arc<AtomicBool>) -> Result<BoundaryResult, ServiceError> {
+        let roots = self.roots.environment.as_ref().ok_or_else(|| request_shape("environment", "Environment execution required"))?;
+        if ![1, 2].contains(&profile) || !["gglab-dx12", "gglab-vulkan13"].contains(&target) { return Err(request_shape("probe", "Unsupported contract probe")); }
+        let guard = match verify_and_hold(&candidate.tool_path, &candidate.observation_identity) { Ok(guard) => guard, Err(refusal) => return Ok(guard_refusal(refusal, candidate)) };
+        let args = vec!["compile".into(), "--source-root".into(), roots.source.to_string_lossy().into_owned(), "--include".into(), roots.source.to_string_lossy().into_owned(), "--source".into(), format!("Tests/SurfaceGeneratedV{profile}ContractCompile.hlsl"), "--stage".into(), "pixel".into(), "--entry".into(), "PSMain".into(), "--target".into(), target.into(), "--cache-root".into(), roots.state.join("ShaderCache").to_string_lossy().into_owned(), "--artifact-root".into(), roots.state.join("ShaderArtifacts").to_string_lossy().into_owned(), "--result-format".into(), "json".into()];
+        let child = match spawn_in(std::path::Path::new(&candidate.tool_path), &args, Some(&roots.state)) { Ok(child) => child, Err(_) => return Ok(BoundaryResult::LaunchFailed { candidate: candidate.clone() }) };
+        drop(guard);
+        Ok(BoundaryResult::Spawned { output: child.bounded_wait(self.compile_budget, Some(cancel)) })
+    }
+
     fn execute_handshake(&self, candidate: &ToolCandidate, command: &str) -> BoundaryResult {
         let guard_result = verify_and_hold(&candidate.tool_path, &candidate.observation_identity);
         match guard_result {
@@ -415,7 +455,7 @@ impl ShaderToolService {
                 // policy: the service selects only the allowlisted command.
                 let args = vec![command.to_string()];
                 let executable = std::path::PathBuf::from(&candidate.tool_path);
-                let child = match spawn(&executable, &args) {
+                let child = match spawn_in(&executable, &args, self.roots.environment.as_ref().map(|e| e.state.as_path())) {
                     Ok(child) => child,
                     Err(SpawnError { source: _ }) => {
                         // The process-creation itself could not be
@@ -771,9 +811,10 @@ fn serialize_preview_build(
     let deployment_root = executable
         .parent()
         .unwrap_or_else(|| std::path::Path::new(""));
-    let source_root = deployment_root.join("Shaders");
-    let cache_root = deployment_root.join("ShaderCache");
-    let artifact_root = deployment_root.join("ShaderArtifacts");
+    let source_root = roots.environment.as_ref().map(|e| e.source.clone()).unwrap_or_else(|| deployment_root.join("Shaders"));
+    let writable = roots.environment.as_ref().map(|e| e.state.as_path()).unwrap_or(deployment_root);
+    let cache_root = writable.join("ShaderCache");
+    let artifact_root = writable.join("ShaderArtifacts");
     let generated_source = roots
         .attempt_staging(sequence)
         .join(format!("{}.hlsl", request.generated_source_identity));
@@ -826,7 +867,7 @@ fn settle_compile(
         Err(refusal) => return guard_refusal(refusal, candidate),
     };
     let args = serialize_compile(&roots, sequence, request);
-    let child = match spawn(executable, &args) {
+    let child = match spawn_in(executable, &args, roots.environment.as_ref().map(|e| e.state.as_path())) {
         Ok(child) => child,
         Err(SpawnError { source: _ }) => {
             return BoundaryResult::LaunchFailed {
@@ -858,7 +899,7 @@ fn settle_preview_build(
         Err(refusal) => return guard_refusal(refusal, candidate),
     };
     let args = serialize_preview_build(&roots, executable, sequence, request);
-    let child = match spawn(executable, &args) {
+    let child = match spawn_in(executable, &args, roots.environment.as_ref().map(|e| e.state.as_path())) {
         Ok(child) => child,
         Err(SpawnError { source: _ }) => {
             return BoundaryResult::LaunchFailed {
@@ -970,10 +1011,12 @@ fn settle_preview_runtime(
     loop {
         if stop.load(std::sync::atomic::Ordering::SeqCst) {
             let _ = child.kill();
-            let exit_code = child.wait().ok().and_then(|status| status.code());
+            let waited = child.wait();
+            let kind = if waited.is_ok() { PreviewRuntimeExitKind::Stopped } else { PreviewRuntimeExitKind::WaitFailed };
+            let exit_code = waited.ok().and_then(|status| status.code());
             return PreviewRuntimeExit {
                 runtime_id,
-                kind: PreviewRuntimeExitKind::Stopped,
+                kind,
                 exit_code,
             };
         }
@@ -996,5 +1039,25 @@ fn settle_preview_runtime(
                 };
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::*;
+    use super::super::staging::EnvironmentRoots;
+    #[test]
+    fn environment_views_share_desktop_runtime_exclusion_without_owning_teardown() {
+        let parent = ShaderToolService::production();
+        let stop = Arc::new(AtomicBool::new(false));
+        parent.preview_runtimes.lock().unwrap().insert("other-session".into(), (PreviewRuntimeId { sequence: 7 }, stop.clone()));
+        let view = parent.for_environment(ToolchainRoots::for_environment(EnvironmentRoots { source: "final/Shaders".into(), state: "state".into(), runtime_identity: "a".repeat(64), vulkan_layers: "final/VulkanLayers".into() }, "unique"));
+        assert!(Arc::ptr_eq(&parent.next_build_id, &view.next_build_id));
+        let candidate = ToolCandidate { rule: super::super::types::DiscoveryRule::ExplicitConfig, tool_path: "never-launched".into(), observation_identity: "b".repeat(64), resolved_at: 1 };
+        let result = view.launch_environment_runtime(&candidate, &"1".repeat(32), "dx12").unwrap();
+        assert!(matches!(result.result, PreviewRuntimeLaunchResult::SessionAlreadyRunning { runtime_id: PreviewRuntimeId { sequence: 7 } }));
+        drop(view);
+        assert!(!stop.load(std::sync::atomic::Ordering::SeqCst));
+        parent.preview_runtimes.lock().unwrap().clear();
     }
 }

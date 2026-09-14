@@ -236,9 +236,10 @@ describe("the native-build surface (hook over the fake world)", () => {
         expect(flow.buildSession.lastIssued).toBeNull();
         expect(flow.buildSession.inFlight).toEqual([]);
         // ③ No Shader Artifact claim — nothing settled on the line,
-        //    nothing current, no outcome anywhere on the surface.
-        expect(hook.result.current.lineReport?.current, "no attempt succeeded — the line has no current artifact").toBeUndefined();
-        expect(hook.result.current.lastOutcome, "the surface carries no attempt outcome").toBeNull();
+        //    nothing current. The line ITSELF is the authority for that:
+        //    it carries the whole absence (no attempt, no outcome, no
+        //    current artifact — read from the owner, never a surface copy).
+        expect(flow.buildSession.line.attempts, "no attempt settled — the line itself carries the absence").toHaveLength(0);
     });
 
     // THE IN-FLIGHT WINDOW TESTS: the flow's lanes are the authority;

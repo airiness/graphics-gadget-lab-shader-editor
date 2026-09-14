@@ -1095,6 +1095,35 @@ Expected UX can include:
 
 UI richness must not leak into semantic persistence.
 
+## 18.1 Shared semantic edit contract
+
+`shader-graph-core` owns `GraphEditCommand`, its strict serialized reader and
+machine-readable catalog, `applyGraphEdit`, and atomic `applyGraphEdits`.
+GUI adapters and the CLI consume this one operation authority. Accepted changes
+return a new document; accepted no-ops and refusals preserve the input instance.
+Refusals carry structured core diagnostics. A batch refusal rolls back all
+preceding edits and identifies the refusing command without exposing a partial
+document as a successful result.
+
+Node and connection IDs, constant-value shapes, parameter declaration creation,
+display-name changes, whole-node deletion and explicit profile selection live
+in core. Existing connection services remain the authority behind the edit
+command adapter. Unknown node versions cannot be reinterpreted for constant
+editing. Deleting a node prunes its connected edges and metadata entry; initial
+placement, history, selection and gesture grouping remain GUI responsibilities.
+
+Editing may leave an incomplete graph. The existing validation, type resolution,
+profile conformance and emission services retain their respective decisions;
+an accepted edit is not an emission or native-build success claim. Profile
+selection requires an explicit command and a descriptor matching the requested
+profile line. Ordinary edits never upgrade a profile implicitly. Parameter
+values remain Runtime-owned; parameter edit commands concern declarations and
+human-facing labels only.
+
+The CLI `edit` command reads a command array and returns core-canonical
+`documentText` without overwriting the input file. `edit-commands` serializes
+the core command catalog. Neither command introduces shader production policy.
+
 ---
 
 # 19. Tauri/native bridge
@@ -1449,7 +1478,11 @@ Given the same semantic graph, frozen profile contract, and graph compiler versi
 
 # 25. Build Inspector and observability
 
-The editor should make the build explainable.
+The editor should make the build explainable. "Build Inspector" denotes the
+single-owner evidence projection, not a requirement to occupy the persistent
+right-hand Selection Inspector. The Workspace shell presents these facts in
+expandable Bottom Panel Build details; global configuration and Preview lifecycle
+controls remain separate from selection editing.
 
 Useful fields include:
 
@@ -2428,3 +2461,20 @@ The most important decisions are:
 - full Material Program/PSO/draw-grouping integration is acknowledged early but designed separately.
 
 This preserves GGLab's Shader North Star while proving the real Runtime seam before the project invests heavily in editor scale.
+
+## Environment consumer proposal integration
+
+The shared `shader-toolchain-client` owns consumption of the main-owned
+Environment deployment protocol; `shader-graph-core` retains ordinary graph
+and Surface Profile semantics. The CLI and GUI consume the same Environment
+reader, closure verifier, and import transaction interfaces. OS enumeration,
+reparse/link observation, hashing, and process execution remain host operations.
+
+The owner approved the v1 integration baseline on 2026-09-09; see
+`../../GraphicsGadgetLabDocs/GGLab_Environment_Publication_Approval.md`.
+Runtime use remains subject to implemented verification and ownership gates.
+See [Environment consumer readiness](environment-import-readiness.md) for the
+implemented read-only commands, tested interface boundaries, approval gate, and
+production host/registry/native qualification work. The
+[desktop Environment workflow](environment-desktop-workflow.md) documents the
+import entry points, recovery behavior and remaining manual acceptance gates.

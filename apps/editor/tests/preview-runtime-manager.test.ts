@@ -26,6 +26,20 @@ function managerFor(boundary: PreviewRuntimeBoundary): AttachedPreviewRuntimeMan
 }
 
 describe("attached Preview Runtime lifetime authority — state machine", () => {
+    it("requires proven exit before assigning a new session identity", async () => {
+        const boundary = runtime({ launches: [{ kind: "launched" }], holdStopUntilRelease: true });
+        const manager = managerFor(boundary);
+        await manager.launch(CANDIDATE_A);
+        expect(() => manager.resetSession("ab".repeat(16))).toThrow(/proven Runtime exit/);
+        const closing = manager.terminateAndJoin();
+        expect(() => manager.resetSession("ab".repeat(16))).toThrow();
+        boundary.releaseStop(); await closing;
+        manager.resetSession("ab".repeat(16));
+        expect(() => manager.resetSession("ab".repeat(16))).toThrow(/new valid/);
+        await manager.launch(CANDIDATE_A);
+        expect(boundary.lastLaunch?.sessionId).toBe("ab".repeat(16));
+        const finish = manager.terminateAndJoin(); boundary.releaseStop(); await finish;
+    });
     it("attaches one candidate/session launch (strict single-flight) and projects the owned binding", async () => {
         const boundary = runtime({ launches: [{ kind: "launched", runtimeIdentity: "runtime-a" }], keepLaunchPending: true });
         const manager = managerFor(boundary);

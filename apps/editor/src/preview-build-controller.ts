@@ -67,6 +67,7 @@ import {
     type PreviewInputContractMismatch,
     type PreviewInputContractSelection,
 } from "./preview-input-contract.js";
+import { captureDocumentEvidence, type DocumentEvidenceOrigin } from "./document-evidence.js";
 import { AttachedPreviewRuntimeManager } from "./preview-runtime-manager.js";
 
 type CandidateInvalidatedResult = Extract<BoundaryResult, { readonly kind: "candidate-invalidated" }>;
@@ -82,6 +83,7 @@ export interface PreviewToolStatePort {
 /** Current editor/core facts from which the Preview request is composed. No
  *  input-contract ID or source bytes are caller claims: both are derived. */
 export interface PreviewCompositionInput {
+    readonly documentOwner?: import("./document-session.js").DocumentSession;
     readonly document: ShaderGraphDocument;
     readonly descriptor: SurfaceProfileDescriptor | null;
     readonly descriptorCompatible: boolean;
@@ -157,7 +159,8 @@ export type PreviewBuildGateReason =
      *  any of the facts above: a transition owns the slot, or the desktop
      *  host (and with it this very flow) does not exist for this mount. */
     | { readonly reason: "preview-transition-in-flight" }
-    | { readonly reason: "preview-host-unavailable" };
+    | { readonly reason: "preview-host-unavailable" }
+    | { readonly reason: "preview-target-unavailable" };
 
 export interface PreviewBuildGate {
     readonly admitted: boolean;
@@ -185,6 +188,7 @@ type PreviewObservationCandidateInvalidated = Extract<
 >;
 
 export type PreviewObservationRefresh =
+    | { readonly kind: "session-superseded" }
     | { readonly kind: "no-attempt" }
     | { readonly kind: "candidate-invalidated"; readonly result: PreviewObservationCandidateInvalidated }
     | { readonly kind: "host-refused"; readonly reason: "not-found" | "too-large" | "read-failed" }
@@ -256,6 +260,7 @@ function lineForDeployment(line: PreviewBuildLine, candidate: ToolCandidate): Pr
 
 export class PreviewBuildController {
     private sessionState: PreviewBuildSession;
+    private retiredSessions: readonly PreviewBuildSession[] = [];
     private lastHandshakeState: PreviewHandshakeAttemptRecord | null = null;
     private currentHandshakeLane: {
         readonly key: string;
@@ -288,6 +293,23 @@ export class PreviewBuildController {
         readonly manager: AttachedPreviewRuntimeManager,
     ) {
         this.sessionState = createPreviewBuildSession(sessionId);
+    }
+
+    get history(): readonly PreviewBuildSession[] { return this.retiredSessions; }
+
+    /** Retain chronology, but start an empty ownership coordinate after teardown. */
+    resetSession(sessionId: string): void {
+        if (this.buildInFlight) throw new Error("A Preview build still owns its session");
+        const next = createPreviewBuildSession(sessionId);
+        this.manager.resetSession(sessionId);
+        this.retiredSessions = [...this.retiredSessions, this.sessionState];
+        this.sessionState = next;
+        this.handshakeEpoch++;
+        this.currentHandshakeLane = null;
+        this.lastHandshakeState = null;
+        this.acceptedObservationState = null;
+        this.lastObservationRefreshState = null;
+        this.observationLane = null;
     }
 
     get session(): PreviewBuildSession {
@@ -572,6 +594,10 @@ export class PreviewBuildController {
         input: PreviewCompositionInput,
         evaluateGate: (input: PreviewCompositionInput) => PreviewBuildGate,
     ): Promise<PreviewBuildLaunch> {
+        if (input.documentOwner !== undefined && input.document !== input.documentOwner.history.present) {
+            throw new Error("Preview document evidence origin must use its owner snapshot");
+        }
+        const origin = input.documentOwner === undefined ? null : captureDocumentEvidence(input.documentOwner, input.descriptor);
         const initialGate = evaluateGate(input);
         if (!initialGate.admitted) {
             return Promise.resolve({ issued: false, reason: "gate-refused", gate: initialGate });
@@ -590,7 +616,7 @@ export class PreviewBuildController {
             if (!gate.admitted || gate.request === null || gate.eligibility?.status !== "eligible") {
                 return { issued: false, reason: "gate-refused", gate };
             }
-            return this.issueAdmittedBuild(gate, ordinal);
+            return this.issueAdmittedBuild(gate, ordinal, origin);
         })();
         this.buildQueue = started
             .then(async (launch) => {
@@ -605,11 +631,14 @@ export class PreviewBuildController {
         return started;
     }
 
-    private async issueAdmittedBuild(gate: PreviewBuildGate, ordinal: number): Promise<PreviewBuildLaunch> {
+    private async issueAdmittedBuild(gate: PreviewBuildGate, ordinal: number, origin: DocumentEvidenceOrigin | null): Promise<PreviewBuildLaunch> {
         const request = gate.request;
         const eligibility = gate.eligibility;
         if (request === null || eligibility?.status !== "eligible") {
             throw new Error("the private Preview issuer was reached without an admitted request and proof");
+        }
+        if (origin !== null && origin.sourceMap.generatedSourceIdentity !== request.generatedSourceIdentity) {
+            throw new Error("Preview origin must name the admitted generated source");
         }
         const candidate = eligibility.candidate;
         const handle = await this.boundary.buildPreview(candidate, request);
@@ -620,6 +649,7 @@ export class PreviewBuildController {
             handle.buildId,
             candidate,
             previewBuildIntentOf(request, eligibility.facts),
+            origin,
         );
 
         const active = { buildId: handle.buildId, cancelRequested: false };
@@ -722,10 +752,9 @@ export class PreviewBuildController {
     }
 
     private async runObservationRefresh(candidate: ToolCandidate): Promise<PreviewObservationRefresh> {
-        const host = await this.observationBoundary.readPreviewObservation(
-            candidate,
-            this.sessionState.sessionId,
-        );
+        const sessionId = this.sessionState.sessionId;
+        const host = await this.observationBoundary.readPreviewObservation(candidate, sessionId);
+        if (sessionId !== this.sessionState.sessionId) return { kind: "session-superseded" };
         let record: PreviewObservationRefresh;
         if (host.kind === "candidate-invalidated") {
             this.toolPort.candidateInvalidated(host);

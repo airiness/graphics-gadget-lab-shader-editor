@@ -90,8 +90,12 @@ pub struct RunningChild {
 /// running. This is the call the provenance guard must span — and the
 /// call after which the guard may go immediately: the launch HAS
 /// happened by the time this returns.
-pub fn spawn(executable: &std::path::Path, args: &[String]) -> Result<RunningChild, SpawnError> {
-    let mut child = std::process::Command::new(executable)
+pub(crate) fn spawn_in(executable: &std::path::Path, args: &[String], working_directory: Option<&std::path::Path>) -> Result<RunningChild, SpawnError> {
+    let mut command = std::process::Command::new(executable);
+    if let Some(directory) = working_directory { command.current_dir(directory); }
+    #[cfg(windows)]
+    if working_directory.is_some() { use std::os::windows::process::CommandExt; command.creation_flags(0x08000000); }
+    let mut child = command
         .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

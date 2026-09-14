@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "graphId": "graph.surface-texture-preview",
+  "profile": "gglab.surface",
+  "profileVersion": 2,
+  "parameters": [
+    { "id": "p.rough", "name": "Roughness", "class": "ScalarParameter", "valueType": "float" },
+    { "id": "p.tex", "name": "Preview Texture", "class": "Texture2DParameter", "valueType": "Texture2D" }
+  ],
+  "nodes": [
+    { "id": "n.texture", "type": "Texture2DParameter", "version": 1, "properties": { "parameterId": "p.tex" } },
+    { "id": "n.uv", "type": "UV0", "version": 1, "properties": {} },
+    { "id": "n.sample", "type": "SampleTexture2D", "version": 1, "properties": {} },
+    { "id": "n.emission", "type": "Float3", "version": 1, "properties": { "value": [0, 0, 0] } },
+    { "id": "n.roughness", "type": "ScalarParameter", "version": 1, "properties": { "parameterId": "p.rough" } },
+    { "id": "n.opacity", "type": "Float", "version": 1, "properties": { "value": 1 } },
+    { "id": "n.output", "type": "SurfaceOutput", "version": 1, "properties": {} }
+  ],
+  "connections": [
+    { "id": "c.texture", "from": { "nodeId": "n.texture", "portId": "value" }, "to": { "nodeId": "n.sample", "portId": "texture" } },
+    { "id": "c.uv", "from": { "nodeId": "n.uv", "portId": "value" }, "to": { "nodeId": "n.sample", "portId": "uv" } },
+    { "id": "c.color", "from": { "nodeId": "n.sample", "portId": "RGB" }, "to": { "nodeId": "n.output", "portId": "BaseColor" } },
+    { "id": "c.metallic", "from": { "nodeId": "n.sample", "portId": "B" }, "to": { "nodeId": "n.output", "portId": "Metallic" } },
+    { "id": "c.emission", "from": { "nodeId": "n.emission", "portId": "value" }, "to": { "nodeId": "n.output", "portId": "Emissive" } },
+    { "id": "c.roughness", "from": { "nodeId": "n.roughness", "portId": "value" }, "to": { "nodeId": "n.output", "portId": "Roughness" } },
+    { "id": "c.opacity", "from": { "nodeId": "n.opacity", "portId": "value" }, "to": { "nodeId": "n.output", "portId": "Opacity" } }
+  ],
+  "editorMetadata": {
+    "nodes": {
+      "n.texture": { "position": { "x": 40, "y": 60 } },
+      "n.uv": { "position": { "x": 40, "y": 220 } },
+      "n.sample": { "position": { "x": 380, "y": 60 } },
+      "n.emission": { "position": { "x": 380, "y": 370 } },
+      "n.roughness": { "position": { "x": 380, "y": 540 } },
+      "n.opacity": { "position": { "x": 380, "y": 700 } },
+      "n.output": { "position": { "x": 760, "y": 100 } }
+    }
+  }
+}

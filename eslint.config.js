@@ -10,6 +10,7 @@ export default tseslint.config(
             "**/target/",
             "**/src-tauri/gen/",
             "coverage/",
+            ".review-evidence/",
             "pnpm-lock.yaml"
         ]
     },

@@ -839,11 +839,11 @@ describe("typed port presentation (core types → data categories)", () => {
             // The library ships a default "selected" rule that re-colors the
             // path to a flat gray. Counter it at higher specificity (4 vs 3
             // classes) with the SAME per-kind value, order-independent.
-            expect(appCss).toMatch(/\.react-flow__edge\.gglab-edge\.selected \.react-flow__edge-path \{[\s\S]*?stroke: var\(--gglab-edge-stroke, #56637a\)/);
+            expect(appCss).toMatch(/\.react-flow__edge\.gglab-edge\.selected \.react-flow__edge-path \{[\s\S]*?stroke: var\(--gglab-edge-stroke, var\(--edge-muted\)\)/);
             // One color authority per kind (resting, selected, and the
             // counter-rule all read the same variable).
-            expect(appCss).toMatch(/\.react-flow__edge\.gglab-edge-kind-vector \{[\s\S]*?--gglab-edge-stroke: color-mix\(in srgb, var\(--kind-vector\) 70%, #3a4658\)/);
-            expect(appCss).toMatch(/\.react-flow__edge\.gglab-edge-selected \.react-flow__edge-path \{[\s\S]*?stroke: var\(--gglab-edge-stroke, #56637a\);[\s\S]*?stroke-width: 3;/);
+            expect(appCss).toMatch(/\.react-flow__edge\.gglab-edge-kind-vector \{[\s\S]*?--gglab-edge-stroke: color-mix\(in srgb, var\(--kind-vector\) 70%, var\(--edge-mix\)\)/);
+            expect(appCss).toMatch(/\.react-flow__edge\.gglab-edge-selected \.react-flow__edge-path \{[\s\S]*?stroke: var\(--gglab-edge-stroke, var\(--edge-muted\)\);[\s\S]*?stroke-width: 3;/);
             // The selected width (3px) must not be squashed by an inline
             // default — the stroke width is CSS alone.
             const viewport = read("../../../packages/editor-ui/src/flow/flow-viewport.tsx");
@@ -1129,10 +1129,10 @@ describe("typed port presentation (core types → data categories)", () => {
         it("the app opens the node menu with the target SELECTED (menu and Delete key agree on one target)", () => {
             const app = read("../src/app.tsx");
             const handler = app.match(/const onNodeMenu = [^\n]*\n[\s\S]*?\n\s{4}\};/)?.[0] ?? "";
-            expect(handler).toContain("setSelectedNodeId(nodeId)"); // menu open = target selected
-            expect(handler).toContain("setSelectedConnectionId(null)"); // exclusive selection
-            expect(handler).toContain("setReconnectArmed(null)"); // a pending gesture and an open menu contradict
-            expect(handler).toContain("setNodeMenu({ nodeId, x: anchor.x, y: anchor.y })");
+            expect(handler).toContain("selectedNodeId: nodeId"); // atomic menu selection
+            expect(handler).toContain("selectedConnectionId: null"); // exclusive selection
+            expect(handler).toContain("reconnectArmed: null"); // a pending gesture and an open menu contradict
+            expect(handler).toContain("nodeMenu: { nodeId, x: anchor.x, y: anchor.y }");
             expect(app).toContain("onNodeMenu={onNodeMenu}");
         });
 
@@ -1162,9 +1162,10 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(handler).toContain("applyRemoveConnection(selectedConnectionId)");
             const nodeSelect = app.match(/const onNodeSelect = [^\n]*\n[\s\S]*?\n\s{4}\};/)?.[0] ?? "";
             expect(nodeSelect).toContain("setSelectedNodeId(nodeId)");
-            expect(nodeSelect).toContain("setSelectedConnectionId(null)");
+            expect(nodeSelect).not.toContain("setSelectedConnectionId(null)"); // the exclusive setter already clears the edge
             const edgeSelect = app.match(/const onEdgeSelect = [^\n]*\n[\s\S]*?\n\s{4}\};/)?.[0] ?? "";
-            expect(edgeSelect).toContain("setSelectedNodeId(null)"); // one selection fact at a time
+            expect(edgeSelect).toContain("setSelectedConnectionId(connectionId)"); // the setter atomically retires node selection
+            expect(edgeSelect).not.toContain("setSelectedNodeId(null)");
         });
 
         it("projection: the selected node carries emphasis, exactly like the selected connection", () => {
@@ -1257,7 +1258,7 @@ describe("typed port presentation (core types → data categories)", () => {
             const result = setConstantValue(input, nonConstant.id, 1.5);
             expect(result.applied).toBe(false);
             expect(result.document).toBe(input);
-            expect(result.refusal?.reason).toContain("not a catalog constant");
+            expect(result.refusal?.diagnostics[0]?.code).toBe("INVALID_NODE_PROPERTY");
         });
 
         it("the contextual Inspector reaches the shared gate without adding another mutation path", () => {
@@ -1267,7 +1268,8 @@ describe("typed port presentation (core types → data categories)", () => {
             expect(barrel).toContain("NodePropertiesPanel");
             const app = read("../src/app.tsx");
             expect(app).toContain("setConstantValue(document, nodeId, value)");
-            expect(app).toContain('setInspectorZone("selection")');
+            expect(app).toContain('aria-label="Selection Inspector"');
+            expect(app).not.toContain("setInspectorZone");
             expect(app).toContain("onConstantValueCommit={onConstantValueCommit}");
             const css = read("../src/app.css");
             expect(css).toContain(".gglab-node-property-grid");
@@ -1350,13 +1352,13 @@ describe("typed port presentation (core types → data categories)", () => {
         // raised content < hover surface. Canvas and frame already use
         // the lowest steps in the existing design; lock that the ladder
         // stays a single ordered scale.
-        expect(appCss).toMatch(/--bg: #0f1319;[\s\S]*--panel: #151b23;[\s\S]*--panel-2: #1a222d;[\s\S]*--panel-hi: #202a37;/);
+        expect(appCss).toMatch(/--bg: #141416;[\s\S]*--panel: #1b1b1f;[\s\S]*--panel-2: #222228;[\s\S]*--panel-hi: #2b2b33;/);
         expect(appCss).toMatch(/\.gglab-viewport[\s\S]*?background: var\(--bg\)/);
         expect(appCss).toMatch(/\.gglab-header[\s\S]*?background: var\(--panel\)/);
         expect(appCss).toMatch(/\.gglab-statusbar[\s\S]*?background: var\(--panel\)/);
         // Faint text meets AA on the raised surface (small meta text,
         // diagnostic paths, hints must stay readable).
-        expect(appCss).toContain("--faint: #7b89a1");
+        expect(appCss).toContain("--faint: #9c9caa");
         // Slim, surface-agnostic scrollbar (transparent inset, hover step).
         expect(appCss).toMatch(/::-webkit-scrollbar[\s\S]*?width: 8px;/);
         expect(appCss).toMatch(/::-webkit-scrollbar-thumb[\s\S]*?border: 2px solid transparent/);
@@ -2364,8 +2366,8 @@ describe("primary sidebar (activity bar + workspace explorer)", () => {
         // The UI's watched discovery is bound to BOTH its id and the root it ran against.
         expect(app).toMatch(/discoveryRef\.current = \{ uri: expectedUri, discoveryId: attempt\.discoveryId \}/);
         // A settlement applies ONLY if it is still the current one (same id + root).
-        expect(app).toMatch(/watching\.discoveryId === settlement\.discoveryId/);
-        expect(app).toMatch(/watching\.uri === expectedUri/);
+        expect(app).toContain("isCurrentWorkspaceDiscovery(watching, expectedUri, settlement.discoveryId)");
+        expect(app).toContain("isCurrentWorkspaceDiscovery(discoveryRef.current, expectedUri, settlement.discoveryId)");
         expect(app).toMatch(/settlementUri === expectedUri/);
     });
 
@@ -2404,8 +2406,8 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         expect(app).toMatch(/import \{[\s\S]*?resolvePreviewTarget[\s\S]*?\} from "\.\.\/src\/preview-coordinator\.js"|import \{[\s\S]*?resolvePreviewTarget[\s\S]*?\} from "\.\/preview-coordinator\.js"/);
         // The composition source is the resolved target's document + emission.
         expect(app).toMatch(/resolvePreviewTarget\(workspace\)/);
-        expect(app).toMatch(/const previewDocument = previewTargetSession\.history\.present/);
-        expect(app).toMatch(/const previewEmission = previewTargetSession\.presentation\.emission/);
+        expect(app).toMatch(/const previewDocument = previewTargetSession\?\.history\.present \?\? null/);
+        expect(app).toMatch(/const previewEmission = previewTargetSession\?\.presentation\.emission \?\? null/);
         expect(app).toMatch(/useShaderPreview\(\{[\s\S]*?document: previewDocument,[\s\S]*?emission: previewEmission/);
     });
 
@@ -2429,7 +2431,7 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         const applyAt = retargetBody.indexOf("this.store.apply");
         expect(teardownAt).toBeGreaterThanOrEqual(0);
         expect(applyAt).toBeGreaterThan(teardownAt);
-        expect(coordinator).toMatch(/const descriptor = state\.profileDescriptor/);
+        expect(coordinator).toContain("state.session.activeEnvironment === null ? state.profileDescriptor : this.environmentDescriptor(target.history.present)");
         expect(coordinator).toMatch(/emitHlsl\(target\.history\.present, descriptor\)/);
         expect(coordinator).toMatch(/target-emission-unavailable/);
     });
@@ -2451,7 +2453,7 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         const coordinator = read("../src/preview-coordinator.ts");
         expect(coordinator).toMatch(/export function resolvePreviewTarget/);
         expect(coordinator).toMatch(/export function hasExplicitPreviewTarget/);
-        expect(coordinator).toMatch(/workspace\.preview\.targetDocumentId \?\? workspace\.activeDocumentId/);
+        expect(coordinator).not.toMatch(/workspace\.preview\.targetDocumentId \?\? workspace\.activeDocumentId/);
         expect(coordinator).toMatch(/export class PreviewCoordinator/);
     });
 
@@ -2506,13 +2508,13 @@ describe("preview target ownership (PreviewCoordinator)", () => {
         expect(managerSource).toMatch(/could not be stopped/);
     });
 
-    it("a Workspace seeds its Preview target at the first open and re-seeds it on a target close (never a live follow)", () => {
+    it("a Workspace seeds its first target and clears ownership on target close", () => {
         const ws = read("../src/workspace-session.ts");
         expect(ws).toMatch(
-            /workspace\.preview\.targetDocumentId === null\s*\? \{ targetDocumentId: document\.sessionId \}/,
+            /workspace\.documents\.length === 0\s*\? \{ targetDocumentId: document\.sessionId \}/,
         );
         expect(ws).toMatch(
-            /workspace\.preview\.targetDocumentId === documentSessionId\s*\? \(documents\.length > 0 \? activeDocumentId : null\)/,
+            /workspace\.preview\.targetDocumentId === documentSessionId\s*\? null/,
         );
     });
 

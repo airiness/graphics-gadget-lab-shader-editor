@@ -1,0 +1,256 @@
+{
+  "recordedAt": "2026-09-11T15:53:01.8875655+09:00",
+  "editorBaseRevision": "a8bd540d9a7d452e5794b027a77d52a309166055",
+  "editorState": "uncommitted review working tree; not a clean committed replay",
+  "producerRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec",
+  "producerState": "clean pinned checkout; existing built and published closures reused",
+  "sourceFiles": [
+    {
+      "path": "apps/editor/src/app.css",
+      "sha256": "3b1d2bc4b7e6a109ee14a97151e16091c42993af1f7af32d0192cbf02cbeab1f"
+    },
+    {
+      "path": "apps/editor/src/app.tsx",
+      "sha256": "93e8ba3ed445532bef701b9aedeee41595c07d392972070740cacff46b94b17a"
+    },
+    {
+      "path": "apps/editor/src/environment-activation-host.ts",
+      "sha256": "787246a5b8ae7f251d6a06a7b221477fb00bfe4e1e83cb30d821367a9104aee6"
+    },
+    {
+      "path": "apps/editor/src/environment-import-host.test.ts",
+      "sha256": "20f3bf8d5456c9dc843e54dd86ebb56dcc3a437bf4a4453cca5f22ff287e0ba1"
+    },
+    {
+      "path": "apps/editor/src/environment-panel.test.tsx",
+      "sha256": "166dc25db4c6924fdd66fae6681ada75ac1ed65458bdbb8cd7e208d69fae0039"
+    },
+    {
+      "path": "apps/editor/src/environment-panel.tsx",
+      "sha256": "3de31df71a3a7756516420b447b06c6bb1ff8220766d5e70b1936b28fcbabc5e"
+    },
+    {
+      "path": "apps/editor/src/environment-probe-documents.ts",
+      "sha256": "ff954d4f980421e1258e6bdf09e3342f3cc97b87640437b357b14e545c063730"
+    },
+    {
+      "path": "apps/editor/src/environment-storage-host.ts",
+      "sha256": "ae331a5ad6d12d17fc088d00cbdead5b0fcd2d7f2b737f5fd171cb49ff70f4a8"
+    },
+    {
+      "path": "apps/editor/src/environment-workflow.test.ts",
+      "sha256": "bb658e54933cc850486ccbc370c35675b3c3a2c2e836a0e401feab0cd6a5dca1"
+    },
+    {
+      "path": "apps/editor/src/environment-workflow.ts",
+      "sha256": "1e45a318f0b999fc4b6a9530309c1b82b5a4b3654bfb3716178d8fd81220f6a0"
+    },
+    {
+      "path": "apps/editor/src/preview-coordinator.ts",
+      "sha256": "738b956700489f0820c7fcf50b18e2287d11356ad12a8db0dc523ba640482489"
+    },
+    {
+      "path": "apps/editor/tests/environment-activation.test.ts",
+      "sha256": "8fa02a719fca0121305938f6d8053ab306048de0ded9c767bfa45d26c848dde9"
+    },
+    {
+      "path": "apps/editor/tests/environment-probe-documents.ts",
+      "sha256": "37f9a2d4cbb09674df331cceefb1730047da2fb7a3d4377e4e0dcd7caa48a8e6"
+    }
+  ],
+  "checks": [
+    {
+      "result": "passed",
+      "command": "pnpm typecheck"
+    },
+    {
+      "passed": 998,
+      "result": "passed",
+      "skipped": 9,
+      "command": "pnpm test"
+    },
+    {
+      "result": "passed",
+      "command": "pnpm lint"
+    },
+    {
+      "result": "passed",
+      "command": "git diff --check"
+    },
+    {
+      "warnings": "Existing dependency directives and large bundle warning",
+      "result": "passed",
+      "command": "pnpm --filter @gglab/editor build"
+    },
+    {
+      "ignored": 3,
+      "passed": 94,
+      "result": "passed",
+      "command": "cargo test --offline --manifest-path apps/editor/src-tauri/Cargo.toml"
+    },
+    {
+      "candidates": [
+        "Build/Output/x64/Debug",
+        "Build/Output/x64/Release"
+      ],
+      "result": "passed",
+      "command": "cargo test --offline --manifest-path apps/editor/src-tauri/Cargo.toml --lib environment_io::tests::real_producer_discovery_is_read_only_and_candidate_preserving -- --ignored --nocapture"
+    },
+    {
+      "configurations": 2,
+      "result": "passed for Debug and Release with explicit import/activation qualification flags",
+      "command": "pnpm --filter @gglab/editor test src/environment-import-host.test.ts"
+    }
+  ],
+  "native": {
+    "debug": {
+      "reportSha256": "540f54af3dff0e17f7aacf031b4c8a16ed8079f37fb8ea3363992e4042929a72",
+      "environmentId": "sha256:f16290e99f195e15b368393ffa44b571e34480d3bdc3c3beb1b3f23f44e916ed",
+      "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000",
+      "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\s\\qtg81elcv6egsl1wjl",
+      "tool": {
+        "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000\\payload\\gglab-shaderc.exe",
+        "sha256": "3ef4ffd5297777f6fe1088fb228f040e0ec95f5df57f1063b8cd312384410cb7"
+      },
+      "runtime": {
+        "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000\\payload\\GraphicsGadgetLab.exe",
+        "sha256": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+      },
+      "proofPreviewRuns": 16,
+      "registeredReuse": "qualified",
+      "previousRuntime": "loaded-vulkan-preview-joined-before-workflow-reverification",
+      "mutationJournalListing": "synthetic-empty",
+      "authoringRuns": [
+        {
+          "backend": "dx12",
+          "profileVersion": 1,
+          "sessionId": "a073d97264fe58f885a55e170b3ba288",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+            "loadedPublicationRef": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "sessionId": "bb2b948924bab38435c89b172fbf9805",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+            "loadedPublicationRef": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "sessionId": "977b0575e87294800a1c07497348707e",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+            "loadedPublicationRef": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "sessionId": "58958bac10cbde285d4f70c4b5178d56",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+            "loadedPublicationRef": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+            "rejectionCode": "none"
+          }
+        }
+      ],
+      "lostAcknowledgementRecovered": true,
+      "cancellation": "refused"
+    },
+    "release": {
+      "reportSha256": "6c80541d13cb808632d0ae2318e44e937256bd02c197983da9602b0e1951faed",
+      "environmentId": "sha256:641093ddf5acffcfe2c9ae7f0816971658cc39e3a4486c47c46b2c218b3bed91",
+      "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000",
+      "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\s\\qtg8294qbvl8bv2ebl",
+      "tool": {
+        "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000\\payload\\gglab-shaderc.exe",
+        "sha256": "421926487ee7290be858077eadc295348d403644856e1ebd56af4840fc2e36e5"
+      },
+      "runtime": {
+        "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000\\payload\\GraphicsGadgetLab.exe",
+        "sha256": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175"
+      },
+      "proofPreviewRuns": 16,
+      "registeredReuse": "qualified",
+      "previousRuntime": "loaded-vulkan-preview-joined-before-workflow-reverification",
+      "mutationJournalListing": "synthetic-empty",
+      "authoringRuns": [
+        {
+          "backend": "dx12",
+          "profileVersion": 1,
+          "sessionId": "d58f561f92c1419499fbf04ff058974d",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+            "loadedPublicationRef": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "sessionId": "d751f82a447680188baeb0f6dba965a9",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+            "loadedPublicationRef": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "sessionId": "7617f515738e0428494c50ec71493d84",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+            "loadedPublicationRef": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+            "rejectionCode": "none"
+          }
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "sessionId": "f7ca93a2961d7b40289353e2c71a8526",
+          "observation": {
+            "status": "loaded",
+            "observedAttemptSequence": 1,
+            "observedPublicationRef": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+            "loadedPublicationRef": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+            "rejectionCode": "none"
+          }
+        }
+      ],
+      "lostAcknowledgementRecovered": true,
+      "cancellation": "refused"
+    }
+  },
+  "limitations": [
+    "Native registry reuse uses the production workflow and real proof/registry/execution services; mutation journal listing is an empty test adapter.",
+    "Combined repository publication through the desktop menu and native directory picker interaction were not exercised end to end.",
+    "Dialog layout, focus and visible cancellation still need manual desktop acceptance.",
+    "Native reuse reselects the same immutable Environment with a fresh activation; switching between two distinct Environment closures was not qualified.",
+    "No fresh Main builds, Main self-test suites or additional validation-layer log qualification were performed.",
+    "No installer/package build or clean committed Editor replay was performed.",
+    "Windows local storage and existing short-path support boundaries remain unchanged."
+  ]
+}

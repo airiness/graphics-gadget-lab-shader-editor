@@ -125,6 +125,8 @@ export function descriptorCommit(
     state: WorkspaceAuthoringState,
     descriptor: SurfaceProfileDescriptor | null,
 ): WorkspaceAuthoringState {
+    // Legacy/manual descriptor completions carry no Environment binding.
+    if (state.session.activeEnvironment !== null) return state;
     const documents = state.session.documents.map((document) =>
         document.presentation.emission !== null
             ? { ...document, presentation: { ...document.presentation, emission: null } }

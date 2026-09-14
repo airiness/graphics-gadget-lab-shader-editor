@@ -41,6 +41,52 @@ profile is the Surface Profile Descriptor in the main GGLab repository:
 record for that profile is owned by the GGLab docs repository (listed
 below), not this one.
 
+## Integration readiness records
+
+- `environment-producer-mutations.md` — guarded publish/init-state execution,
+  durable operation intents and read-only finalization reconciliation.
+
+- [Tauri Environment storage](environment-tauri-storage.md) records the approved
+  v1 integration scope, native filesystem observation, registry and recovery
+  adapters, and the remaining production integration gates.
+
+- [Environment clean replay](environment-clean-replay.md) records the exact
+  committed Main/Editor pair, fresh builds, Windows 8.3 and native qualification,
+  and successful GitHub CI after the review fixes.
+
+- [Review follow-up](review-followup.md) records stable diagnostic identities,
+  lazy cross-repo qualification, and the Main-owned 8.3 staging fix.
+
+- [Correctness and evidence review closure](review-closure.md) records the pinned
+  producer baseline, regression results and unresolved Windows short-alias gate.
+
+- [Guarded Environment discovery](environment-tauri-host.md) documents the
+  read-only Tauri bootstrap/publisher boundary and remaining approval gate.
+
+- [Environment registry persistence and recovery](environment-registry.md)
+  defines the Editor-owned location record, atomic host storage, unverified
+  restart behavior, and the still-disabled production import boundary.
+
+- [Environment import readiness and publisher handoff](environment-import-readiness.md)
+  records the inspected producer prerequisite, requested publication contract
+  deliverables, and Editor acceptance criteria. It does not define an
+  approved Environment manifest or claim that import is implemented.
+
+- [Environment import transaction](environment-import-transaction.md) connects actual
+  final proof to guarded registry registration and documents recovery boundaries.
+
+- [Managed Environment state paths](environment-managed-state.md) documents compact
+  state allocation, legacy intent recovery and the Windows host path limit.
+
+- [Workspace Environment activation](environment-workspace-activation.md) documents
+  the coordinator-owned selection transaction and remaining native host binding.
+
+- [Environment authoring host](environment-authoring-host.md) documents persistent
+  build/process boundaries, final-location profile resolution and native regressions.
+
+- [Workspace Environment authoring](environment-workspace-authoring.md) connects the
+  shared controller owner to application hooks and records native integration evidence.
+
 ## Documents owned by other repositories (referenced, not copied)
 
 GGLab docs repository:

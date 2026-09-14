@@ -202,3 +202,15 @@ describe("SurfaceDiagnostics.shadergraph", () => {
         expect(errors).toContain(DiagnosticCode.CycleDetected);
     });
 });
+
+
+it("emits the neon reactor sample within the frozen two-parameter Preview contract", () => {
+    const graph = expectParsed(fixture("surface-neon-reactor-preview.shadergraph"));
+    expect(validateShaderGraph(graph).diagnostics).toEqual([]);
+    expect(graph.parameters.map(p => [p.id, p.class, p.valueType])).toEqual([
+        ["p.rough", "ScalarParameter", "float"], ["p.tex", "Texture2DParameter", "Texture2D"],
+    ]);
+    const emission = emitHlsl(graph, v2Descriptor);
+    expect(emission.ok).toBe(true);
+    expect(emission.diagnostics).toEqual([]);
+});

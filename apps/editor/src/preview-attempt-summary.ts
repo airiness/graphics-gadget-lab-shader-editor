@@ -3,9 +3,17 @@ import type {
     PreviewAttemptTermination,
 } from "@gglab/shader-toolchain-client";
 
-/** User-facing settlement summary for one Preview attempt. The tool's
- * structured status and diagnostics must survive the final UI projection so
- * a failed build remains actionable without consulting a debugger. */
+/**
+ * User-facing HEADLINE for one Preview attempt settlement — the outcome
+ * kind, and the outcome's own status/termination facts, in one line.
+ * Structured diagnostics are NOT summarized into this string: the failure
+ * envelope's diagnostics render as their own rows in the display surface
+ * (the Preview panel view), each a structured fact with its location
+ * identity, so the chronology stays navigable and un-flattened. A failed
+ * build therefore remains actionable without a debugger: the headline
+ * names the status and exit code, and the diagnostic rows underneath
+ * carry the tool's lines.
+ */
 export function describePreviewAttemptOutcome(
     attemptSequence: number,
     outcome: PreviewAttemptOutcome,
@@ -18,15 +26,7 @@ export function describePreviewAttemptOutcome(
     }
     if ("envelope" in outcome) {
         const envelope = outcome.envelope;
-        const heading = `Preview attempt #${attemptSequence} failed — ${envelope.status} (exit ${envelope.exitCode})`;
-        const diagnostics = envelope.diagnostics.map((diagnostic) =>
-            diagnostic.sourceIdentity === undefined
-                ? diagnostic.message
-                : `[source ${diagnostic.sourceIdentity}] ${diagnostic.message}`,
-        );
-        return diagnostics.length === 0
-            ? `${heading}.`
-            : `${heading}: ${diagnostics.join(" | ")}`;
+        return `Preview attempt #${attemptSequence} failed — ${envelope.status} (exit ${envelope.exitCode}).`;
     }
     return `Preview attempt #${attemptSequence} failed — ${describeTermination(outcome.termination)}.`;
 }

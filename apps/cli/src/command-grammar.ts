@@ -42,6 +42,19 @@ export interface CommandGrammar {
 }
 
 export const COMMAND_GRAMMARS = {
+    "environment-registry": { positionalCount: 1, valueOptions: [], flags: ["pretty", "help"] },
+    "environment-verify": { positionalCount: 1, valueOptions: [], flags: ["pretty", "help", "profiles"] },
+    "environment-discover": { positionalCount: 1, valueOptions: [], flags: ["pretty", "help"] },
+    edit: {
+        positionalCount: 1,
+        valueOptions: ["commands", "descriptor"],
+        flags: ["pretty", "help"],
+    },
+    "edit-commands": {
+        positionalCount: 0,
+        valueOptions: [],
+        flags: ["pretty", "help"],
+    },
     validate: {
         positionalCount: 1,
         valueOptions: ["descriptor", "descriptors-dir"],

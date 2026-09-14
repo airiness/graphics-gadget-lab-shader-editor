@@ -1,0 +1,287 @@
+{
+  "date": "2026-09-10",
+  "kind": "working-tree-workspace-environment-activation",
+  "editorBaseRevision": "84b35fda621b4bd75ab12a3c9392f40a6e46220e",
+  "editorCleanRevision": null,
+  "producerRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec",
+  "sourceSha256": {
+    "apps/editor/src/app.tsx": "c63da217dd6d487f18cfe276c0b64f386065db4f30f751ed3ead42e13aeb7af1",
+    "apps/editor/src/environment-activation-host.ts": "42d264635b6bbcb4c4850c494129bb016904e404b8149a3eda39312032e671fd",
+    "apps/editor/src/environment-import-host.test.ts": "370598e4bd4d024ae4a166a8de377e9fbdf1a6d5da19c45821f55c45fd9e69d5",
+    "apps/editor/src/preview-coordinator.ts": "6c412bb6337bd9b6719b22f95d12a0ba40c4ddc49ad53bfd428871a310ad67b6",
+    "apps/editor/src/useShaderPreview.ts": "8cdcd1919343b9fdd2ac08bb361ca265834661a65c9ed1ec152d794da87677b2",
+    "apps/editor/src/workspace-session.ts": "c1c7928daae6a873949203ffaf0af11072b260bbbc4191720a5ccce5f489fdac",
+    "apps/editor/src/workspace-store.ts": "00c2dbc0a50a159549a58abbe4b00aaad07544af78a76b9a6d9a7434ccb7a145",
+    "apps/editor/tests/environment-activation.test.ts": "d96606d8408cc18312bbfead75cd50a95012d6de456327e18ea188c144d0a537",
+    "apps/editor/tests/preview-coordinator.test.ts": "3af2a55f52c47696a16650a7f71e0c333528878a96e2981478e4079f4002fc97",
+    "apps/editor/tests/workspace-store.test.ts": "60a849b2723df90bcaa38939cb8b8713f2ece9f2f1ca89fcd3d4d75e3c929a49",
+    "packages/shader-toolchain-client/src/environment-import.ts": "396d9edda75847d3696695c722b695fb0109688ec882a94a60d0229b332398cc"
+  },
+  "gates": {
+    "typecheck": "passed",
+    "typescriptTests": {
+      "passed": 973,
+      "skipped": 9
+    },
+    "lint": "passed",
+    "rustTests": {
+      "passed": 93,
+      "ignored": 3
+    },
+    "editorWebBuild": "passed",
+    "gitDiffCheck": "passed",
+    "frontendVerificationExitCode": 0,
+    "rustVerificationExitCode": 0
+  },
+  "configurations": {
+    "debug": {
+      "manifestProducer": {
+        "deployment": "Build/Output/x64/Debug",
+        "publisherSha256": "cfbe8fa0caf0c0683fa7a010067fb03dd2c50d61a5d09137123793e50e9f7f5b",
+        "publisherVersion": "1.0.0",
+        "sourceDirty": false,
+        "sourceRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec"
+      },
+      "activation": {
+        "result": {
+          "ok": true,
+          "identity": {
+            "kind": "environment",
+            "targetDocumentId": null,
+            "sequence": 1
+          },
+          "targetChanged": false
+        },
+        "selection": {
+          "environmentId": "sha256:f16290e99f195e15b368393ffa44b571e34480d3bdc3c3beb1b3f23f44e916ed",
+          "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000",
+          "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\s\\qtg81elcv6egsl1wjl",
+          "tool": {
+            "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000\\payload\\gglab-shaderc.exe",
+            "sha256": "3ef4ffd5297777f6fe1088fb228f040e0ec95f5df57f1063b8cd312384410cb7"
+          },
+          "runtime": {
+            "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000\\payload\\GraphicsGadgetLab.exe",
+            "sha256": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+          },
+          "activationSequence": 1
+        },
+        "previousRuntime": "absent",
+        "nativeAuthoringBinding": "unavailable"
+      },
+      "nativePreviewRuns": [
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 1,
+          "sessionId": "4f40c9499f6a42cca38bfaa3629cda94"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 1,
+          "sessionId": "c6921bc3543a4a67bae9ad36cf5fd4f5"
+        },
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 2,
+          "sessionId": "74221cf7f29d45c087a18b5ce8b9b383"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 2,
+          "sessionId": "1c8181dee1994d03968b1172a86cb456"
+        },
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 1,
+          "sessionId": "ea5ec0b4aa4144ac93a4b83037adda56"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 1,
+          "sessionId": "563051f34d154f8fa00f80c668e92f1c"
+        },
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 2,
+          "sessionId": "029bd45ab43e44dc8eb38d05104a550f"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 2,
+          "sessionId": "6b3a84978233487bb65d2e4c87fe2e3c"
+        },
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 1,
+          "sessionId": "169477b172764d33a8caf99d233fa129"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 1,
+          "sessionId": "54b7c12f2b2e41c9b3d4932ee91ad78f"
+        },
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 2,
+          "sessionId": "d4f27f0d4bba4698b3b794888915cd60"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 2,
+          "sessionId": "3d84e71ba8aa44ceae97e1bb2f0e6086"
+        }
+      ],
+      "registrySnapshot": {
+        "records": [
+          {
+            "record": {
+              "environmentId": "sha256:f16290e99f195e15b368393ffa44b571e34480d3bdc3c3beb1b3f23f44e916ed",
+              "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000",
+              "registryVersion": 1,
+              "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\s\\qtg81elcv6egsl1wjl"
+            },
+            "readiness": "unverified"
+          }
+        ],
+        "diagnostics": [],
+        "pending": []
+      },
+      "importRetryStatus": "already-registered",
+      "lostAcknowledgementRecovered": true
+    },
+    "release": {
+      "manifestProducer": {
+        "deployment": "Build/Output/x64/Release",
+        "publisherSha256": "cfbe8fa0caf0c0683fa7a010067fb03dd2c50d61a5d09137123793e50e9f7f5b",
+        "publisherVersion": "1.0.0",
+        "sourceDirty": false,
+        "sourceRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec"
+      },
+      "activation": {
+        "result": {
+          "ok": true,
+          "identity": {
+            "kind": "environment",
+            "targetDocumentId": null,
+            "sequence": 1
+          },
+          "targetChanged": false
+        },
+        "selection": {
+          "environmentId": "sha256:641093ddf5acffcfe2c9ae7f0816971658cc39e3a4486c47c46b2c218b3bed91",
+          "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000",
+          "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\s\\qtg8294qbvl8bv2ebl",
+          "tool": {
+            "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000\\payload\\gglab-shaderc.exe",
+            "sha256": "421926487ee7290be858077eadc295348d403644856e1ebd56af4840fc2e36e5"
+          },
+          "runtime": {
+            "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000\\payload\\GraphicsGadgetLab.exe",
+            "sha256": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175"
+          },
+          "activationSequence": 1
+        },
+        "previousRuntime": "absent",
+        "nativeAuthoringBinding": "unavailable"
+      },
+      "nativePreviewRuns": [
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 1,
+          "sessionId": "9a1aa19483dd4fb39b3f61d9a413f2f1"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 1,
+          "sessionId": "ed80f6c6e9454538bbb524e2e5ae8afb"
+        },
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 2,
+          "sessionId": "7311c9ab4e564d39a262785a1e940161"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 2,
+          "sessionId": "9b77a4b6a4b34403a2a9619750a532be"
+        },
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 1,
+          "sessionId": "51c44bfffa4b485e87dff1c510811ec1"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 1,
+          "sessionId": "24ea58b47521454095c4493eaa7f0e44"
+        },
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 2,
+          "sessionId": "a1cecc4f1f4f4cc6b64b3bf37d0ecb5e"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 2,
+          "sessionId": "3b3fb4f11720462595c173fd6281b6bb"
+        },
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 1,
+          "sessionId": "d333b7696aa84f2992ffa80a9a7fd090"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 1,
+          "sessionId": "f2268b6cec254c65a02801d25faa085a"
+        },
+        {
+          "targetProfile": "gglab-dx12",
+          "profileVersion": 2,
+          "sessionId": "cadc5e964c83405f9537b3f265e35260"
+        },
+        {
+          "targetProfile": "gglab-vulkan13",
+          "profileVersion": 2,
+          "sessionId": "ec8f5ae0f4124eaea003418e80684dd7"
+        }
+      ],
+      "registrySnapshot": {
+        "records": [
+          {
+            "record": {
+              "environmentId": "sha256:641093ddf5acffcfe2c9ae7f0816971658cc39e3a4486c47c46b2c218b3bed91",
+              "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd9e841b79d400000000",
+              "registryVersion": 1,
+              "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\s\\qtg8294qbvl8bv2ebl"
+            },
+            "readiness": "unverified"
+          }
+        ],
+        "diagnostics": [],
+        "pending": []
+      },
+      "importRetryStatus": "already-registered",
+      "lostAcknowledgementRecovered": true
+    }
+  },
+  "scope": {
+    "nativeActivationPreviousRuntime": "absent",
+    "oldRuntimeTeardown": "synthetic transition tests",
+    "nativeAuthoringBinding": "unavailable",
+    "desktopMenuEntry": "not enabled",
+    "registrationReadiness": "unverified"
+  },
+  "notExecuted": [
+    "Native old-to-new attached Runtime switching",
+    "Environment-bound persistent authoring and per-document profile resolution",
+    "Interactive desktop activation walkthrough",
+    "New last-good native regression",
+    "Fresh Main build or clean committed Editor replay"
+  ],
+  "warnings": [
+    "Existing web dependency-directive and chunk-size warnings",
+    "Existing Rust unused fixture-field warning",
+    "PowerShell formatted pnpm stderr banners as NativeCommandError records; command exits and test summaries passed"
+  ]
+}

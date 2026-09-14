@@ -33,7 +33,7 @@ export { DiagnosticsPanel } from "./panels/diagnostics-panel.js";
 export type { DiagnosticsPanelProps } from "./panels/diagnostics-panel.js";
 export { DescriptorPanel, readDescriptorText, textureSignatureSerialized } from "./panels/descriptor-panel.js";
 export type { DescriptorPanelState, DescriptorPanelProps } from "./panels/descriptor-panel.js";
-export { NodePropertiesPanel } from "./panels/node-properties-panel.js";
+export { NodePropertiesPanel, InlineConstantEditor } from "./panels/node-properties-panel.js";
 export type { NodePropertiesPanelProps } from "./panels/node-properties-panel.js";
 export {
     addNode,

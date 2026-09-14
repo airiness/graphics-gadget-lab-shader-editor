@@ -39,6 +39,8 @@ export interface ParseResult<T> {
 
 /** Stable diagnostic code vocabulary of the core. Never free-form text. */
 export const DiagnosticCode = {
+    InvalidEditCommand: "INVALID_EDIT_COMMAND",
+    EditTransactionRefused: "EDIT_TRANSACTION_REFUSED",
     InvalidJson: "INVALID_JSON",
     MissingRequiredField: "MISSING_REQUIRED_FIELD",
     UnexpectedType: "UNEXPECTED_TYPE",

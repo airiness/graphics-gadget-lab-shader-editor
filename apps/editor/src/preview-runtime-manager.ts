@@ -138,8 +138,21 @@ export class AttachedPreviewRuntimeManager {
 
     constructor(
         private readonly boundary: PreviewRuntimeBoundary,
-        private readonly sessionId: string,
+        private sessionId: string,
     ) {}
+
+    /** Change only a proven-detached session; no old process can adopt the new ID. */
+    resetSession(sessionId: string): void {
+        if (!/^[0-9a-f]{32}$/.test(sessionId) || sessionId === this.sessionId) throw new Error("A new valid Preview session identity is required");
+        if (this.stateValue.kind !== "idle" && this.stateValue.kind !== "launch-refused") throw new Error("Preview session reset requires proven Runtime exit");
+        if (this.launchLane !== null || this.stopLane !== null) throw new Error("Preview session reset cannot overlap a Runtime operation");
+        this.sessionId = sessionId;
+        this.stateValue = { kind: "idle" };
+        this.ownedCandidateValue = null;
+        this.attemptedCandidateValue = null;
+        this.attachedIdentity = null;
+        this.exitSettlement = null;
+    }
 
     get state(): AttachedRuntimeState {
         return this.stateValue;

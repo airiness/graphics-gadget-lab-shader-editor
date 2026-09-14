@@ -1,0 +1,905 @@
+{
+  "schemaVersion": 1,
+  "graphId": "graph.surface-neon-reactor-preview",
+  "profile": "gglab.surface",
+  "profileVersion": 2,
+  "parameters": [
+    {
+      "id": "p.rough",
+      "name": "Roughness",
+      "class": "ScalarParameter",
+      "valueType": "float"
+    },
+    {
+      "id": "p.tex",
+      "name": "Preview Texture",
+      "class": "Texture2DParameter",
+      "valueType": "Texture2D"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "n.uv",
+      "type": "UV0",
+      "version": 1,
+      "label": "Mesh UV",
+      "properties": {}
+    },
+    {
+      "id": "n.center",
+      "type": "Float2",
+      "version": 1,
+      "label": "Reactor Center",
+      "properties": {
+        "value": [
+          0.5,
+          0.5
+        ]
+      }
+    },
+    {
+      "id": "n.centered",
+      "type": "Subtract",
+      "version": 1,
+      "label": "Center UV",
+      "properties": {}
+    },
+    {
+      "id": "n.radius",
+      "type": "Dot",
+      "version": 1,
+      "label": "Squared Radius",
+      "properties": {}
+    },
+    {
+      "id": "n.inner-radius",
+      "type": "Float",
+      "version": 1,
+      "label": "Inner Radius Squared",
+      "properties": {
+        "value": 0.045
+      }
+    },
+    {
+      "id": "n.inner-offset",
+      "type": "Subtract",
+      "version": 1,
+      "label": "Inner Ring Distance",
+      "properties": {}
+    },
+    {
+      "id": "n.inner-square",
+      "type": "Multiply",
+      "version": 1,
+      "label": "Square Distance",
+      "properties": {}
+    },
+    {
+      "id": "n.inner-width",
+      "type": "Float",
+      "version": 1,
+      "label": "Inner Sharpness",
+      "properties": {
+        "value": 14000
+      }
+    },
+    {
+      "id": "n.inner-scale",
+      "type": "Multiply",
+      "version": 1,
+      "label": "Shape Ring Width",
+      "properties": {}
+    },
+    {
+      "id": "n.inner-clamp",
+      "type": "Saturate",
+      "version": 1,
+      "label": "Clamp Distance",
+      "properties": {}
+    },
+    {
+      "id": "n.inner-mask",
+      "type": "OneMinus",
+      "version": 1,
+      "label": "Inner Ring Mask",
+      "properties": {}
+    },
+    {
+      "id": "n.inner-color",
+      "type": "Float3",
+      "version": 1,
+      "label": "Inner Neon Color",
+      "properties": {
+        "value": [
+          0.01,
+          0.85,
+          1
+        ]
+      }
+    },
+    {
+      "id": "n.inner-light",
+      "type": "Multiply",
+      "version": 1,
+      "label": "Inner Colored Ring",
+      "properties": {}
+    },
+    {
+      "id": "n.outer-radius",
+      "type": "Float",
+      "version": 1,
+      "label": "Outer Radius Squared",
+      "properties": {
+        "value": 0.16
+      }
+    },
+    {
+      "id": "n.outer-offset",
+      "type": "Subtract",
+      "version": 1,
+      "label": "Outer Ring Distance",
+      "properties": {}
+    },
+    {
+      "id": "n.outer-square",
+      "type": "Multiply",
+      "version": 1,
+      "label": "Square Distance",
+      "properties": {}
+    },
+    {
+      "id": "n.outer-width",
+      "type": "Float",
+      "version": 1,
+      "label": "Outer Sharpness",
+      "properties": {
+        "value": 5200
+      }
+    },
+    {
+      "id": "n.outer-scale",
+      "type": "Multiply",
+      "version": 1,
+      "label": "Shape Ring Width",
+      "properties": {}
+    },
+    {
+      "id": "n.outer-clamp",
+      "type": "Saturate",
+      "version": 1,
+      "label": "Clamp Distance",
+      "properties": {}
+    },
+    {
+      "id": "n.outer-mask",
+      "type": "OneMinus",
+      "version": 1,
+      "label": "Outer Ring Mask",
+      "properties": {}
+    },
+    {
+      "id": "n.outer-color",
+      "type": "Float3",
+      "version": 1,
+      "label": "Outer Neon Color",
+      "properties": {
+        "value": [
+          1,
+          0.015,
+          0.25
+        ]
+      }
+    },
+    {
+      "id": "n.outer-light",
+      "type": "Multiply",
+      "version": 1,
+      "label": "Outer Colored Ring",
+      "properties": {}
+    },
+    {
+      "id": "n.rings",
+      "type": "Add",
+      "version": 1,
+      "label": "Combine Neon Rings",
+      "properties": {}
+    },
+    {
+      "id": "n.power",
+      "type": "Float",
+      "version": 1,
+      "label": "Glow Strength",
+      "properties": {
+        "value": 2.5
+      }
+    },
+    {
+      "id": "n.emission",
+      "type": "Multiply",
+      "version": 1,
+      "label": "Neon Emission",
+      "properties": {}
+    },
+    {
+      "id": "n.texture",
+      "type": "Texture2DParameter",
+      "version": 1,
+      "label": "Runtime Texture",
+      "properties": {
+        "parameterId": "p.tex"
+      }
+    },
+    {
+      "id": "n.sample",
+      "type": "SampleTexture2D",
+      "version": 1,
+      "label": "Optional Backplate Texture",
+      "properties": {}
+    },
+    {
+      "id": "n.dark",
+      "type": "Float3",
+      "version": 1,
+      "label": "Midnight Backplate",
+      "properties": {
+        "value": [
+          0.008,
+          0.014,
+          0.035
+        ]
+      }
+    },
+    {
+      "id": "n.base",
+      "type": "Multiply",
+      "version": 1,
+      "label": "Dark Textured Base",
+      "properties": {}
+    },
+    {
+      "id": "n.rough",
+      "type": "ScalarParameter",
+      "version": 1,
+      "label": "Runtime Roughness",
+      "properties": {
+        "parameterId": "p.rough"
+      }
+    },
+    {
+      "id": "n.metal",
+      "type": "Float",
+      "version": 1,
+      "label": "Metallic",
+      "properties": {
+        "value": 0.8
+      }
+    },
+    {
+      "id": "n.opacity",
+      "type": "Float",
+      "version": 1,
+      "label": "Opacity",
+      "properties": {
+        "value": 1
+      }
+    },
+    {
+      "id": "n.output",
+      "type": "SurfaceOutput",
+      "version": 1,
+      "label": "Neon Reactor Surface",
+      "properties": {}
+    }
+  ],
+  "connections": [
+    {
+      "id": "c1",
+      "from": {
+        "nodeId": "n.uv",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.centered",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c2",
+      "from": {
+        "nodeId": "n.center",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.centered",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c3",
+      "from": {
+        "nodeId": "n.centered",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.radius",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c4",
+      "from": {
+        "nodeId": "n.centered",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.radius",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c5",
+      "from": {
+        "nodeId": "n.radius",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.inner-offset",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c6",
+      "from": {
+        "nodeId": "n.inner-radius",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.inner-offset",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c7",
+      "from": {
+        "nodeId": "n.inner-offset",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.inner-square",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c8",
+      "from": {
+        "nodeId": "n.inner-offset",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.inner-square",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c9",
+      "from": {
+        "nodeId": "n.inner-square",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.inner-scale",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c10",
+      "from": {
+        "nodeId": "n.inner-width",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.inner-scale",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c11",
+      "from": {
+        "nodeId": "n.inner-scale",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.inner-clamp",
+        "portId": "value"
+      }
+    },
+    {
+      "id": "c12",
+      "from": {
+        "nodeId": "n.inner-clamp",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.inner-mask",
+        "portId": "value"
+      }
+    },
+    {
+      "id": "c13",
+      "from": {
+        "nodeId": "n.inner-mask",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.inner-light",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c14",
+      "from": {
+        "nodeId": "n.inner-color",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.inner-light",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c15",
+      "from": {
+        "nodeId": "n.radius",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.outer-offset",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c16",
+      "from": {
+        "nodeId": "n.outer-radius",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.outer-offset",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c17",
+      "from": {
+        "nodeId": "n.outer-offset",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.outer-square",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c18",
+      "from": {
+        "nodeId": "n.outer-offset",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.outer-square",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c19",
+      "from": {
+        "nodeId": "n.outer-square",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.outer-scale",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c20",
+      "from": {
+        "nodeId": "n.outer-width",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.outer-scale",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c21",
+      "from": {
+        "nodeId": "n.outer-scale",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.outer-clamp",
+        "portId": "value"
+      }
+    },
+    {
+      "id": "c22",
+      "from": {
+        "nodeId": "n.outer-clamp",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.outer-mask",
+        "portId": "value"
+      }
+    },
+    {
+      "id": "c23",
+      "from": {
+        "nodeId": "n.outer-mask",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.outer-light",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c24",
+      "from": {
+        "nodeId": "n.outer-color",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.outer-light",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c25",
+      "from": {
+        "nodeId": "n.inner-light",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.rings",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c26",
+      "from": {
+        "nodeId": "n.outer-light",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.rings",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c27",
+      "from": {
+        "nodeId": "n.rings",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.emission",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c28",
+      "from": {
+        "nodeId": "n.power",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.emission",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c29",
+      "from": {
+        "nodeId": "n.texture",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.sample",
+        "portId": "texture"
+      }
+    },
+    {
+      "id": "c30",
+      "from": {
+        "nodeId": "n.uv",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.sample",
+        "portId": "uv"
+      }
+    },
+    {
+      "id": "c31",
+      "from": {
+        "nodeId": "n.sample",
+        "portId": "RGB"
+      },
+      "to": {
+        "nodeId": "n.base",
+        "portId": "a"
+      }
+    },
+    {
+      "id": "c32",
+      "from": {
+        "nodeId": "n.dark",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.base",
+        "portId": "b"
+      }
+    },
+    {
+      "id": "c33",
+      "from": {
+        "nodeId": "n.base",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.output",
+        "portId": "BaseColor"
+      }
+    },
+    {
+      "id": "c34",
+      "from": {
+        "nodeId": "n.emission",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.output",
+        "portId": "Emissive"
+      }
+    },
+    {
+      "id": "c35",
+      "from": {
+        "nodeId": "n.rough",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.output",
+        "portId": "Roughness"
+      }
+    },
+    {
+      "id": "c36",
+      "from": {
+        "nodeId": "n.metal",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.output",
+        "portId": "Metallic"
+      }
+    },
+    {
+      "id": "c37",
+      "from": {
+        "nodeId": "n.opacity",
+        "portId": "value"
+      },
+      "to": {
+        "nodeId": "n.output",
+        "portId": "Opacity"
+      }
+    }
+  ],
+  "editorMetadata": {
+    "nodes": {
+      "n.uv": {
+        "position": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "n.center": {
+        "position": {
+          "x": 0,
+          "y": 190
+        }
+      },
+      "n.centered": {
+        "position": {
+          "x": 290,
+          "y": 0
+        }
+      },
+      "n.radius": {
+        "position": {
+          "x": 580,
+          "y": 0
+        }
+      },
+      "n.inner-radius": {
+        "position": {
+          "x": 580,
+          "y": 210
+        }
+      },
+      "n.inner-offset": {
+        "position": {
+          "x": 870,
+          "y": 0
+        }
+      },
+      "n.inner-square": {
+        "position": {
+          "x": 1160,
+          "y": 0
+        }
+      },
+      "n.inner-width": {
+        "position": {
+          "x": 1160,
+          "y": 210
+        }
+      },
+      "n.inner-scale": {
+        "position": {
+          "x": 1450,
+          "y": 0
+        }
+      },
+      "n.inner-clamp": {
+        "position": {
+          "x": 1740,
+          "y": 0
+        }
+      },
+      "n.inner-mask": {
+        "position": {
+          "x": 2030,
+          "y": 0
+        }
+      },
+      "n.inner-color": {
+        "position": {
+          "x": 2030,
+          "y": 210
+        }
+      },
+      "n.inner-light": {
+        "position": {
+          "x": 2320,
+          "y": 0
+        }
+      },
+      "n.outer-radius": {
+        "position": {
+          "x": 580,
+          "y": 730
+        }
+      },
+      "n.outer-offset": {
+        "position": {
+          "x": 870,
+          "y": 520
+        }
+      },
+      "n.outer-square": {
+        "position": {
+          "x": 1160,
+          "y": 520
+        }
+      },
+      "n.outer-width": {
+        "position": {
+          "x": 1160,
+          "y": 730
+        }
+      },
+      "n.outer-scale": {
+        "position": {
+          "x": 1450,
+          "y": 520
+        }
+      },
+      "n.outer-clamp": {
+        "position": {
+          "x": 1740,
+          "y": 520
+        }
+      },
+      "n.outer-mask": {
+        "position": {
+          "x": 2030,
+          "y": 520
+        }
+      },
+      "n.outer-color": {
+        "position": {
+          "x": 2030,
+          "y": 730
+        }
+      },
+      "n.outer-light": {
+        "position": {
+          "x": 2320,
+          "y": 520
+        }
+      },
+      "n.rings": {
+        "position": {
+          "x": 2610,
+          "y": 130
+        }
+      },
+      "n.power": {
+        "position": {
+          "x": 2610,
+          "y": 340
+        }
+      },
+      "n.emission": {
+        "position": {
+          "x": 2900,
+          "y": 130
+        }
+      },
+      "n.texture": {
+        "position": {
+          "x": 1450,
+          "y": 1080
+        }
+      },
+      "n.sample": {
+        "position": {
+          "x": 1740,
+          "y": 1080
+        }
+      },
+      "n.dark": {
+        "position": {
+          "x": 1740,
+          "y": 1400
+        }
+      },
+      "n.base": {
+        "position": {
+          "x": 2030,
+          "y": 1100
+        }
+      },
+      "n.rough": {
+        "position": {
+          "x": 2610,
+          "y": 900
+        }
+      },
+      "n.metal": {
+        "position": {
+          "x": 2610,
+          "y": 1080
+        }
+      },
+      "n.opacity": {
+        "position": {
+          "x": 2610,
+          "y": 1280
+        }
+      },
+      "n.output": {
+        "position": {
+          "x": 3190,
+          "y": 470
+        }
+      }
+    }
+  }
+}

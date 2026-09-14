@@ -1,3 +1,5 @@
+import { DocumentProfilePanel } from "./document-profile-panel.js";
+import { onTabKeyDown } from "./tab-keyboard.js";
 /**
  * Composition root — where the core's semantic services are asked about
  * everything the user can do. The GUI components forward raw intents
@@ -7,7 +9,10 @@
  * defined here: validation, port-level types, conformance, compatibility,
  * and emission all come from @gglab/shader-graph-core.
  */
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from "react";
+import { bindWorkspaceResume, projectWorkspaceResume, sameResumeContext, type WorkspaceResume } from "./workspace-resume.js";
+import type { EnvironmentWorkflow } from "./environment-workflow.js";
+import { useLayoutPreferences } from "./use-layout-preferences.js";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
 import {
     addConnection,
     removeConnection,
@@ -28,8 +33,6 @@ import {
     Button,
     ButtonGroup,
     DescriptorPanel,
-    DiagnosticsPanel,
-    diagnosticFocus,
     documentToFlow,
     FlowViewport,
     Input,
@@ -50,6 +53,7 @@ import {
     withNodePosition,
 } from "@gglab/editor-ui";
 import {
+    applyGraphEdit,
     checkProfileConformance,
     checkProfileDescriptorCompatibility,
     emitHlsl,
@@ -62,7 +66,7 @@ import {
     type ShaderGraphDiagnostic,
     type SurfaceProfileDescriptor,
 } from "@gglab/shader-graph-core";
-import { buildTargetOptions, DEFAULT_BUILD_TARGET } from "./build-target-config.js";
+import { buildTargetOptions } from "./build-target-config.js";
 import type { BuildInspectorRow } from "./build-inspector.js";
 import {
     createDesktopFileChannel,
@@ -73,6 +77,7 @@ import {
     type WorkspaceDocumentEntry,
     type WorkspaceDiscoveryId,
 } from "./host-io.js";
+import { useEnvironmentAuthoring } from "./use-environment-authoring.js";
 import { useNativeBuild } from "./useNativeBuild.js";
 import { useShaderPreview } from "./useShaderPreview.js";
 import { describeTransitionRefusal, resolvePreviewTarget } from "./preview-coordinator.js";
@@ -123,11 +128,29 @@ import {
     type WorkspaceAuthoringState,
 } from "./workspace-store.js";
 import { saveShortcutOf } from "./shortcuts.js";
-import { INSPECTOR_ZONES, INSPECTOR_ZONE_LABELS, inspectorZoneBadge, type InspectorZone, type InspectorZoneFacts } from "./inspector-tabs.js";
+import { WorkbenchDialog } from "./workbench-dialog.js";
+import {
+    BOTTOM_PANEL_TABS,
+    BOTTOM_PANEL_DEFAULT_HEIGHT,
+    BOTTOM_PANEL_KEYBOARD_STEP,
+    BOTTOM_PANEL_MIN_HEIGHT,
+    bottomPanelTabLabel,
+    clampBottomPanelHeight,
+    panelEffectiveMax,
+    resolvePanelMaxHeight,
+    type BottomPanelTab,
+} from "./bottom-panel.js";
+import { BuildPanelView, PreviewPanelView, ProblemsPanelView, OutputPanelView } from "./bottom-panel-views.js";
+import { EMPTY_EVIDENCE_CORRELATION, emptyProblemSnapshot, type ProblemSnapshotEntry } from "./panel-vocabulary.js";
+import { EditorOutput } from "./editor-output.js";
+import { EnvironmentEvidence } from "./environment-evidence.js";
+import { EnvironmentPanel } from "./environment-panel.js";
+import { isCurrentWorkspaceDiscovery } from "./workspace-discovery.js";
+import { resolveProblemNavigation } from "./problem-navigation.js";
+import { composeWorkspaceProblemSnapshot } from "./problems-composition.js";
 // Type-only (erased at compile time): the official dialog option shapes,
 // used for the single documented boundary cast below. Runtime functions
 // are dynamically imported inside the desktop effect only.
-import type { OpenDialogOptions } from "@tauri-apps/plugin-dialog";
 import "./app.css";
 
 /** The editor's default workspace document (a valid gglab.surface v1 graph). */
@@ -261,7 +284,6 @@ export function App() {
     // Application-level (shared) UI state — owned by the shell, not by any
     // one open document:
     const [descriptorState, setDescriptorState] = useState<DescriptorPanelState>({ kind: "empty" });
-    const [loadResult, setLoadResult] = useState<DiagnosticSet | null>(null);
     // Library search — a presentation filter over display names (no semantics).
     const [libraryQuery, setLibraryQuery] = useState("");
     // Whole-library collapse — UI session state (layout), never document data.
@@ -269,10 +291,175 @@ export function App() {
     // Right inspector rail: layout session state, same model as the
     // library rail (the app owns which column is collapsed).
     const [inspectorOpen, setInspectorOpen] = useState(true);
-    /** The visible inspector zone — pure surface organization (inspector-tabs.ts):
-     *  the zoned-out zones keep their state on their TAB (a projection of
-     *  existing facts; the switch itself owns no state). */
-    const [inspectorZone, setInspectorZone] = useState<InspectorZone>("contract");
+    const [workbenchDialog, setWorkbenchDialog] = useState<"document" | "contract" | "advanced" | null>(null);
+    // Bottom panel — layout session state, the same model as the two rails
+    // (the app owns which view is visible, whether the panel is open, and the
+    // drag-resize height). Pure presentation: it concedes no Build, Preview,
+    // or Problems authority, and it must never enter the WorkspaceStore or a
+    // DocumentSession. Each view projects its owner's structured facts.
+    const [output] = useState(() => new EditorOutput());
+    const [environmentEvidence] = useState(() => new EnvironmentEvidence(output));
+    const environmentProblems = useSyncExternalStore(environmentEvidence.subscribe, environmentEvidence.getSnapshot, environmentEvidence.getSnapshot);
+    const outputEvents = useSyncExternalStore(output.subscribe, output.getSnapshot, output.getSnapshot);
+    const setLoadResult = (result: DiagnosticSet): void => {
+        output.append("document", result.ok ? "ok" : "refusal", result.passedText || result.title, EMPTY_EVIDENCE_CORRELATION, result.diagnostics);
+    };
+    const nativeOutput = useMemo(() => (level: "ok" | "info" | "refusal", text: string) => output.append("discovery", level, text), [output]);
+    const [bottomPanelOpen, setBottomPanelOpen] = useState(true);
+    const [bottomPanelTab, setBottomPanelTab] = useState<BottomPanelTab>("output");
+    const [bottomPanelHeight, setBottomPanelHeight] = useState(BOTTOM_PANEL_DEFAULT_HEIGHT);
+    // The `.gglab-body` element (Canvas row + panel row) — the element whose
+    // size is observed so the Canvas floor stays a CONTINUOUS invariant.
+    const panelBodyRef = useRef<HTMLDivElement | null>(null);
+    // The in-flight resize gesture, if any. A single gesture is current at a
+    // time; its identity (pointerId) guards against a stale/other pointer.
+    // It intentionally holds NO effective max: the body constraint may change
+    // while the gesture is active (a window resize), so every move must use
+    // the CURRENT measured constraint, never a snapshot taken at pointerdown.
+    const resizeGestureRef = useRef<{ readonly pointerId: number; readonly startY: number; readonly startHeight: number } | null>(null);
+    // The MEASURED available height of `.gglab-body` (px), or `null` until the
+    // body has been measured at least once. This is presentation state (a live
+    // layout measurement), not an authority: it only bounds the panel height
+    // and the resize slider's ARIA range, and is continuously refreshed by the
+    // body's ResizeObserver (see below).
+    //
+    // `null` is a meaningful state, distinct from a measured height: before
+    // the first valid measurement the constraint is UNKNOWN (a large window is
+    // just as likely as a small one), so the current panel height must NOT be
+    // re-clamped toward the minimum — the pure vocabulary resolves the active
+    // max from it via `panelEffectiveMax()`.
+    const [measuredBodyHeight, setMeasuredBodyHeight] = useState<number | null>(null);
+
+    // Pointer-capture boundary: a real browser captures the pointer on the
+    // handle (so release is delivered even outside the window); jsdom and a
+    // synthetic/lost pointer do not implement the API, and the gesture still
+    // works without it — capture only widens the delivery, nothing depends on
+    // it being present.
+    function capturePointer(target: HTMLElement, pointerId: number): void {
+        (target as unknown as { setPointerCapture?: (id: number) => void }).setPointerCapture?.(pointerId);
+    }
+
+    function capturePointerEnd(target: HTMLElement, pointerId: number): void {
+        const el = target as unknown as { hasPointerCapture?: (id: number) => boolean; releasePointerCapture?: (id: number) => void };
+        if (el.hasPointerCapture !== undefined && el.hasPointerCapture(pointerId)) {
+            el.releasePointerCapture?.(pointerId);
+        }
+    }
+
+    // Drag-resize from the panel's top edge via POINTER CAPTURE: pointerdown
+    // starts the gesture and captures the pointer; move (while captured)
+    // updates the CLAMPED height; up/cancel ends it. The gesture is pure
+    // presentation and touches only `bottomPanelHeight`.
+    function beginBottomPanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
+        event.preventDefault();
+        resizeGestureRef.current = {
+            pointerId: event.pointerId,
+            startY: event.clientY,
+            startHeight: bottomPanelHeight,
+        };
+        capturePointer(event.currentTarget, event.pointerId);
+        window.document.body.classList.add("gglab-resizing");
+    }
+
+    function moveBottomPanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
+        const gesture = resizeGestureRef.current;
+        if (gesture === null || gesture.pointerId !== event.pointerId) {
+            return;
+        }
+        // The constraint is resolved from the CURRENT measured body height on
+        // every move — never a max captured at pointerdown — so a window that
+        // shrinks mid-drag keeps the Canvas above its floor.
+        setBottomPanelHeight(clampBottomPanelHeight(gesture.startHeight + (gesture.startY - event.clientY), panelEffectiveMax(measuredBodyHeight)));
+    }
+
+    function endBottomPanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
+        const gesture = resizeGestureRef.current;
+        if (gesture === null || gesture.pointerId !== event.pointerId) {
+            return;
+        }
+        resizeGestureRef.current = null;
+        capturePointerEnd(event.currentTarget, event.pointerId);
+        window.document.body.classList.remove("gglab-resizing");
+    }
+
+    // Keyboard resize (the handle is a real, focusable value control): up /
+    // right grow, down / left shrink, each by a fixed step within the current
+    // effective range.
+    function stepBottomPanelResize(delta: number): void {
+        // Resolve the active max from the CURRENT body state (null = unknown
+        // constraint → the absolute ceiling only).
+        const effectiveMax = panelEffectiveMax(measuredBodyHeight);
+        setBottomPanelHeight((current) => clampBottomPanelHeight(current + delta * BOTTOM_PANEL_KEYBOARD_STEP, effectiveMax));
+    }
+
+    function onBottomPanelResizeKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+        // A vertical value control: up grows the panel, down shrinks it, each
+        // one keyboard step within the current effective range.
+        switch (event.key) {
+            case "ArrowUp":
+                event.preventDefault();
+                stepBottomPanelResize(1);
+                return;
+            case "ArrowDown":
+                event.preventDefault();
+                stepBottomPanelResize(-1);
+                return;
+            default:
+                return;
+        }
+    }
+
+    // The Canvas-floor invariant is CONTINUOUS, not gesture-local: observe the
+    // body's size and, whenever it changes (window resize, a layout shift),
+    // refresh the measured available height. Seeded from the current layout on
+    // mount (a real browser reports a real height; a headless DOM reports 0,
+    // which is the conservative degenerate case).
+    useEffect(() => {
+        const bodyEl = panelBodyRef.current;
+        if (bodyEl === null) {
+            return;
+        }
+        const readBodyHeight = (): number => bodyEl.getBoundingClientRect().height;
+        const seed = readBodyHeight();
+        if (Number.isFinite(seed) && seed > 0) {
+            setMeasuredBodyHeight((previous) => (previous === seed ? previous : seed));
+        }
+        if (typeof ResizeObserver === "undefined") {
+            return;
+        }
+        const observer = new ResizeObserver((entries) => {
+            const entry = entries[0];
+            const measured = entry !== undefined ? entry.contentRect.height : 0;
+            if (Number.isFinite(measured) && measured > 0) {
+                setMeasuredBodyHeight((previous) => (previous === measured ? previous : measured));
+            }
+        });
+        observer.observe(bodyEl);
+        return () => observer.disconnect();
+    }, []);
+
+    // Whenever a VALID measurement of the available height arrives (or
+    // changes), re-clamp the CURRENT panel height into the new effective
+    // range. This is what keeps the Canvas above its floor in a shrinking
+    // window — including after a collapse → shrink → reopen round-trip.
+    // Crucially, while the measurement is still `null` (unknown), the current
+    // height is left untouched: an unknown constraint must not collapse the
+    // default toward the minimum.
+    useEffect(() => {
+        if (measuredBodyHeight === null) {
+            return;
+        }
+        setBottomPanelHeight((current) => clampBottomPanelHeight(current, resolvePanelMaxHeight(measuredBodyHeight)));
+    }, [measuredBodyHeight]);
+
+    // The unmount / HMR boundary: an in-flight gesture must never strand the
+    // window-level "resizing" state or a dangling pointer capture.
+    useEffect(() => {
+        return () => {
+            resizeGestureRef.current = null;
+            window.document.body.classList.remove("gglab-resizing");
+        };
+    }, []);
     // The tab the user asked to close while it is dirty (a confirm guard).
     // `null` = no pending close. Closing discards only if the user
     // explicitly confirms; otherwise the document stays open.
@@ -281,10 +468,19 @@ export function App() {
     // UI state; "nodes" is the default so the existing library UX is
     // unchanged, and "explorer" is the Workspace file browser.
     const [sidebarPanel, setSidebarPanel] = useState<"explorer" | "nodes">("nodes");
+    const [resumeHint, setResumeHint] = useState<WorkspaceResume | null>(null);
+    const [resumeBusy, setResumeBusy] = useState(false);
+    const resumeBinding = useRef<ReturnType<typeof bindWorkspaceResume> | null>(null);
+    const environmentWorkflowRef = useRef<EnvironmentWorkflow | null>(null);
+    const resumeAttempt = useRef<{ cancelled: boolean; discoveryId: WorkspaceDiscoveryId | null } | null>(null);
     // Workspace Explorer (volatile host observation, not a graph authority).
     const [explorerEntries, setExplorerEntries] = useState<readonly WorkspaceDocumentEntry[] | null>(null);
     const [explorerBusy, setExplorerBusy] = useState(false);
-    const [explorerError, setExplorerError] = useState<string | null>(null);
+    const [explorerError, updateExplorerError] = useState<string | null>(null);
+    const setExplorerError = (message: string | null): void => {
+        updateExplorerError(message);
+        if (message !== null) output.append("workspace", "refusal", message);
+    };
     const [explorerStatus, setExplorerStatus] = useState<string | null>(null);
     // The discovery the UI is CURRENTLY watching, bound to BOTH the canonical
     // workspace root it was launched against and its host-issued discovery id.
@@ -321,7 +517,6 @@ export function App() {
     const nodeMenu = presentation.nodeMenu;
     const focus = presentation.focus;
     const emission = presentation.emission;
-    const operationNotes = presentation.notes;
     const savedText = presentation.savedText;
     const viewport = presentation.viewport;
     /** One patch to this document's presentation (one intent = one patch). */
@@ -345,19 +540,29 @@ export function App() {
      * is a per-document presentation fact: it goes to the ACTIVE document's
      * presentation and is restored when that document becomes active again. */
     const setViewport = (value: CanvasViewport): void => patchPresentation({ viewport: value });
-    const setOperationNotes = (
-        update: ((previous: readonly string[]) => readonly string[]) | readonly string[],
-    ): void => {
-        updateDocumentSession(session.sessionId, (prev) => {
-            const next = typeof update === "function" ? update(prev.presentation.notes) : update;
-            return { ...prev, presentation: { ...prev.presentation, notes: next } };
+    const reportOperation = (text: string, level: "info" | "refusal" = "info", owner: DocumentSession | null = null): void => {
+        // An operation without a captured document owner stays application-local.
+        // In particular, an open/import failure never borrows the active tab.
+        output.append(owner === null ? "document" : "authoring", level, text, owner === null ? EMPTY_EVIDENCE_CORRELATION : {
+            ...EMPTY_EVIDENCE_CORRELATION,
+            documentSessionId: owner.sessionId,
+            documentRevision: documentRevision(owner),
         });
     };
+
     // Viewport fit trigger (registered by the flow adapter via onInit).
-    const fitRef = useRef<(() => void) | null>(null);
+    const fitRef = useRef<((nodeIds?: readonly string[]) => void) | null>(null);
     // Desktop native document I/O channel (absent in the browser
     // — the web build keeps the text save/load surface only).
     const [fileChannel, setFileChannel] = useState<FileChannel | null>(null);
+    useLayoutPreferences(fileChannel, {
+        libraryOpen, inspectorOpen, bottomPanelOpen, bottomPanelHeight: Math.round(bottomPanelHeight), bottomPanelTab, sidebarPanel,
+    }, layout => {
+        setLibraryOpen(layout.libraryOpen); setInspectorOpen(layout.inspectorOpen);
+        setBottomPanelOpen(layout.bottomPanelOpen); setBottomPanelHeight(layout.bottomPanelHeight);
+        setBottomPanelTab(layout.bottomPanelTab); setSidebarPanel(layout.sidebarPanel);
+    }, error => output.append("workspace", "refusal", `Layout preferences: ${String(error)}`));
+
     // A stable reference to the current channel for async cleanups (e.g.
     // cancelling an in-flight workspace discovery on unmount) that must not
     // capture a stale channel closure.
@@ -396,12 +601,10 @@ export function App() {
             // code-split out of the web bundle and loaded only inside the
             // desktop webview. Document Open/Save As and all document bytes
             // go through bounded host commands. The official dialog/fs APIs
-            // remain only for user-selected auxiliary descriptor/config
-            // reads. No arbitrary document path crosses the WebView command
+            // remain only for scoped user-selected descriptor reads. No arbitrary document path crosses the WebView command
             // boundary.
-            const [core, dialog, fs] = await Promise.all([
+            const [core, fs] = await Promise.all([
                 import("@tauri-apps/api/core"),
-                import("@tauri-apps/plugin-dialog"),
                 import("@tauri-apps/plugin-fs"),
             ]);
             if (cancelled) {
@@ -412,11 +615,6 @@ export function App() {
                     invoke: (command, args) => core.invoke(command, args),
                     createChannel: (onMessage) =>
                         new core.Channel<unknown>((message) => onMessage(message)),
-                    // The host-io slots are intentionally generic
-                    // (Record<string, unknown> options); the official API
-                    // types live here, at the composition root — the single
-                    // place cast/verification is allowed.
-                    openDialog: (options) => dialog.open(options as unknown as OpenDialogOptions),
                     readTextFile: (path) => fs.readTextFile(path),
                 }),
             );
@@ -499,7 +697,7 @@ export function App() {
         // activation ITSELF is the active-identity commit (no shadow write).
         applyWorkspaceTransition((current) => openWorkspaceDocument(current, replacement));
         setInspectorOpen(true);
-        setInspectorZone("contract");
+
     };
 
     /** Display label for one open document's tab (presentation only; the
@@ -529,10 +727,7 @@ export function App() {
             return;
         }
         if (workspace.documents.length === 1) {
-            setOperationNotes((previous) => [
-                ...previous,
-                "Cannot close the last open tab — at least one document must stay open.",
-            ]);
+            reportOperation("Cannot close the last open tab — at least one document must stay open.");
             return;
         }
         if (isDirty(doc)) {
@@ -546,7 +741,7 @@ export function App() {
      * target, the PreviewCoordinator owns the transition: the strict
      * teardown (last await; skipped only in the proven-no-Runtime / no-host
      * case) then one synchronous commit where the close + the Preview-target
-     * re-seed land together.
+     * clearance land together.
      *
      * Revision binding (data-loss guard): the app captures the EXACT
      * document revision the user just confirmed discarding and binds the
@@ -566,10 +761,7 @@ export function App() {
             const expectedRevision = doc !== undefined ? documentRevision(doc) : "";
             const result = await preview.coordinator.closeTarget(documentSessionId, expectedRevision);
             if (result.ok === false) {
-                setOperationNotes((previous) => [
-                    ...previous,
-                    `Cannot close this tab yet: ${describeTransitionRefusal(result.refusal)}.`,
-                ]);
+                reportOperation(`Cannot close this tab yet: ${describeTransitionRefusal(result.refusal)}.`);
                 return;
             }
             return;
@@ -597,35 +789,41 @@ export function App() {
      * against the CURRENT descriptor, and moves the target in ONE
      * synchronous store transaction. A refusal leaves the snapshot
      * untouched. */
+    const [startingGraphPreview, setStartingGraphPreview] = useState(false);
     const onPreviewThisGraph = async (): Promise<void> => {
-        const target = session;
-        const name = tabNameFor(target);
-        // The coordinator is always present for a mounted editor: with no
-        // desktop host the retarget is a pure Workspace commit (proven no
-        // Runtime); it blocks only when a host's old-Runtime teardown /
-        // ownership is unresolved. No null check — that would re-introduce
-        // the "host unavailable blocks Workspace transition" coupling.
-        const result = await preview.coordinator.retargetTo(target.sessionId);
-        if (result.ok === false) {
-            setOperationNotes((previous) => [
-                ...previous,
-                `Cannot retarget the Preview yet: ${describeTransitionRefusal(result.refusal)}.`,
-            ]);
-            return;
-        }
-        setOperationNotes((previous) => [
-            ...previous,
-            result.targetChanged
-                ? `Preview target set to "${name}" — switching tabs keeps it until you choose another.`
-                : `Preview target remains "${name}" — its emission was refreshed against the current descriptor.`,
-        ]);
+        if (startingGraphPreview) return;
+        setStartingGraphPreview(true);
+        setBottomPanelOpen(true);
+        setBottomPanelTab("output");
+        try {
+            const target = session;
+            const name = tabNameFor(target);
+            // The coordinator is always present for a mounted editor: with no
+            // desktop host the retarget is a pure Workspace commit (proven no
+            // Runtime); it blocks only when a host's old-Runtime teardown /
+            // ownership is unresolved. No null check — that would re-introduce
+            // the "host unavailable blocks Workspace transition" coupling.
+            const result = await preview.coordinator.retargetTo(target.sessionId);
+            if (result.ok === false) {
+                reportOperation(`Cannot retarget the Preview yet: ${describeTransitionRefusal(result.refusal)}.`, "refusal");
+                return;
+            }
+            reportOperation(result.targetChanged
+                    ? `Preview target set to "${name}" — switching tabs keeps it until you choose another.`
+                    : `Preview target remains "${name}" — its emission was refreshed against the current descriptor.`);
+            setBottomPanelTab("preview");
+            await preview.startPreview(target.sessionId);
+        } catch (error) {
+            setBottomPanelTab("output");
+            reportOperation(`Preview failed: ${error instanceof Error ? error.message : String(error)}`, "refusal");
+        } finally { setStartingGraphPreview(false); }
     };
 
     // ---- Workspace Explorer. The host owns the root dialog, discovery,
     // and the exact snapshot read; the WebView only observes host-issued
     // canonical URIs (never an arbitrary path) and opens them as co-existing
     // tabs. Discovery is bounded/cancellable.
-    const onChooseWorkspaceRoot = async (): Promise<void> => {
+    const onChooseWorkspaceRoot = async (reopen = false): Promise<void> => {
         const channel = fileChannel;
         if (channel === null) {
             return;
@@ -633,9 +831,10 @@ export function App() {
         setExplorerError(null);
         setExplorerStatus(null);
         try {
-            const root = await channel.chooseWorkspaceRoot();
+            const root = await (reopen ? channel.reopenLastWorkspace() : channel.chooseWorkspaceRoot());
             if (root === null) {
-                return; // user cancelled the directory dialog
+                if (reopen) setExplorerStatus("No previous Workspace is available. Choose a directory to begin.");
+                return; // user cancelled, or the remembered root is unavailable
             }
             // The new root supersedes any in-flight discovery. Invalidate the
             // binding FIRST, so a late settlement from the OLD root is dropped
@@ -658,6 +857,7 @@ export function App() {
                     result: null,
                 };
             });
+            output.append("workspace", "ok", `Workspace opened: ${root.displayPath}`);
             setExplorerEntries(null);
             setSidebarPanel("explorer");
             // Discover with the just-chosen root (the state read is still the
@@ -690,16 +890,14 @@ export function App() {
             // superseded discovery (root switched) is dropped — its stale
             // entries must not overwrite the new root's Explorer.
             const watching = discoveryRef.current;
-            const stillCurrent =
-                watching !== null &&
-                watching.discoveryId === settlement.discoveryId &&
-                watching.uri === expectedUri;
+            const stillCurrent = isCurrentWorkspaceDiscovery(watching, expectedUri, settlement.discoveryId);
             const settlementUri =
                 settlement.kind === "changed"
                     ? settlement.snapshot.root.canonicalWorkspaceUri
                     : settlement.kind === "unchanged"
                       ? settlement.canonicalWorkspaceUri
                       : expectedUri;
+            output.append("workspace", "info", `Discovery ${settlement.discoveryId.sequence} for ${expectedUri}: ${settlement.kind}${stillCurrent ? "" : " (superseded)"}.`);
             if (stillCurrent && settlementUri === expectedUri) {
                 if (settlement.kind === "changed") {
                     setExplorerEntries(settlement.snapshot.documents);
@@ -718,7 +916,7 @@ export function App() {
             }
             // Clear the binding only if it still points at THIS discovery — a
             // newer discovery may already own it.
-            if (discoveryRef.current !== null && discoveryRef.current.discoveryId === settlement.discoveryId) {
+            if (isCurrentWorkspaceDiscovery(discoveryRef.current, expectedUri, settlement.discoveryId)) {
                 discoveryRef.current = null;
             }
         } catch (error) {
@@ -784,10 +982,7 @@ export function App() {
             setLoadResult({ title: "Workspace open", ok: false, diagnostics: parsed.diagnostics, passedText: `Could not open ${entry.relativePath} through the core reader.` });
             setExplorerStatus(null);
         } catch (error) {
-            setOperationNotes((previous) => [
-                ...previous,
-                `Workspace open failed (${error instanceof Error ? error.message : String(error)}).`,
-            ]);
+            reportOperation(`Workspace open failed (${error instanceof Error ? error.message : String(error)}).`);
             setExplorerStatus(null);
         }
     };
@@ -826,7 +1021,7 @@ export function App() {
                     return openWorkspaceDocument(current, replacement);
                 });
                 setInspectorOpen(true);
-                setInspectorZone("contract");
+
                 setLoadResult({ title: "Load result", ok: true, diagnostics: parsed.diagnostics, passedText: `Opened ${snapshot.displayPath}; the tab is now active.` });
                 requestAnimationFrame(() => fitRef.current?.());
                 return;
@@ -838,7 +1033,7 @@ export function App() {
                 passedText: "",
             });
         } catch (error) {
-            setOperationNotes((previous) => [...previous, `Open failed (${error instanceof Error ? error.message : String(error)}).`]);
+            reportOperation(`Open failed (${error instanceof Error ? error.message : String(error)}).`);
         }
     };
 
@@ -895,10 +1090,7 @@ export function App() {
         }
         dismissSaveConflict();
         setSavedText(snapshot.text);
-        setOperationNotes((previous) => [
-            ...previous,
-            `Saved ${snapshot.displayPath} as the core's canonical .shadergraph bytes.`,
-        ]);
+        reportOperation(`Saved ${snapshot.displayPath} as the core's canonical .shadergraph bytes.`);
         return true;
     };
 
@@ -908,10 +1100,7 @@ export function App() {
             conflict.destinationOwnerSessionId === null
                 ? ""
                 : " The destination is already owned by another open document, so it cannot be overwritten from this session.";
-        setOperationNotes((previous) => [
-            ...previous,
-            `Save conflict: the destination changed on disk; the local document was retained (${conflict.canonicalDocumentUri}).${ownerMessage}`,
-        ]);
+        reportOperation(`Save conflict: the destination changed on disk; the local document was retained (${conflict.canonicalDocumentUri}).${ownerMessage}`);
     };
 
     /** Save to the session's target and resolve with success. A conflict is
@@ -947,7 +1136,7 @@ export function App() {
             }
             return finishSuccessfulSave(savedSessionId, outcome.snapshot);
         } catch (error) {
-            setOperationNotes((previous) => [...previous, `Save failed (${error instanceof Error ? error.message : String(error)}).`]);
+            reportOperation(`Save failed (${error instanceof Error ? error.message : String(error)}).`);
             return false;
         }
     };
@@ -969,7 +1158,7 @@ export function App() {
         }
         if (action === "cancel") {
             dismissSaveConflict();
-            setOperationNotes((previous) => [...previous, "Save conflict cancelled; the local document remains unchanged."]);
+            reportOperation("Save conflict cancelled; the local document remains unchanged.");
             return;
         }
         if (!activeSessionIs(conflict.sessionId)) {
@@ -997,10 +1186,7 @@ export function App() {
                         diagnostics: parsed.diagnostics,
                         passedText: "",
                     });
-                    setOperationNotes((previous) => [
-                        ...previous,
-                        "Reload refused: the external file is not a valid ShaderGraph document; local changes were retained.",
-                    ]);
+                    reportOperation("Reload refused: the external file is not a valid ShaderGraph document; local changes were retained.");
                     return;
                 }
                 const reloadedDocument = parsed.value;
@@ -1025,10 +1211,7 @@ export function App() {
                     diagnostics: parsed.diagnostics,
                     passedText: `Reloaded ${snapshot.displayPath}; local changes and their undo history were discarded as chosen.`,
                 });
-                setOperationNotes((previous) => [
-                    ...previous,
-                    `Reloaded ${snapshot.displayPath} from disk.`,
-                ]);
+                reportOperation(`Reloaded ${snapshot.displayPath} from disk.`);
                 requestAnimationFrame(() => fitRef.current?.());
                 return;
             }
@@ -1068,10 +1251,7 @@ export function App() {
             }
             finishSuccessfulSave(conflict.sessionId, outcome.snapshot);
         } catch (error) {
-            setOperationNotes((previous) => [
-                ...previous,
-                `Conflict resolution failed; the local document was retained (${error instanceof Error ? error.message : String(error)}).`,
-            ]);
+            reportOperation(`Conflict resolution failed; the local document was retained (${error instanceof Error ? error.message : String(error)}).`);
         } finally {
             conflictResolutionInFlightRef.current = false;
             setConflictResolutionInFlight(false);
@@ -1182,7 +1362,7 @@ export function App() {
                     return;
                 }
                 if (!dirtyRef.current) {
-                    setOperationNotes((previous) => [...previous, "Close guard: clean session — closing."]);
+                    reportOperation("Close guard: clean session — closing.");
                     return; // not prevented → the api wrapper destroys the window
                 }
                 if (closePendingRef.current) {
@@ -1195,7 +1375,7 @@ export function App() {
                 }
                 closePendingRef.current = true;
                 try {
-                    setOperationNotes((previous) => [...previous, "Close guard: close attempt intercepted — the session has unsaved changes."]);
+                    reportOperation("Close guard: close attempt intercepted — the session has unsaved changes.");
                     // Await the user's choice from the in-page surface
                     // (kept up until answered, like a modal question).
                     const choice: CloseChoice = await new Promise<CloseChoice>((resolve) => {
@@ -1207,16 +1387,16 @@ export function App() {
                     if (choice === "save") {
                         saveSucceeded = await saveRef.current(false);
                     }
-                    setOperationNotes((previous) => [...previous, `Close guard: choice = ${choice}(; save ${saveSucceeded ? "completed" : "not attempted/failed"}).`]);
+                    reportOperation(`Close guard: choice = ${choice}(; save ${saveSucceeded ? "completed" : "not attempted/failed"}).`);
                     if (closeAction(choice, saveSucceeded) === "stay") {
                         event.preventDefault(); // stay — the session is kept
-                        setOperationNotes((previous) => [...previous, choice === "cancel" ? "Close guard: STAYED (Cancel)." : "Close guard: STAYED (the save did not complete)."]);
+                        reportOperation(choice === "cancel" ? "Close guard: STAYED (Cancel)." : "Close guard: STAYED (the save did not complete).");
                         return;
                     }
                     // discard (or a completed save) — NOT prevented, so
                     // the api wrapper destroys the window and the close
                     // happens.
-                    setOperationNotes((previous) => [...previous, choice === "discard" ? "Close guard: closing (unsaved changes discarded, as chosen)." : "Close guard: closing (changes saved)."]);
+                    reportOperation(choice === "discard" ? "Close guard: closing (unsaved changes discarded, as chosen)." : "Close guard: closing (changes saved).");
                 } finally {
                     closePendingRef.current = false;
                 }
@@ -1248,7 +1428,12 @@ export function App() {
 
     // The single current descriptor authority: the store's committed fact
     // (never a capture from a render that could stale across an await).
-    const descriptor: SurfaceProfileDescriptor | null = authoring.profileDescriptor;
+    const environmentAuthoring = useEnvironmentAuthoring(authoringStore, workspace.activeEnvironment, environmentEvidence.begin);
+    const environmentBinding = environmentAuthoring.legacyAdmitted ? undefined : environmentAuthoring.binding;
+    const descriptor: SurfaceProfileDescriptor | null = useMemo(() => {
+        if (workspace.activeEnvironment === null) return authoring.profileDescriptor;
+        try { return environmentBinding?.resolveProfile(document) ?? null; } catch { return null; }
+    }, [workspace.activeEnvironment, authoring.profileDescriptor, environmentBinding, document]);
 
     const flow = useMemo(() => documentToFlow(document, focus, selectedConnectionId, selectedNodeId), [document, focus, selectedConnectionId, selectedNodeId]);
     const selectedNode = useMemo(
@@ -1305,6 +1490,11 @@ export function App() {
         return first !== undefined ? `${first.code}: ${first.message}` : "the profile and the descriptor instance disagree on capabilities";
     }, [profileCompatibility]);
 
+    const profileCatalog = useMemo(() => {
+        if (workspace.activeEnvironment === null) return descriptor === null ? [] : [descriptor];
+        try { return environmentBinding?.profileCatalog() ?? []; } catch { return []; }
+    }, [workspace.activeEnvironment, environmentBinding, descriptor]);
+
     function applyAuthoring(result: AuthoringResult, label: string): void {
         if (result.applied) {
             // An ACCEPTED operation is not necessarily a mutation: an
@@ -1323,15 +1513,19 @@ export function App() {
                 // emission preview) described the former revision and is
                 // now stale — the preview must never outlive its revision.
                 invalidateRevisionDerivedState();
+                reportOperation(label, "info", session);
             }
-            setOperationNotes([]);
             return;
         }
         // A REFUSED operation is not a change: it is exposed (the note
         // below) but never entered the history — undo must never "undo
         // nothing".
         const reason = result.refusal !== undefined ? result.refusal.reason : "The operation was not applied.";
-        setOperationNotes((previous) => [...previous, reason]);
+        output.append("authoring", "refusal", reason, {
+            ...EMPTY_EVIDENCE_CORRELATION,
+            documentSessionId: session.sessionId,
+            documentRevision: documentRevision(session),
+        }, result.refusal?.diagnostics ?? []);
     }
 
     const onConstantValueCommit = (nodeId: string, value: ConstantValue): boolean => {
@@ -1339,12 +1533,6 @@ export function App() {
         applyAuthoring(result, `changed value on ${nodeId}`);
         return result.applied;
     };
-
-    function selectDiagnostic(diagnostic: ShaderGraphDiagnostic): void {
-        // Navigation intent → target resolved against the document from the
-        // diagnostic's own dataPath anchor (never parsed from prose).
-        setFocus(diagnosticFocus(document, diagnostic));
-    }
 
     const onAddNode = (type: string): void => {
         applyAuthoring(addNode(document, type), `added a ${type} node`);
@@ -1384,19 +1572,15 @@ export function App() {
         // Selection is ONE fact at a time: an edge selection retires the
         // node selection (and the node menu) — never two live targets for
         // the Delete key.
+        // The exclusive setter already retires the other selection and menus.
         setSelectedConnectionId(connectionId);
-        setSelectedNodeId(null);
-        setEdgeMenu(null);
-        setNodeMenu(null);
     };
     const onNodeSelect = (nodeId: string): void => {
         // A genuine card click selects THAT node and retires the edge
         // selection — the same exclusive, one-selection model.
         setSelectedNodeId(nodeId);
-        setSelectedConnectionId(null);
-        setEdgeMenu(null);
         setInspectorOpen(true);
-        setInspectorZone("selection");
+
     };
     const onCanvasClick = (): void => {
         setSelectedConnectionId(null);
@@ -1410,13 +1594,10 @@ export function App() {
         // SELECTED (the Delete key and the menu agree on the target), the
         // edge side retired, and the armed reconnect cancelled — a pending
         // gesture and an open action menu are contradictory states.
-        setSelectedNodeId(nodeId);
-        setSelectedConnectionId(null);
-        setEdgeMenu(null);
-        setReconnectArmed(null);
-        setNodeMenu({ nodeId, x: anchor.x, y: anchor.y });
+        patchPresentation({ selectedNodeId: nodeId, selectedConnectionId: null, edgeMenu: null,
+            reconnectArmed: null, nodeMenu: { nodeId, x: anchor.x, y: anchor.y } });
         setInspectorOpen(true);
-        setInspectorZone("selection");
+
     };
     const onEdgeContextMenu = (event: { clientX: number; clientY: number }, connectionId: string): void => {
         // Right-click selects (if needed) and offers the one destructive
@@ -1647,6 +1828,7 @@ export function App() {
     };
 
     const onDescriptorStateChange = (next: DescriptorPanelState): void => {
+        if (authoringStore.getSnapshot().session.activeEnvironment !== null) return;
         // The descriptor is a WORKSPACE-scoped authority: every open
         // document's emission snapshot is f(document, D-old) and must never
         // survive the commit as "current" when the descriptor moves. One
@@ -1672,7 +1854,7 @@ export function App() {
     const onEmit = (): void => {
         if (descriptor === null) {
             setEmission(null);
-            setOperationNotes((previous) => [...previous, "Emission needs the profile contract: load a descriptor instance first (the descriptor is the serialized profile contract, never a header import — and without it the core refuses to emit)."]);
+            reportOperation("Emission needs the profile contract: load a descriptor instance first (the descriptor is the serialized profile contract, never a header import — and without it the core refuses to emit).");
             return;
         }
         setEmission(emitHlsl(document, descriptor));
@@ -1690,6 +1872,9 @@ export function App() {
     // the session store, the inspector projection); the app owns only
     // which facts feed them and the actions the user can take.
     const native = useNativeBuild({
+        ...(environmentBinding === undefined ? {} : { environment: environmentBinding, retryHost: environmentAuthoring.retry }),
+        admitTarget: environmentAuthoring.setTarget,
+        onOutputEvent: nativeOutput,
         descriptor,
         descriptorCompatible: profileCompatibility !== null && profileCompatibility.verdict.ok,
         descriptorDetail,
@@ -1699,20 +1884,96 @@ export function App() {
     // composes from the EXPLICIT Preview target — a distinct Workspace axis —
     // not the active (editing) document. Switching the active tab therefore
     // cannot silently retarget the Runtime; only an explicit "Preview this
-    // graph" moves the target. Before the user has ever chosen a target, the
-    // active (single seeded) document is the bootstrap default.
-    const previewTargetSession = resolvePreviewTarget(workspace) ?? session;
-    const previewDocument = previewTargetSession.history.present;
-    const previewEmission = previewTargetSession.presentation.emission;
+    // graph" moves the target. A closed target stays absent until explicit retarget.
+    const previewTargetSession = resolvePreviewTarget(workspace);
+    const previewDocument = previewTargetSession?.history.present ?? null;
+    const previewEmission = previewTargetSession?.presentation.emission ?? null;
+    const previewDescriptor = useMemo(() => {
+        if (previewDocument === null) return null;
+        if (workspace.activeEnvironment === null) return descriptor;
+        try { return environmentBinding?.resolveProfile(previewDocument) ?? null; } catch { return null; }
+    }, [workspace.activeEnvironment, descriptor, environmentBinding, previewDocument]);
     const preview = useShaderPreview({
+        ...(environmentBinding === undefined ? {} : { environment: environmentBinding }),
+        ...(previewTargetSession === undefined ? {} : { documentOwner: previewTargetSession }),
         document: previewDocument,
-        descriptor,
-        descriptorCompatible: profileCompatibility !== null && profileCompatibility.verdict.ok,
+        descriptor: previewDescriptor,
+        descriptorCompatible: previewDocument !== null && previewDescriptor !== null && checkProfileDescriptorCompatibility(previewDocument, previewDescriptor).ok,
         emission: previewEmission,
         configuredTarget: native.target.target,
         nativeFlow: native.flow,
         workspaceStore: authoringStore,
     });
+
+    // Retain owner sessions for chronology only; Problems consumes current bindings.
+    const [buildHistory, setBuildHistory] = useState<readonly import("./native-build-session.js").NativeBuildSession[]>([]);
+    const [previewHistory, setPreviewHistory] = useState<readonly import("./preview-build-session.js").PreviewBuildSession[]>([]);
+    useEffect(() => {
+        const owner = native.flow?.buildSession;
+        if (owner) setBuildHistory(previous => previous.includes(owner) ? previous : [...previous, owner]);
+    }, [native.flow]);
+    useEffect(() => {
+        const owner = preview.flow?.session;
+        if (owner) setPreviewHistory(previous => {
+            const sessions = new Map(previous.map(session => [session.sessionId, session]));
+            for (const retired of preview.flow?.history ?? []) sessions.set(retired.sessionId, retired);
+            sessions.set(owner.sessionId, owner);
+            return [...sessions.values()];
+        });
+    }, [preview.flow, preview.flow?.session]);
+
+    // Recompose the Workspace snapshot on every render. Owner objects retain
+    // identity across settlements, so their identity is not a freshness token.
+    const problemsSnapshot = composeWorkspaceProblemSnapshot(workspace, descriptor, native.flow?.buildSession ?? null, preview.coordinator.hostAdmitted ? preview.flow?.session ?? null : null, environmentProblems, graph => {
+        if (workspace.activeEnvironment === null) return descriptor;
+        try { return environmentBinding?.resolveProfile(graph) ?? null; } catch { return null; }
+    });
+    const problemNavigation = (entry: ProblemSnapshotEntry) => {
+        const navigation = resolveProblemNavigation(authoringStore.getSnapshot().session, entry);
+        return { available: navigation.available, detail: navigation.available ? `${sessionTitle(navigation.document, isDirty(navigation.document))}: ${navigation.detail}` : navigation.reason };
+    };
+    const navigateProblem = (entry: ProblemSnapshotEntry): void => {
+        const navigation = resolveProblemNavigation(authoringStore.getSnapshot().session, entry);
+        if (!navigation.available) {
+            output.append("document", "refusal", navigation.reason, entry.correlation);
+            return;
+        }
+        const targetId = navigation.document.sessionId;
+        authoringStore.apply((state) => {
+            const activated = activateWorkspaceDocument(state.session, targetId);
+            const updated = updateWorkspaceDocument(activated.workspace, targetId, (target) => ({
+                ...target,
+                presentation: { ...target.presentation, focus: navigation.focus,
+                    selectedNodeId: navigation.focus?.connectionHighlights.length === 0 ? navigation.focus.nodeHighlights[0]?.nodeId ?? null : null,
+                    selectedConnectionId: navigation.focus?.connectionHighlights[0] ?? null,
+                    edgeMenu: null, nodeMenu: null, reconnectArmed: null },
+            }));
+            return { next: { ...state, session: updated.workspace }, result: null };
+        });
+        setInspectorOpen(true);
+
+        const nodeIds = navigation.focus?.nodeHighlights.map((node) => node.nodeId) ?? [];
+        if (nodeIds.length > 0) requestAnimationFrame(() => {
+            const current = activeWorkspaceDocument(authoringStore.getSnapshot().session);
+            if (current?.sessionId === targetId && documentRevision(current) === documentRevision(navigation.document)) fitRef.current?.(nodeIds);
+        });
+        output.append("document", "info", navigation.detail, entry.correlation);
+    };
+
+    // Clear — a PRESENTATION action only: it replaces the displayed
+    // snapshot with the empty one and never writes back into the graph,
+    // the build line, or the preview line. The suppression is keyed to
+    // the very set it was cleared for, so it expires by itself the moment
+    // any truth moves (a new settlement, a new graph diagnostic) or the
+    // active document changes — the new composition shows from the first
+    // render, never the previous revision's set.
+    const problemsSetKey = JSON.stringify(problemsSnapshot.entries);
+    const [problemsClearedKey, setProblemsClearedKey] = useState<string | null>(null);
+    const problemsCleared = problemsClearedKey !== null && problemsClearedKey === problemsSetKey;
+    const shownProblemsSnapshot = problemsCleared ? emptyProblemSnapshot() : problemsSnapshot;
+    const clearProblemsPresentation = () => {
+        setProblemsClearedKey(problemsSetKey);
+    };
 
     // The flow object is stable while handshake facts change inside it. Read
     // supportedTargets on every render so a completed handshake immediately
@@ -1757,427 +2018,119 @@ export function App() {
         }
     };
 
-    // The zone badges: each zone's live STATE projected from the facts
-    // above (design section 13, surface note) — the badges render, they
-    // own nothing: one source of truth per fact stands.
-    const inspectorZoneFacts: InspectorZoneFacts = {
-        selection: { nodeSelected: selectedNode !== null },
-        checks: {
-            ok: graphOk && contractOk && (loadResult === null || loadResult.ok),
-            problemCount:
-                graphProblemCount +
-                contractProblemCount +
-                (loadResult !== null ? loadResult.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length : 0),
-        },
-        document: { dirty },
-        emission: {
-            state: emission === null ? "none" : emission.ok === false ? "failed" : "ok",
-            problemCount: emission !== null && emission.ok === false ? emission.diagnostics.length : 0,
-        },
-        build: { ready: native.ready },
-    };
-    const saveConflictActions =
-        saveConflict === null ? [] : documentSaveConflictActions(saveConflict);
+    const resumeProjection = projectWorkspaceResume(workspace, native.target.target);
+    const resumeLatest = useRef(resumeProjection); resumeLatest.current = resumeProjection;
+    const resumeRootUri = workspace.workspaceRoot?.canonicalWorkspaceUri ?? null;
+    useEffect(() => {
+        setResumeHint(null);
+        const initial = resumeLatest.current;
+        if (fileChannel === null || initial === null) return;
+        const binding = bindWorkspaceResume(fileChannel, initial, setResumeHint,
+            error => output.append("workspace", "refusal", `Workspace resume preferences: ${String(error)}`));
+        resumeBinding.current = binding;
+        return () => {
+            const attempt = resumeAttempt.current;
+            if (attempt !== null) {
+                attempt.cancelled = true;
+                if (attempt.discoveryId !== null) void fileChannel.cancelWorkspaceDiscovery(attempt.discoveryId)
+                    .catch(error => output.append("workspace", "refusal", String(error)));
+                void environmentWorkflowRef.current?.cancel();
+            }
+            if (resumeBinding.current === binding) resumeBinding.current = null;
+            void binding.dispose();
+        };
+    }, [fileChannel, resumeRootUri, output]);
+    const resumeProjectionIdentity = JSON.stringify(resumeProjection);
+    useEffect(() => { if (resumeLatest.current !== null) resumeBinding.current?.observe(resumeLatest.current); }, [resumeProjectionIdentity]);
 
-    return (
-        <div className="gglab-app">
-            <header className="gglab-header">
-                <div className="gglab-header-group">
-                    <span className="gglab-brand">Shader Graph Editor</span>
-                    <span className="gglab-brand-sub">gglab.surface authoring</span>
-                </div>
-                <div className="gglab-header-group">
-                    <Badge variant="outline" className="font-mono">
-                        {descriptor !== null ? `${descriptor.profileId} v${descriptor.profileVersion}` : "no profile contract"}
-                    </Badge>
-                    <Badge variant={descriptor === null ? "default" : contractOk ? "ok" : "error"}>
-                        <BadgeDot />
-                        {descriptor === null ? "awaiting descriptor" : contractOk ? "contract ok" : `${contractProblemCount} contract problem${contractProblemCount === 1 ? "" : "s"}`}
-                    </Badge>
-                </div>
-            </header>
-            <div className="gglab-tabs" role="tablist" aria-label="Open documents">
-                <div className="gglab-tabs-list">
-                    {workspace.documents.map((doc) => {
-                        const isActive = doc.sessionId === workspace.activeDocumentId;
-                        const isPreviewTarget = doc.sessionId === workspace.preview.targetDocumentId;
-                        const onlyTab = workspace.documents.length === 1;
-                        return (
-                            <div key={doc.sessionId} className={`gglab-tab${isActive ? " gglab-tab-active" : ""}`} role="tab" aria-selected={isActive}>
-                                <button
-                                    type="button"
-                                    className="gglab-tab-label"
-                                    onClick={() => onActivateTab(doc.sessionId)}
-                                    title={doc.provenance.kind === "file" ? doc.provenance.path : "Untitled document"}
-                                >
-                                    {isPreviewTarget && (
-                                        <span className="gglab-tab-preview" title="Attached Runtime Preview target" aria-label="Preview target">
-                                            ▶
-                                        </span>
-                                    )}
-                                    {isDirty(doc) && <span className="gglab-tab-modified" title="Unsaved changes" aria-label="Unsaved changes">●</span>}
-                                    {tabNameFor(doc)}
-                                </button>
-                                <button
-                                    type="button"
-                                    className="gglab-tab-close"
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        void onCloseTab(doc.sessionId);
-                                    }}
-                                    disabled={onlyTab}
-                                    title={
-                                        onlyTab
-                                            ? "The only open tab — at least one document must stay open"
-                                            : `Close ${tabNameFor(doc)}`
-                                    }
-                                    aria-label={`Close ${tabNameFor(doc)}`}
-                                >
-                                    ×
-                                </button>
-                            </div>
-                        );
-                    })}
-                </div>
-                <div className="gglab-tabs-actions">
-                    <Button
-                        variant="toolbar"
-                        onClick={() => void onPreviewThisGraph()}
-                        title="Attach the active document to the Runtime Preview. Explicit intent: switching tabs keeps the target."
-                    >
-                        ▶ Preview this graph
-                    </Button>
-                </div>
-            </div>
-            <div className={`gglab-body${libraryOpen ? "" : " gglab-body-library-collapsed"}${inspectorOpen ? "" : " gglab-body-inspector-collapsed"}`}>
-                <aside className="gglab-side gglab-side-left gglab-primary-sidebar">
-                    {/* Activity bar — switches the primary sidebar panel.
-                        "Nodes" is the default (the existing library), and
-                        "Explorer" is the Workspace file browser. */}
-                    <div className="gglab-activitybar" role="tablist" aria-label="Workspace panels">
-                        <button
-                            type="button"
-                            role="tab"
-                            aria-selected={sidebarPanel === "explorer"}
-                            className={`gglab-activitybar-btn${sidebarPanel === "explorer" ? " gglab-activitybar-active" : ""}`}
-                            onClick={() => setSidebarPanel("explorer")}
-                        >
-                            Explorer
-                        </button>
-                        <button
-                            type="button"
-                            role="tab"
-                            aria-selected={sidebarPanel === "nodes"}
-                            className={`gglab-activitybar-btn${sidebarPanel === "nodes" ? " gglab-activitybar-active" : ""}`}
-                            onClick={() => setSidebarPanel("nodes")}
-                        >
-                            Nodes
-                        </button>
-                    </div>
-                    {sidebarPanel === "explorer" ? (
-                        <section className="gglab-explorer">
-                            <div
-                                className="gglab-explorer-root"
-                                title={workspace.workspaceRoot !== null ? workspace.workspaceRoot.displayPath : undefined}
-                            >
-                                {workspace.workspaceRoot !== null ? workspace.workspaceRoot.displayPath : "No workspace"}
-                            </div>
-                            <div className="gglab-explorer-actions">
-                                {fileChannel !== null && (
-                                    <Button variant="secondary" onClick={() => void onChooseWorkspaceRoot()}>
-                                        Choose…
-                                    </Button>
-                                )}
-                                <Button variant="primary" onClick={() => void onDiscoverWorkspace()} disabled={explorerBusy}>
-                                    {explorerBusy ? "Discovering…" : "Discover"}
-                                </Button>
-                                {explorerBusy && (
-                                    <Button variant="ghost" onClick={() => void onStopDiscovery()}>
-                                        Stop
-                                    </Button>
-                                )}
-                            </div>
-                            {explorerStatus !== null && <p className="gglab-explorer-status">{explorerStatus}</p>}
-                            {explorerError !== null && <p className="gglab-explorer-error">{explorerError}</p>}
-                            {explorerEntries !== null && explorerEntries.length > 0 && (
-                                <ul className="gglab-explorer-list">
-                                    {explorerEntries.map((entry) => {
-                                        const alreadyOpen = workspace.documents.some((c) => c.canonicalUri === entry.canonicalDocumentUri);
-                                        return (
-                                            <li key={entry.canonicalDocumentUri} className="gglab-explorer-entry">
-                                                <button
-                                                    type="button"
-                                                    className="gglab-explorer-entry-btn"
-                                                    onClick={() => void onOpenEntry(entry)}
-                                                    title={entry.relativePath}
-                                                >
-                                                    {entry.relativePath}
-                                                    {alreadyOpen && <span className="gglab-explorer-open" title="Already open in a tab"> ·</span>}
-                                                </button>
-                                            </li>
-                                        );
-                                    })}
-                                </ul>
-                            )}
-                        </section>
-                    ) : libraryOpen ? (
-                        <>
-                            <div className="gglab-library-search">
-                                <Input
-                                    placeholder="Filter the library…"
-                                    value={libraryQuery}
-                                    onChange={(event) => setLibraryQuery(event.currentTarget.value)}
-                                    aria-label="Filter the node library"
-                                />
-                            </div>
-                            <NodePalette
-                                onAddNode={onAddNode}
-                                onAddParameter={onAddParameter}
-                                descriptor={descriptor}
-                                query={libraryQuery}
-                                onCollapseLibrary={() => setLibraryOpen(false)}
-                            />
-                            {operationNotes.length > 0 && (
-                                <section className="gglab-notes">
-                                    <h2>Authoring notes</h2>
-                                    {operationNotes.map((note, index) => (
-                                        <p key={index}>{note}</p>
-                                    ))}
-                                </section>
-                            )}
-                        </>
-                    ) : (
-                        <NodePalette rail onAddNode={onAddNode} onAddParameter={onAddParameter} descriptor={descriptor} onExpandLibrary={() => setLibraryOpen(true)} />
-                    )}
-                </aside>
-                <main className="gglab-canvas">
-                    {/* Canvas toolbar — one visual language for canvas
-                        actions (Auto Layout today; Fit View / Snap later). */}
-                    <div className="gglab-canvas-actions" role="toolbar" aria-label="Canvas actions">
-                        {/* Undo / Redo — the session's document history
-                            (one step per user intent; refused operations
-                            never enter; disabled while nothing to step). */}
-                        <Button variant="toolbar" onClick={onUndo} disabled={!canUndoHistory(history)} title="Undo the last change (Ctrl+Z)" aria-label="Undo">
-                            <UndoIcon />
-                            Undo
-                        </Button>
-                        <Button variant="toolbar" onClick={onRedo} disabled={!canRedoHistory(history)} title="Redo the last undone change (Ctrl+Y)" aria-label="Redo">
-                            <RedoIcon />
-                            Redo
-                        </Button>
-                        <Button variant="toolbar" onClick={onAutoLayout} title="Lay the whole graph out (positions are session state)">
-                            <LayoutIcon />
-                            Auto layout
-                        </Button>
-                    </div>
-                    {/* Reconnect armed — the advanced gesture's visible
-                        affordance. Cancelling is a no-op: the original
-                        connection is moved only when a port confirms. */}
-                    {reconnectArmed !== null && (
-                        <div className="gglab-reconnect-hint" role="status">
-                            Reconnecting <span className="mono">{reconnectArmed}</span> — click a port (input = target end · output = source
-                            end). Esc cancels; the original wire stays put.
-                        </div>
-                    )}
-                    <FlowViewport
-                        nodes={flow.nodes}
-                        edges={flow.edges}
-                        onConnectRequest={onConnectRequest}
-                        onNodePlaced={onNodePlaced}
-                        onDropRequest={onDropRequest}
-                        onEdgeSelect={onEdgeSelect}
-                        onCanvasClick={onCanvasClick}
-                        onEdgeContextMenu={onEdgeContextMenu}
-                        onEdgeReconnectArm={onEdgeReconnectArm}
-                        onPortActivate={onPortActivate}
-                        onNodeSelect={onNodeSelect}
-                        onNodeMenu={onNodeMenu}
-                        onUserPanZoom={setViewport}
-                        requestedViewport={viewport}
-                        requestedViewportToken={session.sessionId}
-                        onFlowReady={(fitView) => {
-                            fitRef.current = fitView;
-                        }}
-                    />
-                    {/* Edge context menu — one item, the app's core-judged
-                        operation. It never calls into React Flow edges. */}
-                    {edgeMenu !== null && (
-                        <>
-                            <div className="gglab-menu-overlay" onPointerDown={() => setEdgeMenu(null)} />
-                            <div className="gglab-edge-menu" style={{ left: edgeMenu.x, top: edgeMenu.y }} role="menu" aria-label="Connection actions">
-                                <Button
-                                    variant="ghost"
-                                    className="gglab-edge-menu-item"
-                                    role="menuitem"
-                                    onClick={() => {
-                                        if (selectedConnectionId !== null) {
-                                            applyRemoveConnection(selectedConnectionId);
-                                        }
-                                    }}>
-                                    <span>Delete Connection</span>
-                                    <span className="gglab-kbd" aria-hidden>
-                                        Del
-                                    </span>
-                                </Button>
-                            </div>
-                        </>
-                    )}
-                    {/* Node action menu — the card's chevron, one
-                        destructive item; same chrome language as the edge
-                        menu, and the same Del key behind it (the menu
-                        opens with its target selected, so the two agree). */}
-                    {nodeMenu !== null && (
-                        <>
-                            <div className="gglab-menu-overlay" onPointerDown={() => setNodeMenu(null)} />
-                            <div className="gglab-node-menu" style={{ left: nodeMenu.x, top: nodeMenu.y }} role="menu" aria-label={`Node actions for ${nodeMenu.nodeId}`}>
-                                <Button
-                                    variant="ghost"
-                                    className="gglab-node-menu-item"
-                                    role="menuitem"
-                                    onClick={() => {
-                                        const nodeId = nodeMenu.nodeId;
-                                        setNodeMenu(null);
-                                        onRemoveNode(nodeId);
-                                    }}>
-                                    <span className="gglab-node-menu-label">
-                                        <TrashIcon />
-                                        Delete Node
-                                    </span>
-                                    <span className="gglab-kbd" aria-hidden>
-                                        Del
-                                    </span>
-                                </Button>
-                            </div>
-                        </>
-                    )}
-                    {/* Node deletion — one gesture, the whole node (node +
-                        touching connections + placement) through the
-                        core-judged `removeNode`. */}
-                </main>
-                <aside className="gglab-side gglab-side-right">
-                    {inspectorOpen ? (
-                        <>
-                        {/* Same rail language as the node library: head +
-                            one panel-control; collapsed it becomes the
-                            48px rail with the vertical re-open button. */}
-                        <div className="gglab-library-head">
-                            <h2 className="gglab-library-title">Inspector</h2>
-                            <div className="gglab-library-bulk" role="group" aria-label="Inspector controls">
-                                <Button variant="icon" size="icon" aria-label="Collapse the inspector" title="Collapse the inspector" onClick={() => setInspectorOpen(false)}>
-                                    <PanelCloseIcon />
-                                </Button>
-                            </div>
-                        </div>
-                        {/* Inspector zones (design section 13, surface note): one
-                            responsibility per tab; each tab carries its zone's
-                            LIVE STATE badge — the grouping organizes, it never
-                            hides: a zoned-out zone still states itself here. */}
-                        <div className="gglab-inspector-tabs" role="tablist" aria-label="Inspector zones">
-                            {INSPECTOR_ZONES.map((zone) => {
-                                const badge = inspectorZoneBadge(zone, inspectorZoneFacts);
-                                return (
-                                    <button
-                                        key={zone}
-                                        type="button"
-                                        role="tab"
-                                        aria-selected={inspectorZone === zone}
-                                        className={inspectorZone === zone ? "gglab-inspector-tab active" : "gglab-inspector-tab"}
-                                        onClick={() => setInspectorZone(zone)}
-                                    >
-                                        <span>{INSPECTOR_ZONE_LABELS[zone]}</span>
-                                        <Badge variant={badge.variant}>
-                                            <BadgeDot />
-                                            {badge.label}
-                                        </Badge>
-                                    </button>
-                                );
-                            })}
-                        </div>
-                        {inspectorZone === "selection" && (
-                            <NodePropertiesPanel
-                                node={selectedNode}
-                                onConstantValueCommit={onConstantValueCommit}
-                            />
-                        )}
-                        {inspectorZone === "contract" && (
-                            <>
-                            <DescriptorPanel state={descriptorState} onStateChange={onDescriptorStateChange} openDescriptorFile={openDescriptorFile} />
-                    {graphSets.map((set) => (
-                        <DiagnosticsPanel key={set.title} title={set.title} diagnostics={set.diagnostics} ok={set.ok} passedText={set.passedText} onSelect={selectDiagnostic} />
-                    ))}
-                    {contractSets.map((set) => (
-                        <DiagnosticsPanel key={set.title} title={set.title} diagnostics={set.diagnostics} ok={set.ok} passedText={set.passedText} onSelect={selectDiagnostic} />
-                    ))}
-                    {loadResult !== null && (
-                        <DiagnosticsPanel title={loadResult.title} diagnostics={loadResult.diagnostics} ok={loadResult.ok} passedText={loadResult.passedText} onSelect={selectDiagnostic} />
-                    )}
-                            </>
-                        )}
-                        {inspectorZone === "document" && (
-                            <>
-                    {/* Native document I/O. The host owns canonical URI
-                        capabilities, revision tokens, and exact UTF-8 bytes;
-                        the core owns parse/serialize, and this app owns which
-                        snapshot belongs to each document session. */}
-                    {fileChannel !== null && (
-                        <section className="gglab-panel gglab-document-native">
-                            <h2 className="gglab-panel-title">Document</h2>
-                            <p className="gglab-panel-hint">
-                                Native open, revision-checked save, and save-as (the host owns file identity; bytes are the core&apos;s canonical .shadergraph serialization).
-                            </p>
-                            <ButtonGroup role="toolbar" aria-label="Document I/O">
-                                <Button variant="secondary" onClick={() => void openDocument()}>
-                                    <FileIcon />
-                                    Open…
-                                </Button>
-                                <Button variant="secondary" onClick={() => void saveDocument(false)}>
-                                    Save
-                                </Button>
-                                <Button variant="ghost" onClick={() => void saveDocument(true)}>
-                                    Save As…
-                                </Button>
-                            </ButtonGroup>
-                            {session.provenance.kind === "file" && <p className="gglab-panel-hint mono">{session.provenance.path}</p>}
-                        </section>
-                    )}
-                    <section className="gglab-panel gglab-document-io">
-                        <h2 className="gglab-panel-title">Document save / load</h2>
-                        <textarea
-                            className="gglab-field gglab-field-mono"
-                            value={savedText}
-                            onChange={(event) => setSavedText(event.currentTarget.value)}
-                            rows={12}
-                            spellCheck={false}
-                        />
-                        <ButtonGroup className="mt-2.5">
-                            <Button variant="ghost" onClick={onSave}>
-                                Save to text
-                            </Button>
-                            <Button variant="secondary" onClick={onLoad}>
-                                Load from text
-                            </Button>
-                        </ButtonGroup>
-                    </section>
-                            </>
-                        )}
-                        {inspectorZone === "emission" && (
-                            <>
-                    <section className="gglab-panel gglab-emission-block">
-                        <h2 className="gglab-panel-title">Emission preview</h2>
-                        <ButtonGroup className="mb-2.5">
-                            <Button variant="secondary" onClick={onEmit}>
-                                Generate HLSL (core)
-                            </Button>
-                        </ButtonGroup>
-                        {emission !== null && <EmissionPreview emission={emission} />}
-                        </section>
-                            </>
-                        )}
-                        {inspectorZone === "build" && (
-                            <>
-                    {/* Native build — readiness, gate, build line, and the
-                        Build Inspector projection (one source of truth
-                        per field; the inspector never computes facts). */}
+    const restoreSavedWorkspace = async (): Promise<void> => {
+        const intent = resumeHint, channel = fileChannel;
+        if (intent === null || channel === null || resumeAttempt.current !== null) return;
+        const attempt = { cancelled: false, discoveryId: null as WorkspaceDiscoveryId | null };
+        const binding = resumeBinding.current;
+        resumeAttempt.current = attempt; setResumeBusy(true); setExplorerError(null);
+        const pendingWrites = binding?.pause();
+        let restoredTarget = false;
+        let expected = authoringStore.getSnapshot();
+        const check = () => {
+            if (attempt.cancelled || !sameResumeContext(expected, authoringStore.getSnapshot()) || expected.session.workspaceRoot?.canonicalWorkspaceUri !== intent.workspaceUri) {
+                throw new Error("Workspace restore stopped because the editing context changed or was cancelled.");
+            }
+        };
+        try {
+            await pendingWrites; check();
+            const scan = await channel.discoverWorkspace(expected.session.workspaceRoot!.canonicalWorkspaceUri);
+            attempt.discoveryId = scan.discoveryId;
+            if (attempt.cancelled) await channel.cancelWorkspaceDiscovery(scan.discoveryId);
+            const result = await scan.result; check(); attempt.discoveryId = null;
+            if (result.kind !== "changed") throw new Error("Workspace restore requires a fresh complete discovery.");
+            setExplorerEntries(result.snapshot.documents);
+            for (const uri of intent.documentUris) {
+                check();
+                if (expected.session.documents.some(doc => doc.canonicalUri === uri)) continue;
+                const entry = result.snapshot.documents.find(doc => doc.canonicalDocumentUri === uri);
+                if (entry === undefined) { output.append("workspace", "info", `Saved tab is no longer discoverable: ${uri}`); continue; }
+                const snapshot = await channel.readDocumentSnapshot(entry.canonicalDocumentUri); check();
+                const parsed = parseShaderGraphDocument(snapshot.text);
+                if (!parsed.ok || parsed.value === null) { output.append("workspace", "refusal", `Saved tab could not be parsed: ${uri}`, EMPTY_EVIDENCE_CORRELATION, parsed.diagnostics); continue; }
+                openDocumentSession(parsed.value, provenanceFromFile(snapshot.displayPath), snapshot.canonicalDocumentUri, snapshot.fileRevisionToken);
+                expected = authoringStore.getSnapshot();
+            }
+            const active = expected.session.documents.find(doc => doc.canonicalUri === intent.activeUri);
+            if (active) { onActivateTab(active.sessionId); expected = authoringStore.getSnapshot(); }
+            if (intent.environmentId !== null && expected.session.activeEnvironment?.environmentId !== intent.environmentId) {
+                const workflow = environmentWorkflowRef.current;
+                if (workflow === null) throw new Error("Environment workflow is not ready. Retry restoring the session.");
+                await workflow.refresh(); check();
+                const matches = workflow.getSnapshot().registry?.records.filter(entry => entry.record.environmentId === intent.environmentId) ?? [];
+                if (matches.length !== 1) throw new Error("The saved Environment is missing or ambiguous. Select it explicitly in GGLab Environment.");
+                const before = expected;
+                await workflow.useRegistered(matches[0]!.record);
+                const after = authoringStore.getSnapshot();
+                if (attempt.cancelled || !sameResumeContext(before, after, true)) {
+                    throw new Error("Workspace restore stopped because the editing context changed or was cancelled during Environment verification.");
+                }
+                if (after.session.activeEnvironment === before.session.activeEnvironment ||
+                    after.session.activeEnvironment?.environmentId !== intent.environmentId) throw new Error(workflow.getSnapshot().message);
+                expected = after;
+            }
+            check();
+            const target = expected.session.documents.find(doc => doc.canonicalUri === intent.previewUri);
+            if (target) {
+                const transition = await preview.coordinator.retargetTo(target.sessionId,
+                    () => !attempt.cancelled && sameResumeContext(expected, authoringStore.getSnapshot()));
+                if (!transition.ok) throw new Error(`Saved Preview target is not ready: ${describeTransitionRefusal(transition.refusal)}`);
+            }
+            if (attempt.cancelled) throw new Error("Workspace restore cancelled.");
+            native.setTarget(intent.buildTarget); restoredTarget = true;
+            output.append("workspace", "ok", "Saved session restored from current files. No attached Preview was launched and no saved build or Runtime evidence was restored.");
+        } catch (error) {
+            setExplorerError(String(error));
+            output.append("workspace", "refusal", `Workspace restore: ${String(error)}`);
+        } finally {
+            const baseline = projectWorkspaceResume(authoringStore.getSnapshot().session,
+                restoredTarget ? intent.buildTarget : (resumeLatest.current?.buildTarget ?? native.target.target));
+            if (baseline?.workspaceUri === intent.workspaceUri) binding?.resume(baseline);
+            if (resumeAttempt.current === attempt) { resumeAttempt.current = null; setResumeBusy(false); }
+        }
+    };
+    const cancelWorkspaceRestore = () => {
+        const attempt = resumeAttempt.current;
+        if (!attempt) return;
+        attempt.cancelled = true;
+        if (attempt.discoveryId && fileChannel) void fileChannel.cancelWorkspaceDiscovery(attempt.discoveryId).catch(error => setExplorerError(String(error)));
+        void environmentWorkflowRef.current?.cancel();
+    };
+
+    const selectedConnection = document.connections.find(connection => connection.id === selectedConnectionId);
+    const selectionProblems = problemsSnapshot.entries.filter(entry => {
+        const navigation = resolveProblemNavigation(workspace, entry);
+        return navigation.available && navigation.document.sessionId === session.sessionId && (
+            (selectedNode !== null && navigation.focus?.nodeHighlights.some(node => node.nodeId === selectedNode.id)) ||
+            (selectedConnection !== undefined && navigation.focus?.connectionHighlights.includes(selectedConnection.id)));
+    });
+    const showEvidence = (tab: BottomPanelTab) => { setBottomPanelOpen(true); setBottomPanelTab(tab); };
+    const nativeDetails = (<details className="gglab-engineering-details"><summary>Native readiness and identities</summary>
                     <section className="gglab-panel gglab-panel-native-build" aria-label="Native build">
                         <h2 className="gglab-panel-title">Native build</h2>
                         <p className="gglab-panel-hint">
@@ -2197,116 +2150,9 @@ export function App() {
                             verdict is NotReady [ProgramCompositionUnavailable]
                             and the gate refuses structurally. No second
                             display surface for it here. */}
-                        {/* Configuration (sections 5 and 8) — each field is a
-                            stacked block: a short label, the explanation in
-                            the hint, and the control on its own full-width
-                            row. A long label never shares the value's row
-                            again (the path display is never crushed). */}
-                        <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
-                            Configuration
-                        </h3>
-                        <div className="gglab-native-field">
-                            <label className="gglab-native-field-label" htmlFor="native-tool-path">
-                                Tool path
-                            </label>
-                            <p className="gglab-native-field-hint">
-                                Explicit configuration — discovery rule 1. Empty means not configured: that rule records its own failure.
-                            </p>
-                            <div className="gglab-native-path-row">
-                                <Input
-                                    id="native-tool-path"
-                                    className="gglab-native-path-input"
-                                    placeholder="C:\…\gglab-shaderc.exe"
-                                    title={native.discoveryConfig.explicitConfig === "" ? undefined : native.discoveryConfig.explicitConfig}
-                                    value={native.discoveryConfig.explicitConfig}
-                                    onChange={(event) => native.setToolPath(event.currentTarget.value)}
-                                    aria-label="Explicit tool path (discovery rule 1)"
-                                />
-                                {fileChannel !== null && (
-                                    <Button variant="ghost" className="gglab-native-path-browse" onClick={() => void browseToolPath()}>
-                                        <FileIcon />
-                                        Browse…
-                                    </Button>
-                                )}
-                            </div>
-                        </div>
-                        <div className="gglab-native-field">
-                            <label className="gglab-native-field-label" htmlFor="native-sibling-build">
-                                Build-output location
-                            </label>
-                            <p className="gglab-native-field-hint">
-                                Sibling GGLab build output — discovery rule 2; optional.
-                            </p>
-                            <div className="gglab-native-path-row">
-                                <Input
-                                    id="native-sibling-build"
-                                    className="gglab-native-path-input"
-                                    placeholder="…\Build\Output\x64"
-                                    title={native.discoveryConfig.siblingBuildOutput === "" ? undefined : native.discoveryConfig.siblingBuildOutput}
-                                    value={native.discoveryConfig.siblingBuildOutput}
-                                    onChange={(event) => native.setSiblingBuildOutput(event.currentTarget.value)}
-                                    aria-label="Configured sibling build-output location (discovery rule 2)"
-                                />
-                                {fileChannel !== null && (
-                                    <Button variant="ghost" className="gglab-native-path-browse" onClick={() => void browseSiblingBuildOutput()}>
-                                        <FileIcon />
-                                        Browse…
-                                    </Button>
-                                )}
-                            </div>
-                        </div>
-                        <div className="gglab-native-field">
-                            <label className="gglab-native-field-label" htmlFor="native-build-target">
-                                Build target
-                            </label>
-                            <p className="gglab-native-field-hint">
-                                Explicit configuration (development default {DEFAULT_BUILD_TARGET}); the next BuildIntent carries it.
-                            </p>
-                            <select id="native-build-target" className="gglab-native-select" value={native.target.target} onChange={(event) => native.setTarget(event.currentTarget.value)}>
-                                {nativeTargetOptions.map((option) => (
-                                    <option key={option} value={option}>
-                                        {option}
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
-                        {/* Actions, in lifecycle order: resolve the tool
-                            (the rule walk), establish proof (the handshake).
-                            No compile action: the function-only program
-                            composition is unavailable in this editor (the
-                            state above), so the surface offers no path to
-                            issue one. */}
-                        <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
-                            Actions
-                        </h3>
-                        <ButtonGroup role="toolbar" aria-label="native build actions">
-                            <Button variant="ghost" onClick={() => void native.discoverNow()} disabled={native.discoveryInFlight}>
-                                {native.discoveryInFlight ? "Discovering…" : "Re-discover"}
-                            </Button>
-                            <Button variant="ghost" onClick={() => void native.handshakeNow()} disabled={native.handshakeInFlight}>
-                                {native.handshakeInFlight ? "Handshaking…" : "Handshake (establish proof)"}
-                            </Button>
-                        </ButtonGroup>
-                        {native.lineReport !== null && (
-                            <>
-                                <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
-                                    Build line
-                                </h3>
-                                <p className="gglab-native-field-hint">
-                                    This session's attempts, in issue order (the newest issued anchors `current`).
-                                </p>
-                                <dl className="gglab-facts">
-                                    {native.lineReport.states.map((entry, index) => (
-                                        <div key={`${entry.buildId.sequence}-${index}`} className="gglab-fact">
-                                            <dt>
-                                                #{entry.buildId.sequence} · {entry.intent.target}
-                                            </dt>
-                                            <dd className={`gglab-native-state gglab-native-state-${entry.state}`}>{entry.state}</dd>
-                                        </div>
-                                    ))}
-                                </dl>
-                            </>
-                        )}
+                        {/* The attempt CHRONOLOGY (the build line's states,
+                            the outcomes, the diagnostics) projects to the
+                            bottom panel's Build view alongside these current readiness facts. */}
                         {native.inspector !== null && (
                             <>
                                 <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
@@ -2321,10 +2167,23 @@ export function App() {
                                 <InspectorRows title="Build" rows={native.inspector.build} />
                             </>
                         )}
-                        {native.notes.length > 0 && <ul className="gglab-native-notes">{renderNativeNotes(native.notes)}</ul>}
-                    </section>
+                        {/* Discovery operation events render in Output; the build
+                            panel view — one display surface, owned by it. */}
+                    </section></details>);
+    const emissionDetails = (<details className="gglab-engineering-details"><summary>Generated HLSL</summary>
+                    <section className="gglab-panel gglab-emission-block">
+                        <h2 className="gglab-panel-title">Emission preview</h2>
+                        <ButtonGroup className="mb-2.5">
+                            <Button variant="secondary" onClick={onEmit}>
+                                Generate HLSL (core)
+                            </Button>
+                        </ButtonGroup>
+                        {emission !== null && <EmissionPreview emission={emission} />}
+                        </section></details>);
+    const previewDetails = (<details className="gglab-engineering-details"><summary>Preview state and advanced controls</summary>
                     <section className="gglab-panel gglab-panel-native-build" aria-label="Shader Graph Preview">
                         <h2 className="gglab-panel-title">Shader Graph Preview</h2>
+                        <p role="status">{previewTargetSession === undefined ? "No Preview target. Choose Preview this graph to start." : `Preview target: ${tabNameFor(previewTargetSession)}`}</p>
                         <p className="gglab-panel-hint">
                             Authoritative attached preview through the main-owned Preview Program and GGLab Runtime. Launch is success-first: no Runtime process starts before a valid publication exists.
                         </p>
@@ -2336,7 +2195,7 @@ export function App() {
                                       ? "error"
                                       : preview.projection?.freshness === "stale"
                                         ? "warn"
-                                        : "accent"
+                                        : "info"
                             }
                         >
                             <BadgeDot />
@@ -2452,10 +2311,349 @@ export function App() {
                                 Stop attached Lab
                             </Button>
                         </ButtonGroup>
-                        {preview.notes.length > 0 && <ul className="gglab-native-notes">{renderNativeNotes(preview.notes)}</ul>}
-                    </section>
+                        {/* The surface's operation notes render in the preview
+                            panel view — one display surface, owned by it. */}
+                    </section></details>);
+    const saveConflictActions =
+        saveConflict === null ? [] : documentSaveConflictActions(saveConflict);
+
+    return (
+        <div className="gglab-app">
+            <header className="gglab-header">
+                <div className="gglab-header-group">
+                    <span className="gglab-brand">Shader Graph Editor</span>
+                    <span className="gglab-brand-sub">gglab.surface authoring</span>
+                </div>
+                <div className="gglab-header-group">
+                    <EnvironmentPanel onWorkflowReady={workflow => { environmentWorkflowRef.current = workflow; }} coordinator={preview.coordinator} begin={environmentEvidence.begin} activeRoot={workspace.activeEnvironment?.environmentRoot ?? null} capture={() => {
+                        const session = authoringStore.getSnapshot().session;
+                        return () => {
+                            const current = authoringStore.getSnapshot().session;
+                            return current.workspaceRoot?.canonicalWorkspaceUri === session.workspaceRoot?.canonicalWorkspaceUri && current.activeEnvironment === session.activeEnvironment;
+                        };
+                    }} />
+                    <Badge variant="outline" className="font-mono">
+                        {descriptor !== null ? `${descriptor.profileId} v${descriptor.profileVersion}` : "no profile contract"}
+                    </Badge>
+                    <Badge variant={descriptor === null ? "default" : contractOk ? "ok" : "error"}>
+                        <BadgeDot />
+                        {descriptor === null ? "awaiting descriptor" : contractOk ? "contract ok" : `${contractProblemCount} contract problem${contractProblemCount === 1 ? "" : "s"}`}
+                    </Badge>
+                </div>
+            </header>
+            <div className="gglab-tabs">
+                <div className="gglab-tabs-list" role="tablist" aria-label="Open documents">
+                    {workspace.documents.map((doc) => {
+                        const isActive = doc.sessionId === workspace.activeDocumentId;
+                        const isPreviewTarget = doc.sessionId === workspace.preview.targetDocumentId;
+                        const onlyTab = workspace.documents.length === 1;
+                        return (
+                            <div key={doc.sessionId} className={`gglab-tab${isActive ? " gglab-tab-active" : ""}`}>
+                                <button
+                                    type="button"
+                                    className="gglab-tab-label"
+                                    role="tab"
+                                    aria-selected={isActive}
+                                    tabIndex={isActive ? 0 : -1}
+                                    onKeyDown={onTabKeyDown}
+                                    onClick={() => onActivateTab(doc.sessionId)}
+                                    title={doc.provenance.kind === "file" ? doc.provenance.path : "Untitled document"}
+                                >
+                                    {isPreviewTarget && (
+                                        <span className="gglab-tab-preview" title="Attached Runtime Preview target" aria-label="Preview target">
+                                            ▶
+                                        </span>
+                                    )}
+                                    {isDirty(doc) && <span className="gglab-tab-modified" title="Unsaved changes" aria-label="Unsaved changes">●</span>}
+                                    {tabNameFor(doc)}
+                                </button>
+                                <button
+                                    type="button"
+                                    className="gglab-tab-close"
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        void onCloseTab(doc.sessionId);
+                                    }}
+                                    disabled={onlyTab}
+                                    title={
+                                        onlyTab
+                                            ? "The only open tab — at least one document must stay open"
+                                            : `Close ${tabNameFor(doc)}`
+                                    }
+                                    aria-label={`Close ${tabNameFor(doc)}`}
+                                >
+                                    ×
+                                </button>
+                            </div>
+                        );
+                    })}
+                </div>
+                <div className="gglab-tabs-actions" role="group" aria-label="Document and native actions">
+                    {fileChannel !== null && <>
+                        <Button variant="toolbar" onClick={() => void openDocument()}>Open…</Button>
+                        <Button variant="toolbar" onClick={() => void saveDocument(false)}>Save</Button>
+                        <Button variant="toolbar" onClick={() => void saveDocument(true)}>Save As…</Button>
+                    </>}
+                    <Button variant="toolbar" onClick={() => setWorkbenchDialog("document")}>Document…</Button>
+                    <Button variant="toolbar" onClick={() => setWorkbenchDialog("contract")}>Profile…</Button>
+                    <Button variant="toolbar" onClick={() => setWorkbenchDialog("advanced")}>Advanced…</Button>
+                    <label className="gglab-target-control">Target
+                        <select id="native-build-target" className="gglab-native-select" value={native.target.target} onChange={(event) => native.setTarget(event.currentTarget.value)}>
+                                {nativeTargetOptions.map((option) => (
+                                    <option key={option} value={option}>
+                                        {option}
+                                    </option>
+                                ))}
+                            </select></label>
+                    <Button variant="toolbar" onClick={() => showEvidence("build")}>Build / HLSL</Button>
+                    <Button variant="toolbar" onClick={() => showEvidence("preview")}>Preview details</Button>
+
+                    <Button
+                        variant="primary"
+                        onClick={() => void onPreviewThisGraph()}
+                        disabled={startingGraphPreview || preview.buildInFlight || preview.launchInFlight}
+                        title="Select this graph, prove Preview compatibility, and build. Launch Runtime only after successful publication."
+                    >
+                        {startingGraphPreview ? "Starting Preview…" : "▶ Preview this graph"}
+                    </Button>
+                </div>
+            </div>
+            <div ref={panelBodyRef} className={`gglab-body${libraryOpen ? "" : " gglab-body-library-collapsed"}${inspectorOpen ? "" : " gglab-body-inspector-collapsed"}`}>
+                <aside className="gglab-side gglab-side-left gglab-primary-sidebar">
+                    {/* Activity bar — switches the primary sidebar panel.
+                        "Nodes" is the default (the existing library), and
+                        "Explorer" is the Workspace file browser. */}
+                    <div className="gglab-activitybar" role="tablist" aria-label="Workspace panels">
+                        <button
+                            type="button"
+                            role="tab"
+                            aria-selected={sidebarPanel === "explorer"}
+                            tabIndex={sidebarPanel === "explorer" ? 0 : -1}
+                            onKeyDown={onTabKeyDown}
+                            className={`gglab-activitybar-btn${sidebarPanel === "explorer" ? " gglab-activitybar-active" : ""}`}
+                            onClick={() => setSidebarPanel("explorer")}
+                        >
+                            Explorer
+                        </button>
+                        <button
+                            type="button"
+                            role="tab"
+                            aria-selected={sidebarPanel === "nodes"}
+                            tabIndex={sidebarPanel === "nodes" ? 0 : -1}
+                            onKeyDown={onTabKeyDown}
+                            className={`gglab-activitybar-btn${sidebarPanel === "nodes" ? " gglab-activitybar-active" : ""}`}
+                            onClick={() => setSidebarPanel("nodes")}
+                        >
+                            Nodes
+                        </button>
+                    </div>
+                    {sidebarPanel === "explorer" ? (
+                        <section className="gglab-explorer">
+                            <div
+                                className="gglab-explorer-root"
+                                title={workspace.workspaceRoot !== null ? workspace.workspaceRoot.displayPath : undefined}
+                            >
+                                {workspace.workspaceRoot !== null ? workspace.workspaceRoot.displayPath : "No workspace"}
+                            </div>
+                            <div className="gglab-explorer-actions">
+                                {fileChannel !== null && (
+                                    <Button variant="secondary" onClick={() => void onChooseWorkspaceRoot()}>
+                                        Choose…
+                                    </Button>
+                                )}
+                                {fileChannel !== null && workspace.workspaceRoot === null && (
+                                    <Button variant="secondary" onClick={() => void onChooseWorkspaceRoot(true)}>Reopen last Workspace</Button>
+                                )}
+                                {resumeHint !== null && <Button variant="secondary" disabled={resumeBusy} onClick={() => void restoreSavedWorkspace()}>Restore saved session</Button>}
+                                {resumeBusy && <Button variant="ghost" onClick={cancelWorkspaceRestore}>Cancel restore</Button>}
+                                <Button variant="secondary" onClick={() => void onDiscoverWorkspace()} disabled={explorerBusy}>
+                                    {explorerBusy ? "Discovering…" : "Discover"}
+                                </Button>
+                                {explorerBusy && (
+                                    <Button variant="ghost" onClick={() => void onStopDiscovery()}>
+                                        Stop
+                                    </Button>
+                                )}
+                            </div>
+                            {explorerStatus !== null && <p className="gglab-explorer-status">{explorerStatus}</p>}
+                            {explorerError !== null && <p className="gglab-explorer-error">{explorerError}</p>}
+                            {explorerEntries !== null && explorerEntries.length > 0 && (
+                                <ul className="gglab-explorer-list">
+                                    {explorerEntries.map((entry) => {
+                                        const alreadyOpen = workspace.documents.some((c) => c.canonicalUri === entry.canonicalDocumentUri);
+                                        return (
+                                            <li key={entry.canonicalDocumentUri} className="gglab-explorer-entry">
+                                                <button
+                                                    type="button"
+                                                    className="gglab-explorer-entry-btn"
+                                                    onClick={() => void onOpenEntry(entry)}
+                                                    title={entry.relativePath}
+                                                >
+                                                    {entry.relativePath}
+                                                    {alreadyOpen && <span className="gglab-explorer-open" title="Already open in a tab"> ·</span>}
+                                                </button>
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                            )}
+                        </section>
+                    ) : libraryOpen ? (
+                        <>
+                            <div className="gglab-library-search">
+                                <Input
+                                    placeholder="Filter the library…"
+                                    value={libraryQuery}
+                                    onChange={(event) => setLibraryQuery(event.currentTarget.value)}
+                                    aria-label="Filter the node library"
+                                />
+                            </div>
+                            <NodePalette
+                                onAddNode={onAddNode}
+                                onAddParameter={onAddParameter}
+                                descriptor={descriptor}
+                                query={libraryQuery}
+                                onCollapseLibrary={() => setLibraryOpen(false)}
+                            />
+                        </>
+                    ) : (
+                        <NodePalette rail onAddNode={onAddNode} onAddParameter={onAddParameter} descriptor={descriptor} onExpandLibrary={() => setLibraryOpen(true)} />
+                    )}
+                </aside>
+                <main className="gglab-canvas">
+                    {/* Canvas toolbar — one visual language for canvas
+                        actions (Auto Layout today; Fit View / Snap later). */}
+                    <div className="gglab-canvas-actions" role="toolbar" aria-label="Canvas actions">
+                        {/* Undo / Redo — the session's document history
+                            (one step per user intent; refused operations
+                            never enter; disabled while nothing to step). */}
+                        <Button variant="toolbar" onClick={onUndo} disabled={!canUndoHistory(history)} title="Undo the last change (Ctrl+Z)" aria-label="Undo">
+                            <UndoIcon />
+                            Undo
+                        </Button>
+                        <Button variant="toolbar" onClick={onRedo} disabled={!canRedoHistory(history)} title="Redo the last undone change (Ctrl+Y)" aria-label="Redo">
+                            <RedoIcon />
+                            Redo
+                        </Button>
+                        <Button variant="toolbar" onClick={onAutoLayout} title="Lay the whole graph out (positions are session state)">
+                            <LayoutIcon />
+                            Auto layout
+                        </Button>
+                    </div>
+                    {/* Reconnect armed — the advanced gesture's visible
+                        affordance. Cancelling is a no-op: the original
+                        connection is moved only when a port confirms. */}
+                    {reconnectArmed !== null && (
+                        <div className="gglab-reconnect-hint" role="status">
+                            Reconnecting <span className="mono">{reconnectArmed}</span> — click a port (input = target end · output = source
+                            end). Esc cancels; the original wire stays put.
+                        </div>
+                    )}
+                    <FlowViewport
+                        authoringScope={session.sessionId}
+                        onConstantValueCommit={onConstantValueCommit}
+                        nodes={flow.nodes}
+                        edges={flow.edges}
+                        onConnectRequest={onConnectRequest}
+                        onNodePlaced={onNodePlaced}
+                        onDropRequest={onDropRequest}
+                        onEdgeSelect={onEdgeSelect}
+                        onCanvasClick={onCanvasClick}
+                        onEdgeContextMenu={onEdgeContextMenu}
+                        onEdgeReconnectArm={onEdgeReconnectArm}
+                        onPortActivate={onPortActivate}
+                        onNodeSelect={onNodeSelect}
+                        onNodeMenu={onNodeMenu}
+                        onUserPanZoom={setViewport}
+                        requestedViewport={viewport}
+                        requestedViewportToken={session.sessionId}
+                        onFlowReady={(fitView) => {
+                            fitRef.current = fitView;
+                        }}
+                    />
+                    {/* Edge context menu — one item, the app's core-judged
+                        operation. It never calls into React Flow edges. */}
+                    {edgeMenu !== null && (
+                        <>
+                            <div className="gglab-menu-overlay" onPointerDown={() => setEdgeMenu(null)} />
+                            <div className="gglab-edge-menu" style={{ left: edgeMenu.x, top: edgeMenu.y }} role="menu" aria-label="Connection actions">
+                                <Button
+                                    variant="ghost"
+                                    className="gglab-edge-menu-item"
+                                    role="menuitem"
+                                    onClick={() => {
+                                        if (selectedConnectionId !== null) {
+                                            applyRemoveConnection(selectedConnectionId);
+                                        }
+                                    }}>
+                                    <span>Delete Connection</span>
+                                    <span className="gglab-kbd" aria-hidden>
+                                        Del
+                                    </span>
+                                </Button>
+                            </div>
                         </>
                     )}
+                    {/* Node action menu — the card's chevron, one
+                        destructive item; same chrome language as the edge
+                        menu, and the same Del key behind it (the menu
+                        opens with its target selected, so the two agree). */}
+                    {nodeMenu !== null && (
+                        <>
+                            <div className="gglab-menu-overlay" onPointerDown={() => setNodeMenu(null)} />
+                            <div className="gglab-node-menu" style={{ left: nodeMenu.x, top: nodeMenu.y }} role="menu" aria-label={`Node actions for ${nodeMenu.nodeId}`}>
+                                <Button
+                                    variant="ghost"
+                                    className="gglab-node-menu-item"
+                                    role="menuitem"
+                                    onClick={() => {
+                                        const nodeId = nodeMenu.nodeId;
+                                        setNodeMenu(null);
+                                        onRemoveNode(nodeId);
+                                    }}>
+                                    <span className="gglab-node-menu-label">
+                                        <TrashIcon />
+                                        Delete Node
+                                    </span>
+                                    <span className="gglab-kbd" aria-hidden>
+                                        Del
+                                    </span>
+                                </Button>
+                            </div>
+                        </>
+                    )}
+                    {/* Node deletion — one gesture, the whole node (node +
+                        touching connections + placement) through the
+                        core-judged `removeNode`. */}
+                </main>
+                <aside className="gglab-side gglab-side-right" aria-label="Selection Inspector">
+                    {inspectorOpen ? (
+                        <>
+                        {/* Same rail language as the node library: head +
+                            one panel-control; collapsed it becomes the
+                            48px rail with the vertical re-open button. */}
+                        <div className="gglab-library-head">
+                            <h2 className="gglab-library-title">Inspector</h2>
+                            <div className="gglab-library-bulk" role="group" aria-label="Inspector controls">
+                                <Button variant="icon" size="icon" aria-label="Collapse the inspector" title="Collapse the inspector" onClick={() => setInspectorOpen(false)}>
+                                    <PanelCloseIcon />
+                                </Button>
+                            </div>
+                        </div>
+                        {selectedConnection === undefined ? <NodePropertiesPanel key={session.sessionId} node={selectedNode} onConstantValueCommit={onConstantValueCommit} /> :
+                            <section className="gglab-panel" aria-label="Connection properties">
+                                <h2 className="gglab-panel-title">Connection</h2>
+                                <p className="mono">{selectedConnection.id}</p>
+                                <dl className="gglab-facts">
+                                    <div><dt>From</dt><dd>{selectedConnection.from.nodeId} · {selectedConnection.from.portId}</dd></div>
+                                    <div><dt>To</dt><dd>{selectedConnection.to.nodeId} · {selectedConnection.to.portId}</dd></div>
+                                </dl>
+                                <Button variant="ghost" onClick={() => applyRemoveConnection(selectedConnection.id)}>Delete connection</Button>
+                            </section>}
+                        {selectionProblems.length > 0 && <section className="gglab-panel" aria-label="Selection problems">
+                            <h2 className="gglab-panel-title">Selection problems</h2>
+                            {selectionProblems.map(entry => <p key={entry.identity}><button type="button" className="gglab-selection-problem" onClick={() => navigateProblem(entry)}>{entry.code}: {entry.text}</button></p>)}
+                        </section>}
                     </>
                     ) : (
                         <div className="gglab-side-rail" aria-label="Inspector (collapsed)">
@@ -2466,6 +2664,98 @@ export function App() {
                         </div>
                     )}
                 </aside>
+                {/* Bottom panel — a presentation dock (shell only). The four
+                    views are placeholders; each arrives with its own step and
+                    will project its owner's structured facts (Output / Build /
+                    Preview as chronological event projections, Problems as a
+                    replaceable current diagnostic snapshot). The panel owns
+                    only its visible view, open state, and drag height — it
+                    concedes no Build, Preview, or Problems authority. */}
+                {bottomPanelOpen ? (
+                    <section className="gglab-bottom-panel" style={{ height: `${bottomPanelHeight}px` }} aria-label="Bottom panel">
+                        <div
+                            className="gglab-bottom-panel-resize"
+                            role="slider"
+                            aria-orientation="vertical"
+                            aria-label="Resize the bottom panel height"
+                            aria-valuemin={BOTTOM_PANEL_MIN_HEIGHT}
+                            aria-valuemax={Math.round(panelEffectiveMax(measuredBodyHeight))}
+                            aria-valuenow={bottomPanelHeight}
+                            tabIndex={0}
+                            title="Resize the bottom panel (drag, or use the arrow keys)"
+                            onPointerDown={beginBottomPanelResize}
+                            onPointerMove={moveBottomPanelResize}
+                            onPointerUp={endBottomPanelResize}
+                            onPointerCancel={endBottomPanelResize}
+                            onLostPointerCapture={endBottomPanelResize}
+                            onKeyDown={onBottomPanelResizeKeyDown}
+                        />
+                        <div className="gglab-bottom-panel-header">
+                            <div className="gglab-bottom-panel-tabs" role="tablist" aria-label="Bottom panel views">
+                                {BOTTOM_PANEL_TABS.map((tab) => (
+                                    <button
+                                        key={tab.id}
+                                        type="button"
+                                        role="tab"
+                                        aria-selected={bottomPanelTab === tab.id}
+                                        tabIndex={bottomPanelTab === tab.id ? 0 : -1}
+                                        className={bottomPanelTab === tab.id ? "gglab-bottom-panel-tab active" : "gglab-bottom-panel-tab"}
+                                        onClick={() => setBottomPanelTab(tab.id)}
+                                        onKeyDown={onTabKeyDown}
+                                    >
+                                        {tab.label}
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="gglab-bottom-panel-actions" role="group" aria-label="Bottom panel controls">
+                                <Button variant="icon" size="icon" aria-label="Collapse the bottom panel" title="Collapse the bottom panel" onClick={() => setBottomPanelOpen(false)}>
+                                    <PanelCloseIcon />
+                                </Button>
+                            </div>
+                        </div>
+                        {/* The four views over their owners' structured
+                            facts. Build and Preview render the OWNER'S
+                            session projected through the panel vocabulary's
+                            chronology (each row's state is the owner's own,
+                            never re-judged here). Problems renders the
+                            replaceable current diagnostic snapshot (a set,
+                            not a log; Clear is presentation-only). The
+                            inspector keeps the selection-oriented facts
+                            and its actions. */}
+                        <div className="gglab-bottom-panel-body" role="tabpanel" aria-label={bottomPanelTabLabel(bottomPanelTab)}>
+                            {bottomPanelTab === "build" ? (
+                                <>
+                                    {buildHistory.filter(owner => owner !== native.flow?.buildSession).map((owner, index) => <details key={index}><summary>Previous authoring session</summary><BuildPanelView session={owner} notes={[]} /></details>)}
+                                    <BuildPanelView session={native.flow?.buildSession ?? null} notes={native.notes} />
+                                    {emissionDetails}{nativeDetails}
+                                </>
+                            ) : bottomPanelTab === "preview" ? (
+                                <>
+                                    {previewHistory.filter(owner => owner.sessionId !== preview.flow?.session.sessionId).map(owner => <details key={owner.sessionId}><summary>Previous Preview session</summary><PreviewPanelView session={owner} notes={[]} /></details>)}
+                                    <PreviewPanelView session={preview.flow?.session ?? null} notes={preview.notes} />
+                                    {previewDetails}
+                                </>
+                            ) : bottomPanelTab === "problems" ? (
+                                <ProblemsPanelView snapshot={shownProblemsSnapshot} onClear={clearProblemsPresentation} navigation={problemNavigation} onNavigate={navigateProblem} />
+                            ) : (
+                                <OutputPanelView events={outputEvents} onClear={output.clear} />
+                            )}
+                        </div>
+                    </section>
+                ) : (
+                    <div className="gglab-bottom-panel-collapsed" aria-label="Bottom panel (collapsed)">
+                        <button
+                            type="button"
+                            className="gglab-bottom-panel-reopen"
+                            onClick={() => setBottomPanelOpen(true)}
+                            title="Expand the bottom panel"
+                            aria-label="Expand the bottom panel"
+                        >
+                            <PanelOpenIcon />
+                            <span>Expand panel</span>
+                        </button>
+                    </div>
+                )}
             </div>
             {saveConflict !== null && (
                 <div
@@ -2567,6 +2857,125 @@ export function App() {
                     </div>
                 </div>
             )}
+            {workbenchDialog !== null && <WorkbenchDialog title={workbenchDialog === "document" ? "Graph document" : workbenchDialog === "contract" ? "Surface Profile" : "Advanced native configuration"} onClose={() => setWorkbenchDialog(null)}>
+                {workbenchDialog === "document" ? <>
+                    <p>{session.provenance.kind === "file" ? session.provenance.path : "Untitled document"}{dirty ? " · Unsaved changes" : ""}</p>
+                    <section className="gglab-panel gglab-document-io">
+                        <h2 className="gglab-panel-title">Graph document text</h2>
+                        <textarea
+                            className="gglab-field gglab-field-mono"
+                            aria-label="Graph document JSON"
+                            value={savedText}
+                            onChange={(event) => setSavedText(event.currentTarget.value)}
+                            rows={12}
+                            spellCheck={false}
+                        />
+                        <ButtonGroup className="mt-2.5">
+                            <Button variant="ghost" onClick={onSave}>
+                                Export to text
+                            </Button>
+                            <Button variant="secondary" onClick={onLoad}>
+                                Import from text
+                            </Button>
+                        </ButtonGroup>
+                    </section>
+                </> : workbenchDialog === "contract" ? <>
+                    <p>The selected Environment supplies this document's requested profile line. Loose descriptor overrides are for advanced development.</p>
+                    <DocumentProfilePanel key={session.sessionId} document={document} catalog={profileCatalog} onApply={chosen => {
+                        const result = applyGraphEdit(document, { kind: "set-profile", profile: chosen.profileId, profileVersion: chosen.profileVersion }, { descriptor: chosen });
+                        if (result.status === "changed") {
+                            updateDocumentSession(session.sessionId, previous => recordDocumentChange(previous, result.document, "change document profile"));
+                            invalidateRevisionDerivedState();
+                        }
+                        output.append("authoring", result.status === "refused" ? "refusal" : "info", `Document profile ${result.status}`, { ...EMPTY_EVIDENCE_CORRELATION, documentSessionId: session.sessionId, documentRevision: documentRevision(session) }, result.diagnostics);
+                        return result;
+                    }} />
+<DescriptorPanel readOnly={workspace.activeEnvironment !== null} state={workspace.activeEnvironment === null ? descriptorState : descriptor === null ? { kind: "empty" } : { kind: "ready", descriptor }} onStateChange={onDescriptorStateChange} openDescriptorFile={openDescriptorFile} />
+                    <Button onClick={() => { setWorkbenchDialog(null); showEvidence("problems"); }}>Show current problems</Button>
+                </> : <>
+                    <p>Loose tool configuration is for development without an active Environment. It never overrides an imported Environment.</p>
+                    {workspace.activeEnvironment !== null ? <p>The selected Environment owns tool and state locations.</p> : <>
+                        {/* Configuration (sections 5 and 8) — each field is a
+                            stacked block: a short label, the explanation in
+                            the hint, and the control on its own full-width
+                            row. A long label never shares the value's row
+                            again (the path display is never crushed). */}
+                        <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
+                            Configuration
+                        </h3>
+                        <div className="gglab-native-field">
+                            <label className="gglab-native-field-label" htmlFor="native-tool-path">
+                                Tool path
+                            </label>
+                            <p className="gglab-native-field-hint">
+                                Explicit configuration — discovery rule 1. Empty means not configured: that rule records its own failure.
+                            </p>
+                            <div className="gglab-native-path-row">
+                                <Input
+                                    id="native-tool-path"
+                                    disabled={workspace.activeEnvironment !== null}
+                                    className="gglab-native-path-input"
+                                    placeholder="C:\…\gglab-shaderc.exe"
+                                    title={native.discoveryConfig.explicitConfig === "" ? undefined : native.discoveryConfig.explicitConfig}
+                                    value={native.discoveryConfig.explicitConfig}
+                                    onChange={(event) => native.setToolPath(event.currentTarget.value)}
+                                    aria-label="Explicit tool path (discovery rule 1)"
+                                />
+                                {fileChannel !== null && (
+                                    <Button variant="ghost" className="gglab-native-path-browse" disabled={workspace.activeEnvironment !== null} onClick={() => void browseToolPath()}>
+                                        <FileIcon />
+                                        Browse…
+                                    </Button>
+                                )}
+                            </div>
+                        </div>
+                        <div className="gglab-native-field">
+                            <label className="gglab-native-field-label" htmlFor="native-sibling-build">
+                                Build-output location
+                            </label>
+                            <p className="gglab-native-field-hint">
+                                Sibling GGLab build output — discovery rule 2; optional.
+                            </p>
+                            <div className="gglab-native-path-row">
+                                <Input
+                                    id="native-sibling-build"
+                                    disabled={workspace.activeEnvironment !== null}
+                                    className="gglab-native-path-input"
+                                    placeholder="…\Build\Output\x64"
+                                    title={native.discoveryConfig.siblingBuildOutput === "" ? undefined : native.discoveryConfig.siblingBuildOutput}
+                                    value={native.discoveryConfig.siblingBuildOutput}
+                                    onChange={(event) => native.setSiblingBuildOutput(event.currentTarget.value)}
+                                    aria-label="Configured sibling build-output location (discovery rule 2)"
+                                />
+                                {fileChannel !== null && (
+                                    <Button variant="ghost" className="gglab-native-path-browse" disabled={workspace.activeEnvironment !== null} onClick={() => void browseSiblingBuildOutput()}>
+                                        <FileIcon />
+                                        Browse…
+                                    </Button>
+                                )}
+                            </div>
+                        </div>
+                        {/* Actions, in lifecycle order: resolve the tool
+                            (the rule walk), establish proof (the handshake).
+                            No compile action: the function-only program
+                            composition is unavailable in this editor (the
+                            state above), so the surface offers no path to
+                            issue one. */}
+                        <h3 className="gglab-panel-title" style={{ marginTop: 14 }}>
+                            Actions
+                        </h3>
+                        <ButtonGroup role="toolbar" aria-label="native build actions">
+                            <Button variant="ghost" onClick={() => void native.discoverNow()} disabled={native.discoveryInFlight}>
+                                {native.discoveryInFlight ? "Discovering…" : "Re-discover"}
+                            </Button>
+                            <Button variant="ghost" onClick={() => void native.handshakeNow()} disabled={native.handshakeInFlight}>
+                                {native.handshakeInFlight ? "Handshaking…" : "Handshake (establish proof)"}
+                            </Button>
+                        </ButtonGroup>
+
+                    </>}
+                </>}
+            </WorkbenchDialog>}
             <footer className="gglab-statusbar">
                 <div className="gglab-status-group">
                     {/* The document name + the dirty star — the same rule
@@ -2653,14 +3062,6 @@ function InspectorRows(props: { title: string; rows: readonly BuildInspectorRow[
 }
 
 /** The native-build operation notes (structured one-liners). */
-function renderNativeNotes(notes: readonly { readonly level: "ok" | "info" | "refusal"; readonly text: string }[]): readonly ReactElement[] {
-    return notes.map((note, index) => (
-        <li key={`${note.text}-${index}`} className={`gglab-note-${note.level}`}>
-            {note.text}
-        </li>
-    ));
-}
-
 function EmissionPreview(props: { emission: HlslEmission }) {
     const { emission } = props;
     if (emission.ok === false) {

@@ -1,0 +1,469 @@
+{
+  "recordedDate": "2026-09-08",
+  "producerRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec",
+  "editorRevision": "07ecc3f1b659d40c0a332e8adca704ff6f6d63bd",
+  "trackedCleanBeforeAndAfter": true,
+  "freshNativeBuilds": [
+    "Debug",
+    "Release"
+  ],
+  "publisherSha256": "cfbe8fa0caf0c0683fa7a010067fb03dd2c50d61a5d09137123793e50e9f7f5b",
+  "host": {
+    "os": "Windows x64",
+    "python": "3.14.7",
+    "node": "26.7.0",
+    "pnpm": "11.22.0",
+    "cargo": "1.98.0",
+    "msbuild": "17.14.40",
+    "windowsSdk": "10.0.26100.0",
+    "vulkanSdk": "1.3.296.0"
+  },
+  "mainEnvironmentTests": {
+    "passed": 21,
+    "shortAliasSkipped": false
+  },
+  "editorAliasQualification": {
+    "distinctShortAlias": true,
+    "long": "incomplete-publication",
+    "upper": "incomplete-publication",
+    "short": "incomplete-publication",
+    "finalizedControl": "accepted",
+    "passed": true
+  },
+  "editorGates": {
+    "installFrozenLockfile": true,
+    "typecheck": true,
+    "ordinaryTestsPassed": 937,
+    "ordinaryQualificationTestsSkipped": 6,
+    "lint": true,
+    "webBuild": true,
+    "rustTestsPassed": 76,
+    "rustRealProducerDiscoveryPassed": 1,
+    "clientQualificationPassed": 17,
+    "clientQualificationTestTimeoutMs": 30000,
+    "cliQualificationPassed": 7,
+    "diffCheck": true
+  },
+  "githubActions": {
+    "runId": 34230676864,
+    "headSha": "07ecc3f1b659d40c0a332e8adca704ff6f6d63bd",
+    "conclusion": "success",
+    "url": "https://github.com/airiness/graphics-gadget-lab-shader-editor/actions/runs/34230676864"
+  },
+  "submodules": [
+    {
+      "path": "Externals/Vender/D3D12MemoryAllocator",
+      "revision": "1d86c1130f61453634b1df85782e1fecfd59a525"
+    },
+    {
+      "path": "Externals/Vender/DirectXMesh",
+      "revision": "5be3c743d28c19e9c195c3ad916031733f0c2251"
+    },
+    {
+      "path": "Externals/Vender/DirectXTex",
+      "revision": "e8c2e30f195783258960cc8d929841667aa82e1d"
+    },
+    {
+      "path": "Externals/Vender/VulkanMemoryAllocator",
+      "revision": "3aa921224c154a0d2c43912bc88e1c42ce1f7607"
+    },
+    {
+      "path": "Externals/Vender/assimp",
+      "revision": "b2afe717d3640ac0379e3d50aeac9c81c4692281"
+    },
+    {
+      "path": "Externals/Vender/entt",
+      "revision": "5642788046130821fbdf1729ef523d64ce4ff95e"
+    },
+    {
+      "path": "Externals/Vender/imgui",
+      "revision": "396b33d0d011290f11915b6a2a2bf7737fb42dd7"
+    },
+    {
+      "path": "Externals/Vender/nlohmann-json",
+      "revision": "55f93686c01528224f448c19128836e7df245f72"
+    },
+    {
+      "path": "Externals/Vender/spdlog",
+      "revision": "9ecdf5c8a1a3ace5673f9fd1857da1b6375b5114"
+    }
+  ],
+  "selfTests": [
+    {
+      "configuration": "Debug",
+      "suite": "Application",
+      "passedChecks": 186,
+      "exitCode": 0
+    },
+    {
+      "configuration": "Debug",
+      "suite": "GGLabAppRuntimeTests",
+      "passedChecks": 44,
+      "exitCode": 0
+    },
+    {
+      "configuration": "Debug",
+      "suite": "GGLabShaderToolchainTests",
+      "passedChecks": 235,
+      "exitCode": 0
+    },
+    {
+      "configuration": "Debug",
+      "suite": "GGLabRuntimeTests",
+      "passedChecks": 621,
+      "exitCode": 0
+    },
+    {
+      "configuration": "Release",
+      "suite": "Application",
+      "passedChecks": 186,
+      "exitCode": 0
+    },
+    {
+      "configuration": "Release",
+      "suite": "GGLabAppRuntimeTests",
+      "passedChecks": 44,
+      "exitCode": 0
+    },
+    {
+      "configuration": "Release",
+      "suite": "GGLabShaderToolchainTests",
+      "passedChecks": 235,
+      "exitCode": 0
+    },
+    {
+      "configuration": "Release",
+      "suite": "GGLabRuntimeTests",
+      "passedChecks": 621,
+      "exitCode": 0
+    }
+  ],
+  "native": [
+    {
+      "configuration": "Debug",
+      "reportSha256": "2fc4ed33dad4a707d65e1c1e7086c0138355db9f35f9c68bc2d5d243dc914718",
+      "environmentId": "sha256:0a94b71069db66e1620f687dcc4e17ad0fc158813ad92af97782f5c3976a80af",
+      "executables": {
+        "gglab-shaderc.exe": "3ef4ffd5297777f6fe1088fb228f040e0ec95f5df57f1063b8cd312384410cb7",
+        "GraphicsGadgetLab.exe": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+      },
+      "sourceIsolation": "disposable-publication-source-mirror-renamed",
+      "originalCheckoutAccessDenied": false,
+      "describeSuccess": true,
+      "describePreviewSuccess": true,
+      "paths": [
+        {
+          "backend": "dx12",
+          "profileVersion": 1,
+          "success": true,
+          "initialObservation": {
+            "attempt": 1,
+            "observed": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+            "loaded": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+            "status": 1,
+            "rejection": 0
+          },
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "recoveryObservation": {
+            "attempt": 3,
+            "observed": "bc0b1789bb0bf81e805d7bdc358f74ffdeaf50fe8c5ed75e8a8a530d390c506d",
+            "loaded": "bc0b1789bb0bf81e805d7bdc358f74ffdeaf50fe8c5ed75e8a8a530d390c506d",
+            "status": 1,
+            "rejection": 0
+          },
+          "immutableClosurePreserved": true,
+          "validationErrors": 0,
+          "validationWarnings": 0,
+          "runtimeErrors": [],
+          "firstProductionFrame": true,
+          "ordinaryCompile": {
+            "success": true,
+            "exitCode": 0,
+            "binaryFormat": "dxil",
+            "binaryHash": "491bc48ae92b0e032ce79e645ee3636fb54e7d9ce07f28ca7e55d39de3b8e43e"
+          }
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "success": true,
+          "initialObservation": {
+            "attempt": 1,
+            "observed": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+            "loaded": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+            "status": 1,
+            "rejection": 0
+          },
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "recoveryObservation": {
+            "attempt": 3,
+            "observed": "ff4ef52c776f92500c0ac491187cd5f6354206ba9e5c9336f4edd432ac616f58",
+            "loaded": "ff4ef52c776f92500c0ac491187cd5f6354206ba9e5c9336f4edd432ac616f58",
+            "status": 1,
+            "rejection": 0
+          },
+          "immutableClosurePreserved": true,
+          "validationErrors": 0,
+          "validationWarnings": 0,
+          "runtimeErrors": [],
+          "firstProductionFrame": true,
+          "ordinaryCompile": {
+            "success": true,
+            "exitCode": 0,
+            "binaryFormat": "dxil",
+            "binaryHash": "75a423172be2e5e14d13894cf6d9f914bc090cef36c9ea518c372b90086bd19e"
+          }
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "success": true,
+          "initialObservation": {
+            "attempt": 1,
+            "observed": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+            "loaded": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+            "status": 1,
+            "rejection": 0
+          },
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "recoveryObservation": {
+            "attempt": 3,
+            "observed": "450a94506486e5461cbf2a8e890e374787dc28157fd3ab186ffda0080ed10d87",
+            "loaded": "450a94506486e5461cbf2a8e890e374787dc28157fd3ab186ffda0080ed10d87",
+            "status": 1,
+            "rejection": 0
+          },
+          "immutableClosurePreserved": true,
+          "validationErrors": 0,
+          "validationWarnings": 0,
+          "runtimeErrors": [],
+          "firstProductionFrame": true,
+          "ordinaryCompile": {
+            "success": true,
+            "exitCode": 0,
+            "binaryFormat": "spirv",
+            "binaryHash": "308775cc251ab08a2f8e380313b4e78bbd50df8fb55f9c11be037108d5b54229"
+          },
+          "validationEnabled": true
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "success": true,
+          "initialObservation": {
+            "attempt": 1,
+            "observed": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+            "loaded": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+            "status": 1,
+            "rejection": 0
+          },
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "recoveryObservation": {
+            "attempt": 3,
+            "observed": "4b953d7c9ac0f199d749f99f044f1afcab3a81f55d10dc29a3a2067a7aed337a",
+            "loaded": "4b953d7c9ac0f199d749f99f044f1afcab3a81f55d10dc29a3a2067a7aed337a",
+            "status": 1,
+            "rejection": 0
+          },
+          "immutableClosurePreserved": true,
+          "validationErrors": 0,
+          "validationWarnings": 0,
+          "runtimeErrors": [],
+          "firstProductionFrame": true,
+          "ordinaryCompile": {
+            "success": true,
+            "exitCode": 0,
+            "binaryFormat": "spirv",
+            "binaryHash": "5e6aaa868ab1648f8d1a68fe1142cfafdf54a0585753b9576d80bdef5705d83b"
+          },
+          "validationEnabled": true
+        }
+      ]
+    },
+    {
+      "configuration": "Release",
+      "reportSha256": "06bd3dc465241eee8ebfa49f8ef31132ddc7262665ed578b878de3ad132191f9",
+      "environmentId": "sha256:d626e00a120077598e8a6acce8090e5f16211042c246dd7312c2148673155677",
+      "executables": {
+        "gglab-shaderc.exe": "421926487ee7290be858077eadc295348d403644856e1ebd56af4840fc2e36e5",
+        "GraphicsGadgetLab.exe": "e8ab7c3d8f6a972be4474c4aea93a5e2de14e879955c0ba05dc84a1822dd3175"
+      },
+      "sourceIsolation": "disposable-publication-source-mirror-renamed",
+      "originalCheckoutAccessDenied": false,
+      "describeSuccess": true,
+      "describePreviewSuccess": true,
+      "paths": [
+        {
+          "backend": "dx12",
+          "profileVersion": 1,
+          "success": true,
+          "initialObservation": {
+            "attempt": 1,
+            "observed": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+            "loaded": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+            "status": 1,
+            "rejection": 0
+          },
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "recoveryObservation": {
+            "attempt": 3,
+            "observed": "bc0b1789bb0bf81e805d7bdc358f74ffdeaf50fe8c5ed75e8a8a530d390c506d",
+            "loaded": "bc0b1789bb0bf81e805d7bdc358f74ffdeaf50fe8c5ed75e8a8a530d390c506d",
+            "status": 1,
+            "rejection": 0
+          },
+          "immutableClosurePreserved": true,
+          "validationErrors": 0,
+          "validationWarnings": 0,
+          "runtimeErrors": [],
+          "firstProductionFrame": true,
+          "ordinaryCompile": {
+            "success": true,
+            "exitCode": 0,
+            "binaryFormat": "dxil",
+            "binaryHash": "491bc48ae92b0e032ce79e645ee3636fb54e7d9ce07f28ca7e55d39de3b8e43e"
+          }
+        },
+        {
+          "backend": "dx12",
+          "profileVersion": 2,
+          "success": true,
+          "initialObservation": {
+            "attempt": 1,
+            "observed": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+            "loaded": "b1d58b7bd427bae78769773cf81bdd2bb56a7a858cc22db84d81086f8a6d23e9",
+            "status": 1,
+            "rejection": 0
+          },
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "recoveryObservation": {
+            "attempt": 3,
+            "observed": "ff4ef52c776f92500c0ac491187cd5f6354206ba9e5c9336f4edd432ac616f58",
+            "loaded": "ff4ef52c776f92500c0ac491187cd5f6354206ba9e5c9336f4edd432ac616f58",
+            "status": 1,
+            "rejection": 0
+          },
+          "immutableClosurePreserved": true,
+          "validationErrors": 0,
+          "validationWarnings": 0,
+          "runtimeErrors": [],
+          "firstProductionFrame": true,
+          "ordinaryCompile": {
+            "success": true,
+            "exitCode": 0,
+            "binaryFormat": "dxil",
+            "binaryHash": "75a423172be2e5e14d13894cf6d9f914bc090cef36c9ea518c372b90086bd19e"
+          }
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 1,
+          "success": true,
+          "initialObservation": {
+            "attempt": 1,
+            "observed": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+            "loaded": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+            "status": 1,
+            "rejection": 0
+          },
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "recoveryObservation": {
+            "attempt": 3,
+            "observed": "450a94506486e5461cbf2a8e890e374787dc28157fd3ab186ffda0080ed10d87",
+            "loaded": "450a94506486e5461cbf2a8e890e374787dc28157fd3ab186ffda0080ed10d87",
+            "status": 1,
+            "rejection": 0
+          },
+          "immutableClosurePreserved": true,
+          "validationErrors": 0,
+          "validationWarnings": 0,
+          "runtimeErrors": [],
+          "firstProductionFrame": true,
+          "ordinaryCompile": {
+            "success": true,
+            "exitCode": 0,
+            "binaryFormat": "spirv",
+            "binaryHash": "308775cc251ab08a2f8e380313b4e78bbd50df8fb55f9c11be037108d5b54229"
+          },
+          "validationEnabled": false
+        },
+        {
+          "backend": "vulkan",
+          "profileVersion": 2,
+          "success": true,
+          "initialObservation": {
+            "attempt": 1,
+            "observed": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+            "loaded": "64afd7a374b743922fa8546112d7d363f795527654db69c9bac40d7d6960c896",
+            "status": 1,
+            "rejection": 0
+          },
+          "failedBuild": {
+            "exitCode": 4,
+            "lastGoodPointerPreserved": true,
+            "lastGoodObservationPreserved": true
+          },
+          "recoveryObservation": {
+            "attempt": 3,
+            "observed": "4b953d7c9ac0f199d749f99f044f1afcab3a81f55d10dc29a3a2067a7aed337a",
+            "loaded": "4b953d7c9ac0f199d749f99f044f1afcab3a81f55d10dc29a3a2067a7aed337a",
+            "status": 1,
+            "rejection": 0
+          },
+          "immutableClosurePreserved": true,
+          "validationErrors": 0,
+          "validationWarnings": 0,
+          "runtimeErrors": [],
+          "firstProductionFrame": true,
+          "ordinaryCompile": {
+            "success": true,
+            "exitCode": 0,
+            "binaryFormat": "spirv",
+            "binaryHash": "5e6aaa868ab1648f8d1a68fe1142cfafdf54a0585753b9576d80bdef5705d83b"
+          },
+          "validationEnabled": false
+        }
+      ]
+    }
+  ],
+  "logSha256": {
+    "Debug-Application.log": "fcc552ad8cbe41bcaa240973a3b1776fbf42e9d97e2caf1f5ec808fce549a442",
+    "Debug-GGLabAppRuntimeTests.log": "49159a9c9f4b4267c61ffdcf4899f1009440ac352206817c13f945ba5de6f5d4",
+    "Debug-GGLabRuntimeTests.log": "1b75204579fc196f1bc55a46287fff0e0855a710a463c7f29396c347247cf62f",
+    "Debug-GGLabShaderToolchainTests.log": "ad7424c09cf5fa888ed0dc3ec8056e16cb16ea5a70ebeefe24900ace97aacb95",
+    "main-debug-build.log": "1080ec84cc6e0fa741aea6d120ee9cca138ce3919269640313f2037227caebfe",
+    "main-release-build.log": "42698e335946f1001141bf5e14f5b062fdc4d07691847eb0727862fee6f4787d",
+    "Release-Application.log": "9711f087b25c50a16f939d64ddb908c1cb03d2eb86033ceb7c3e4f66f5b72143",
+    "Release-GGLabAppRuntimeTests.log": "078e0b558c7f0bc98e2e010c3bb66d1fa208101c4a8c0ec2ef4d14b8c11e5c3c",
+    "Release-GGLabRuntimeTests.log": "38b10d43c098374d23d468037be46ff6b64b9c7e943c34f71ab3a44ef245fbd3",
+    "Release-GGLabShaderToolchainTests.log": "474f43fd64d367c1eeef2a6a5bc6849450eee7c9e3c56924b53fdaf56b59e427"
+  }
+}
