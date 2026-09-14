@@ -1,0 +1,107 @@
+{
+  "recordedAt": "2026-09-14T05:58:31.470580+00:00",
+  "editorBaseRevision": "e2025089b4d195de91a29d064e0e2bbf9eef86b7",
+  "editorState": "Uncommitted sample and qualification changes; not a clean committed replay.",
+  "producerRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec",
+  "sample": "packages/shader-graph-core/tests/fixtures/surface-neon-reactor-preview.shadergraph",
+  "sampleSha256": "3207b9a26a657b913c9e04ecec7adb428d14e8cefd869975b890f2a0d7d79d0e",
+  "nativeTest": "apps/editor/src/environment-import-host.test.ts",
+  "nativeTestSha256": "4a1126eb911143fe515a52ed53a9b64c03985b48ea4fbe54a58ad9529f26d1fb",
+  "command": "pnpm --filter @gglab/editor test src/environment-import-host.test.ts",
+  "setup": "Pinned clean producer and published Debug closure; fresh separate writable state and registry. See environment-workspace-authoring.md for qualification flags.",
+  "selection": {
+    "environmentId": "sha256:f16290e99f195e15b368393ffa44b571e34480d3bdc3c3beb1b3f23f44e916ed",
+    "environmentRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000",
+    "stateRoot": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\s\\neon-sample",
+    "tool": {
+      "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000\\payload\\gglab-shaderc.exe",
+      "sha256": "3ef4ffd5297777f6fe1088fb228f040e0ec95f5df57f1063b8cd312384410cb7"
+    },
+    "runtime": {
+      "path": "D:\\Grezzo\\Ruisong\\GraphicsGadgetLabShaderEditor\\.review-evidence\\u\\environments\\0000000018d3cd964498eb7800000000\\payload\\GraphicsGadgetLab.exe",
+      "sha256": "1051f30c83646c32221615d36d17d424e68941d0202b2a385fa77f7f925f3247"
+    },
+    "activationSequence": 1
+  },
+  "configuration": "Debug",
+  "authoringRuns": [
+    {
+      "backend": "dx12",
+      "profileVersion": 2,
+      "graphId": "graph.surface-neon-reactor-preview",
+      "generatedSourceIdentity": "77badf1b80ee9ed6b470652d303624c0d12d591ba3e5c8af33a28c7d3c0d7b36",
+      "sessionId": "1aa477b63fd072d9d5e1a6c898a98912",
+      "observation": {
+        "status": "loaded",
+        "observedAttemptSequence": 1,
+        "observedPublicationRef": "47c86f4c3fceb9121e3f0fb1cf755bbf054d3661ffa13f4f1896abdf009ca282",
+        "loadedPublicationRef": "47c86f4c3fceb9121e3f0fb1cf755bbf054d3661ffa13f4f1896abdf009ca282",
+        "rejectionCode": "none"
+      }
+    },
+    {
+      "backend": "vulkan",
+      "profileVersion": 2,
+      "graphId": "graph.surface-neon-reactor-preview",
+      "generatedSourceIdentity": "77badf1b80ee9ed6b470652d303624c0d12d591ba3e5c8af33a28c7d3c0d7b36",
+      "sessionId": "3eaddb47ad189bf16ea3c79c8d7c5a39",
+      "observation": {
+        "status": "loaded",
+        "observedAttemptSequence": 1,
+        "observedPublicationRef": "eca395a2637ea149e3f0f56de87acad794eac6d2955a20e1bafdc22d0ccb337c",
+        "loadedPublicationRef": "eca395a2637ea149e3f0f56de87acad794eac6d2955a20e1bafdc22d0ccb337c",
+        "rejectionCode": "none"
+      }
+    }
+  ],
+  "closureVerification": {
+    "error": null,
+    "operation": "verify",
+    "result": {
+      "environmentId": "sha256:f16290e99f195e15b368393ffa44b571e34480d3bdc3c3beb1b3f23f44e916ed",
+      "roles": {
+        "assets": "payload/Assets",
+        "baseArtifacts": "payload/BaseArtifacts",
+        "previewProgram": "payload/Shaders/Programs/ShaderGraphPreview/descriptor.json",
+        "runtime": "payload/GraphicsGadgetLab.exe",
+        "shaderSources": "payload/Shaders",
+        "surfaceProfile1": "payload/Shaders/Profiles/GGLab.Surface/1/descriptor.json",
+        "surfaceProfile2": "payload/Shaders/Profiles/GGLab.Surface/2/descriptor.json",
+        "tool": "payload/gglab-shaderc.exe",
+        "vulkanLayers": "payload/VulkanLayers"
+      },
+      "writableState": {
+        "roles": {
+          "artifacts": "ShaderArtifacts",
+          "derivedData": "DerivedDataCache",
+          "generatedSources": "Generated",
+          "logs": "Logs",
+          "observations": "ShaderArtifacts/shader-preview-sessions",
+          "previewPublications": "ShaderArtifacts/shader-preview",
+          "previewSessions": "ShaderArtifacts/shader-preview-sessions",
+          "settings": "Settings",
+          "shaderCache": "ShaderCache"
+        },
+        "root": "external"
+      }
+    },
+    "resultVersion": 1,
+    "success": true
+  },
+  "checks": {
+    "typecheck": "passed",
+    "tests": {
+      "passed": 1047,
+      "skipped": 9
+    },
+    "lint": "passed",
+    "editorBuild": "passed",
+    "diffCheck": "passed"
+  },
+  "limitations": [
+    "Release was not rerun for this sample.",
+    "Runtime Loaded is not screenshot appearance evidence.",
+    "No fresh Main build or validation-layer log audit.",
+    "No animated time input or bloom requirement."
+  ]
+}

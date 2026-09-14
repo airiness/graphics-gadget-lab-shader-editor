@@ -32,6 +32,7 @@ Workspace directory access.
 
 | File | Purpose |
 | --- | --- |
+| `surface-neon-reactor-preview.shadergraph` | Procedural cyan/magenta concentric neon rings over a dark backplate; 33 nodes using the frozen two-parameter Preview contract. |
 | `surface-color-study-preview.shadergraph` | Interactive color study: UV gradient, tiled texture mask, cyan/orange palette, masked emission, metallic and roughness outputs. Uses the same frozen two-parameter contract. |
 | `surface-texture-preview.shadergraph` | Native Preview sample for the frozen `gglab.preview-input.surface.texture2d` contract: exactly `p.rough` and `p.tex`. Texture RGB drives BaseColor, B drives Metallic, roughness comes from the Preview Lab, Emissive is zero and Opacity is one. |
 | `SurfaceTextureGolden.shadergraph` | Legal Surface v2 graph: texture sampling, scalar/vector parameters, RGB fan-out, math and all five surface outputs. Zero graph diagnostics; fixed deterministic HLSL fingerprint. |
@@ -101,3 +102,40 @@ successful publication and Runtime Loaded observations on each backend. Native
 Loaded evidence does not itself assert screenshot appearance.
 [Color study evidence](../../../../docs/color-study-preview-sample-evidence.json)
 records the exact sample hash and Debug/Release DX12/Vulkan results.
+
+
+## Neon reactor: procedural rings
+
+Open **surface-neon-reactor-preview.shadergraph** and select **Preview this graph**.
+Use Runtime **Combined** or **Emissive**, with the default **1x1 White** texture.
+The intended effect is two concentric soft-edged neon rings: a cyan inner ring,
+a magenta outer ring and a midnight-blue backplate. Placement follows the mesh
+UVs; changing the preview mesh can change how the rings wrap. The graph is static
+and does not require bloom, a time input or external textures.
+
+The 33-node graph computes squared UV distance from Reactor Center. Each ring
+subtracts a target squared radius, squares that difference, scales/clamps it and
+inverts it to obtain a smooth bright band. Separate color branches are added and
+scaled into Emissive. The Runtime texture only modulates the dark BaseColor, so
+ring visibility does not depend on a particular texture fixture. Runtime
+Roughness, Metallic and Opacity retain their explicit Surface output paths.
+
+Use Save As before experimenting:
+
+| Node | Initial value | Experiment |
+| --- | --- | --- |
+| Reactor Center | `[0.5, 0.5]` | Move to `[0.35, 0.6]` to shift both rings. |
+| Inner Radius Squared | `0.045` | Set `0.09` to expand the cyan ring. This is radius squared. |
+| Outer Radius Squared | `0.16` | Set `0.12` to bring the magenta ring inward. |
+| Inner / Outer Sharpness | `14000` / `5200` | Lower values widen the bands; higher values narrow them. |
+| Inner / Outer Neon Color | `[0.01, 0.85, 1]` / `[1, 0.015, 0.25]` | Try green and amber for another palette. |
+| Glow Strength | `2.5` | Compare `0`, `1` and `4`; zero leaves only the dark backplate. |
+
+After editing, Preview this graph republishes the changed source. Combined adds
+Emissive to the lit base; glow here describes emission intensity, not a bloom
+post-process. No new node semantics or Runtime input parameters are introduced.
+Native compilation/Loaded evidence is recorded separately from visual inspection.
+
+[Neon reactor evidence](../../../../docs/neon-reactor-preview-sample-evidence.json)
+records Debug DX12/Vulkan native compilation and Runtime Loaded for this sample.
+Release and rendered appearance were not requalified in this run.

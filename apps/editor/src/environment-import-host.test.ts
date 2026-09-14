@@ -92,7 +92,7 @@ describe("Environment import composition", () => {
                 expect(requests).toHaveLength(12);
                 const selection = workspace.getSnapshot().session.activeEnvironment!;
                 const authoringRuns = [];
-                const samples = ["surface-texture-preview.shadergraph", "surface-color-study-preview.shadergraph"].map(name => {
+                const samples = ["surface-texture-preview.shadergraph", "surface-neon-reactor-preview.shadergraph", "surface-color-study-preview.shadergraph"].map(name => {
                     const parsed = parseShaderGraphDocument(readFileSync(new URL(`../../../packages/shader-graph-core/tests/fixtures/${name}`, import.meta.url), "utf8"));
                     if (!parsed.ok || !parsed.value) throw new Error(JSON.stringify(parsed.diagnostics));
                     return parsed.value;
