@@ -63,8 +63,38 @@ impl ServiceShared {
     }
 }
 
+// Portable releases keep registration scoped to their current extraction location.
+// Moving the package requires fresh proof rather than reusing old absolute bindings.
+fn editor_data_root(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let root = exe.parent().ok_or("Executable has no parent")?;
+    if root.join("portable.json").is_file() {
+        let root = environment_io::ordinary_path(root).map_err(|e| format!("{e:?}"))?;
+        let key = shader_tool::identity::hash_bytes(root.to_string_lossy().as_bytes());
+        return Ok(root.join("UserData").join(key));
+    }
+    app.path().app_data_dir().map_err(|e| e.to_string())
+}
+
+#[tauri::command(rename = "shader-environment-open-bundled")]
+async fn shader_environment_open_bundled(
+    state: tauri::State<'_, EnvironmentStorageShared>,
+) -> Result<Vec<environment_storage::DirectoryHandle>, environment_io::EnvironmentHostError> {
+    let service = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let exe = std::env::current_exe().map_err(|e| environment_io::error("io-error", e))?;
+        let root = exe.parent().ok_or_else(|| environment_io::error("invalid-path", "Executable has no parent"))?;
+        if !root.join("portable.json").is_file() {
+            return Err(environment_io::error("missing-member", "This build has no bundled Environment. Use the portable release."));
+        }
+        // Select facts only. The existing activation transaction verifies bytes and native readiness.
+        Ok(vec![service.select(&root.join("Environment"), environment_storage::DirectoryKind::Environment)?,
+            service.select(&root.join("State"), environment_storage::DirectoryKind::State)?])
+    }).await.map_err(|e| environment_io::error("host-task-failed", e))?
+}
+
 fn preferences(app: &tauri::AppHandle) -> Result<application_preferences::PreferencesStore, String> {
-    Ok(application_preferences::PreferencesStore::new(app.path().app_data_dir().map_err(|e| e.to_string())?))
+    Ok(application_preferences::PreferencesStore::new(editor_data_root(&app).map_err(|e| e.to_string())?))
 }
 
 fn history_dialog(app: &tauri::AppHandle, kind: application_preferences::DialogKind) -> Result<tauri_plugin_dialog::FileDialogBuilder<tauri::Wry>, String> {
@@ -486,23 +516,23 @@ fn shader_preview_stop_runtime(
 
 #[tauri::command(rename = "shader-environment-prepare-mutation")]
 async fn shader_environment_prepare_mutation(app: tauri::AppHandle, state: tauri::State<'_, EnvironmentMutationShared>, producer: tauri::State<'_, EnvironmentShared>, storage: tauri::State<'_, EnvironmentStorageShared>, request: environment_mutation::Prepare) -> Result<environment_mutation::Intent, environment_io::EnvironmentHostError> {
-    let root=app.path().app_data_dir().map_err(|e|environment_io::error("io-error",e))?;
+    let root=editor_data_root(&app).map_err(|e|environment_io::error("io-error",e))?;
     let service=state.0.clone(); let producer=producer.0.clone(); let storage=storage.0.clone();
     tauri::async_runtime::spawn_blocking(move ||service.prepare(&root,&producer,&storage,request)).await.map_err(|e|environment_io::error("host-task-failed",e))?
 }
 #[tauri::command(rename = "shader-environment-run-mutation")]
 async fn shader_environment_run_mutation(app: tauri::AppHandle, state: tauri::State<'_, EnvironmentMutationShared>, producer: tauri::State<'_, EnvironmentShared>, repository_id:String, operation_id:String) -> Result<serde_json::Value, environment_io::EnvironmentHostError> {
-    let root=app.path().app_data_dir().map_err(|e|environment_io::error("io-error",e))?; let service=state.0.clone(); let producer=producer.0.clone();
+    let root=editor_data_root(&app).map_err(|e|environment_io::error("io-error",e))?; let service=state.0.clone(); let producer=producer.0.clone();
     tauri::async_runtime::spawn_blocking(move ||service.run(&root,&producer,&repository_id,&operation_id)).await.map_err(|e|environment_io::error("host-task-failed",e))?
 }
 #[tauri::command(rename = "shader-environment-inspect-mutation")]
 async fn shader_environment_inspect_mutation(app: tauri::AppHandle, state: tauri::State<'_, EnvironmentMutationShared>, storage: tauri::State<'_, EnvironmentStorageShared>, operation_id:String) -> Result<environment_mutation::Inspection, environment_io::EnvironmentHostError> {
-    let root=app.path().app_data_dir().map_err(|e|environment_io::error("io-error",e))?; let service=state.0.clone(); let storage=storage.0.clone();
+    let root=editor_data_root(&app).map_err(|e|environment_io::error("io-error",e))?; let service=state.0.clone(); let storage=storage.0.clone();
     tauri::async_runtime::spawn_blocking(move ||service.inspect(&root,&storage,&operation_id)).await.map_err(|e|environment_io::error("host-task-failed",e))?
 }
 #[tauri::command(rename = "shader-environment-list-mutations")]
 async fn shader_environment_list_mutations(app: tauri::AppHandle, state: tauri::State<'_, EnvironmentMutationShared>) -> Result<Vec<String>, environment_io::EnvironmentHostError> {
-    let root=app.path().app_data_dir().map_err(|e|environment_io::error("io-error",e))?; let service=state.0.clone();
+    let root=editor_data_root(&app).map_err(|e|environment_io::error("io-error",e))?; let service=state.0.clone();
     tauri::async_runtime::spawn_blocking(move ||service.list(&root)).await.map_err(|e|environment_io::error("host-task-failed",e))?
 }
 #[tauri::command(rename = "shader-environment-cancel-mutation")]
@@ -515,7 +545,7 @@ async fn shader_environment_prepare_registration(state: tauri::State<'_, Environ
 }
 #[tauri::command(rename = "shader-environment-commit-registration")]
 async fn shader_environment_commit_registration(app:tauri::AppHandle, state:tauri::State<'_,EnvironmentRegistrationShared>, storage:tauri::State<'_,EnvironmentStorageShared>, registration_id:String) -> Result<environment_registration::Settlement,environment_io::EnvironmentHostError> {
-    let root=app.path().app_data_dir().map_err(|e|environment_io::error("io-error",e))?.join("environment-registry");
+    let root=editor_data_root(&app).map_err(|e|environment_io::error("io-error",e))?.join("environment-registry");
     let service=state.0.clone(); let storage=storage.0.clone();
     tauri::async_runtime::spawn_blocking(move ||service.commit(&storage,&environment_storage::RegistryStorage::new(root)?,&registration_id)).await.map_err(|e|environment_io::error("host-task-failed",e))?
 }
@@ -569,7 +599,7 @@ async fn shader_environment_observe_directory(
 }
 #[tauri::command(rename = "shader-environment-registry-scan")]
 async fn shader_environment_registry_scan(app: tauri::AppHandle) -> Result<environment_storage::RegistryScan, environment_io::EnvironmentHostError> {
-    let root = app.path().app_data_dir().map_err(|e| environment_io::error("io-error", e))?.join("environment-registry");
+    let root = editor_data_root(&app).map_err(|e| environment_io::error("io-error", e))?.join("environment-registry");
     tauri::async_runtime::spawn_blocking(move || environment_storage::RegistryStorage::new(root)?.scan())
         .await.map_err(|e| environment_io::error("host-task-failed", e))?
 }
@@ -577,7 +607,7 @@ async fn shader_environment_registry_scan(app: tauri::AppHandle) -> Result<envir
 async fn shader_environment_registry_open(
     app: tauri::AppHandle, state: tauri::State<'_, EnvironmentStorageShared>, key: String,
 ) -> Result<environment_storage::RecoverySelection, environment_io::EnvironmentHostError> {
-    let root = app.path().app_data_dir().map_err(|e| environment_io::error("io-error", e))?.join("environment-registry");
+    let root = editor_data_root(&app).map_err(|e| environment_io::error("io-error", e))?.join("environment-registry");
     let service = state.0.clone();
     tauri::async_runtime::spawn_blocking(move || service.open_registration(&environment_storage::RegistryStorage::new(root)?, &key))
         .await.map_err(|e| environment_io::error("host-task-failed", e))?
@@ -643,6 +673,13 @@ pub use workspace_io::{WorkspaceFileService as NativeWorkspaceFileService};
 /// the compiler-free Preview observation / attached-process lifecycle
 /// commands.
 pub fn run() {
+    // Configure the process before Tauri starts threads; no machine environment is changed.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(root) = exe.parent().filter(|p| p.join("portable.json").is_file()) {
+            std::env::set_var("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", root.join("WebView2"));
+            std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", root.join("UserData/WebView2"));
+        }
+    }
     let document_files = Arc::new(DocumentFileService::new());
     let workspace_files = Arc::new(WorkspaceFileService::new(Arc::clone(&document_files)));
     tauri::Builder::default()
@@ -669,6 +706,7 @@ pub fn run() {
             shader_environment_execute,
             shader_environment_cancel_execution,
             shader_environment_close_execution,
+            shader_environment_open_bundled,
             shader_environment_choose_directory,
             shader_environment_observe_directory,
             shader_environment_registry_scan,

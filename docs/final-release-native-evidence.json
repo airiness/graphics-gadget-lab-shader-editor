@@ -1,0 +1,158 @@
+{
+  "gglabRevision": "0151ae75c6e88bab17f58aeef8a7e3eee43521bc",
+  "editorBaseRevision": "7018894908a493a46eb6bd24a7a59d4a3bad071f",
+  "scope": "working-tree portable release candidate",
+  "environmentId": "sha256:16e2ac79e061e721fd0cdfd82323be9c68f3258cb45f139b57b1bcf55115d809",
+  "previewProofRuns": 16,
+  "authoringRuns": [
+    {
+      "backend": "dx12",
+      "profileVersion": 1,
+      "graphId": "graph.emit",
+      "generatedSourceIdentity": "b702b5a5483d97342cdbe5c4bd5aa36d3d16c9f8d42d1b10ca03128ae56db5d3",
+      "sessionId": "c58018ba99487f3c4453405d80be6351",
+      "observation": {
+        "status": "loaded",
+        "observedAttemptSequence": 1,
+        "observedPublicationRef": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+        "loadedPublicationRef": "e312cf0dd561df0439d659c9249e3e09ed6770d240673179c792fc7082f3fe50",
+        "rejectionCode": "none"
+      }
+    },
+    {
+      "backend": "dx12",
+      "profileVersion": 2,
+      "graphId": "graph.surface-texture-preview",
+      "generatedSourceIdentity": "62d0f6cc26dccdaafd734c3ab30a01424bccfeec6f728c768b672c7a93706d2f",
+      "sessionId": "36ea4b0322f7c4bebe6b3a67816104ed",
+      "observation": {
+        "status": "loaded",
+        "observedAttemptSequence": 1,
+        "observedPublicationRef": "03cdadd4fae4b8aa9792ef95ed29349c516636a77ca2a014c16014dae2a925f4",
+        "loadedPublicationRef": "03cdadd4fae4b8aa9792ef95ed29349c516636a77ca2a014c16014dae2a925f4",
+        "rejectionCode": "none"
+      }
+    },
+    {
+      "backend": "dx12",
+      "profileVersion": 2,
+      "graphId": "graph.surface-neon-reactor-preview",
+      "generatedSourceIdentity": "77badf1b80ee9ed6b470652d303624c0d12d591ba3e5c8af33a28c7d3c0d7b36",
+      "sessionId": "4a10170d1584a13377da5c3ed77c2e0c",
+      "observation": {
+        "status": "loaded",
+        "observedAttemptSequence": 1,
+        "observedPublicationRef": "47c86f4c3fceb9121e3f0fb1cf755bbf054d3661ffa13f4f1896abdf009ca282",
+        "loadedPublicationRef": "47c86f4c3fceb9121e3f0fb1cf755bbf054d3661ffa13f4f1896abdf009ca282",
+        "rejectionCode": "none"
+      }
+    },
+    {
+      "backend": "dx12",
+      "profileVersion": 2,
+      "graphId": "graph.surface-color-study-preview",
+      "generatedSourceIdentity": "7dae1dcfa224f8bf54617033790414843b43c0e9994970da9f7c641a7aa2f913",
+      "sessionId": "845cf2d5344a72f110b90f7ea3551f63",
+      "observation": {
+        "status": "loaded",
+        "observedAttemptSequence": 1,
+        "observedPublicationRef": "b2133ca27c69b9f161d64b5d6b3666baf1315dfd966bb6a76bc0fbed5a196083",
+        "loadedPublicationRef": "b2133ca27c69b9f161d64b5d6b3666baf1315dfd966bb6a76bc0fbed5a196083",
+        "rejectionCode": "none"
+      }
+    },
+    {
+      "backend": "dx12",
+      "profileVersion": 2,
+      "graphId": "graph.surface-color-study-preview",
+      "generatedSourceIdentity": "7dae1dcfa224f8bf54617033790414843b43c0e9994970da9f7c641a7aa2f913",
+      "sessionId": "2eb6042b8fc6faa47553c8cc19fae711",
+      "observation": {
+        "status": "loaded",
+        "observedAttemptSequence": 1,
+        "observedPublicationRef": "b2133ca27c69b9f161d64b5d6b3666baf1315dfd966bb6a76bc0fbed5a196083",
+        "loadedPublicationRef": "b2133ca27c69b9f161d64b5d6b3666baf1315dfd966bb6a76bc0fbed5a196083",
+        "rejectionCode": "none"
+      },
+      "previousSessionId": "845cf2d5344a72f110b90f7ea3551f63",
+      "transition": "identical-graph-new-document-owner"
+    },
+    {
+      "backend": "vulkan",
+      "profileVersion": 1,
+      "graphId": "graph.emit",
+      "generatedSourceIdentity": "b702b5a5483d97342cdbe5c4bd5aa36d3d16c9f8d42d1b10ca03128ae56db5d3",
+      "sessionId": "734a3212d2173cb7911130a16b2064cf",
+      "observation": {
+        "status": "loaded",
+        "observedAttemptSequence": 1,
+        "observedPublicationRef": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+        "loadedPublicationRef": "44407d59e880853ed57ec324c92d5b5a3c089d109fedf578d966f1489b98a6f8",
+        "rejectionCode": "none"
+      }
+    },
+    {
+      "backend": "vulkan",
+      "profileVersion": 2,
+      "graphId": "graph.surface-texture-preview",
+      "generatedSourceIdentity": "62d0f6cc26dccdaafd734c3ab30a01424bccfeec6f728c768b672c7a93706d2f",
+      "sessionId": "d4144863e5287363e5ca8926ceac8c75",
+      "observation": {
+        "status": "loaded",
+        "observedAttemptSequence": 1,
+        "observedPublicationRef": "5bc2efc9f210f4f25435b98359bc93a9ec6514f07fd58ca62c209813d0f84e0c",
+        "loadedPublicationRef": "5bc2efc9f210f4f25435b98359bc93a9ec6514f07fd58ca62c209813d0f84e0c",
+        "rejectionCode": "none"
+      }
+    },
+    {
+      "backend": "vulkan",
+      "profileVersion": 2,
+      "graphId": "graph.surface-neon-reactor-preview",
+      "generatedSourceIdentity": "77badf1b80ee9ed6b470652d303624c0d12d591ba3e5c8af33a28c7d3c0d7b36",
+      "sessionId": "61e226bec72965a27f68437738a3a075",
+      "observation": {
+        "status": "loaded",
+        "observedAttemptSequence": 1,
+        "observedPublicationRef": "eca395a2637ea149e3f0f56de87acad794eac6d2955a20e1bafdc22d0ccb337c",
+        "loadedPublicationRef": "eca395a2637ea149e3f0f56de87acad794eac6d2955a20e1bafdc22d0ccb337c",
+        "rejectionCode": "none"
+      }
+    },
+    {
+      "backend": "vulkan",
+      "profileVersion": 2,
+      "graphId": "graph.surface-color-study-preview",
+      "generatedSourceIdentity": "7dae1dcfa224f8bf54617033790414843b43c0e9994970da9f7c641a7aa2f913",
+      "sessionId": "7dc30ec3b9a3a4d64e371a5bd8d9c41f",
+      "observation": {
+        "status": "loaded",
+        "observedAttemptSequence": 1,
+        "observedPublicationRef": "899c866ceb9425c5e0742dcc1d144c27ef68317e0c8f2939b87887af3e23fefc",
+        "loadedPublicationRef": "899c866ceb9425c5e0742dcc1d144c27ef68317e0c8f2939b87887af3e23fefc",
+        "rejectionCode": "none"
+      }
+    },
+    {
+      "backend": "vulkan",
+      "profileVersion": 2,
+      "graphId": "graph.surface-color-study-preview",
+      "generatedSourceIdentity": "7dae1dcfa224f8bf54617033790414843b43c0e9994970da9f7c641a7aa2f913",
+      "sessionId": "22fecf63ca4d984dd070c8bc9f4ec433",
+      "observation": {
+        "status": "loaded",
+        "observedAttemptSequence": 1,
+        "observedPublicationRef": "899c866ceb9425c5e0742dcc1d144c27ef68317e0c8f2939b87887af3e23fefc",
+        "loadedPublicationRef": "899c866ceb9425c5e0742dcc1d144c27ef68317e0c8f2939b87887af3e23fefc",
+        "rejectionCode": "none"
+      },
+      "previousSessionId": "7dc30ec3b9a3a4d64e371a5bd8d9c41f",
+      "transition": "identical-graph-new-document-owner"
+    }
+  ],
+  "lostAcknowledgementRecovered": true,
+  "limits": [
+    "No Computer Use or manual desktop interaction performed at owner request.",
+    "No clean-machine or OS-wide source access denial claimed."
+  ]
+}

@@ -49,6 +49,7 @@ export function EnvironmentControls({ workflow, close }: { workflow: Environment
         <p role="status" aria-live="polite">{state.message}</p>
         <fieldset disabled={state.busy}>
             <legend>Import</legend>
+            <Button onClick={() => void workflow.importBundled()}>Use bundled Environment</Button>
             <Button onClick={() => void workflow.discover()}>Import from Repository…</Button>
             <Button onClick={() => void workflow.importPublished()}>Import published Environment and state…</Button>
             {state.candidates.map(candidate => <div key={candidate.deployment} className="gglab-environment-row">

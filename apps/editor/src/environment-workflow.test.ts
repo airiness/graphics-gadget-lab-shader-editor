@@ -2,7 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { createEnvironmentWorkflow } from "./environment-workflow.js";
 import type { PreviewCoordinator } from "./preview-coordinator.js";
 
-const mocks = vi.hoisted(() => ({ storage: { snapshot: vi.fn(), verify: vi.fn(), choose: vi.fn(), openRegistered: vi.fn() }, mutation: { list: vi.fn(), inspect: vi.fn(), preparePublish: vi.fn(), prepareState: vi.fn(), settle: vi.fn(), cancel: vi.fn() }, discovery: { chooseRepository: vi.fn(), discover: vi.fn(), cancel: vi.fn() }, activation: { activate: vi.fn(), cancel: vi.fn(), close: vi.fn() } }));
+const mocks = vi.hoisted(() => ({ storage: { snapshot: vi.fn(), verify: vi.fn(), choose: vi.fn(), openRegistered: vi.fn(), openBundled: vi.fn() }, mutation: { list: vi.fn(), inspect: vi.fn(), preparePublish: vi.fn(), prepareState: vi.fn(), settle: vi.fn(), cancel: vi.fn() }, discovery: { chooseRepository: vi.fn(), discover: vi.fn(), cancel: vi.fn() }, activation: { activate: vi.fn(), cancel: vi.fn(), close: vi.fn() } }));
 vi.mock("./environment-storage-host.js", () => ({ createEnvironmentStorageHost: () => mocks.storage }));
 vi.mock("./environment-mutation-host.js", () => ({ createEnvironmentMutationHost: () => mocks.mutation }));
 vi.mock("./environment-host.js", () => ({ createEnvironmentDiscoveryHost: () => mocks.discovery }));
@@ -108,4 +108,13 @@ it("retries retained proof cleanup before allowing another activation", async ()
     await workflow.retry(); expect(mocks.activation.close).toHaveBeenCalledTimes(2);
     expect(mocks.activation.activate).toHaveBeenCalledOnce();
     expect(mocks.mutation.prepareState).not.toHaveBeenCalled();
+});
+
+it("admits bundled paths through fresh activation without a publisher", async () => {
+    const { workflow } = setup();
+    mocks.storage.openBundled.mockResolvedValue({ environment, state });
+    await workflow.importBundled();
+    expect(mocks.discovery.chooseRepository).not.toHaveBeenCalled();
+    expect(mocks.mutation.prepareState).not.toHaveBeenCalled();
+    expect(mocks.activation.activate).toHaveBeenCalledWith(expect.anything(), environment, state, expect.any(Array), expect.any(Function), expect.any(Function));
 });

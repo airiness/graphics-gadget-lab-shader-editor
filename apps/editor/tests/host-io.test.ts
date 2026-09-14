@@ -531,6 +531,7 @@ describe("desktop host wiring (this repo's tauri surface)", () => {
             "shader-environment-inspect-mutation",
             "shader-environment-list-mutations",
             "shader-environment-observe-directory",
+            "shader-environment-open-bundled",
             "shader-environment-open-execution",
             "shader-environment-prepare-mutation",
             "shader-environment-prepare-registration",

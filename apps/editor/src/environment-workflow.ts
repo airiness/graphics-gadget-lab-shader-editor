@@ -131,6 +131,10 @@ export function createEnvironmentWorkflow(
             attempt = { repository, publication: null, initialization: null, environment: null, state: null };
             attempt.publication = await mutation.preparePublish(repository, candidate); check(); await finish();
         }),
+        importBundled: () => run(async () => {
+            const handles = await storage.openBundled(); check();
+            attempt = { repository: null, publication: null, initialization: null, ...handles }; await finish();
+        }),
         importPublished: () => run(async () => {
             const environment = await storage.choose("environment"); check(); if (!environment) return;
             const state = await storage.choose("state"); check(); if (!state) return;

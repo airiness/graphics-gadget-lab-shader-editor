@@ -29,6 +29,13 @@ export function createEnvironmentStorageHost(invoke: Invoke) {
     }
     return {
         snapshot: () => registry.snapshot(), verify, inspectState, openRegistered,
+        async openBundled() {
+            const raw = await call("shader-environment-open-bundled");
+            environmentRequire(Array.isArray(raw) && raw.length === 2, "invalid-handle", "Invalid bundled selection");
+            const environment = readEnvironmentDirectoryHandle(raw[0]), state = readEnvironmentDirectoryHandle(raw[1]);
+            environmentRequire(environment.kind === "environment" && state.kind === "state", "invalid-handle", "Invalid bundled directory kinds");
+            return { environment, state };
+        },
         async choose(kind: EnvironmentDirectoryHandle["kind"]) {
             const raw = await call("shader-environment-choose-directory", { kind });
             if (raw === null) return null;

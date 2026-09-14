@@ -97,3 +97,6 @@ $RECYCLE.BIN/
 *.vsix
 # Local review qualification output
 .review-evidence/
+
+# Portable release products
+.release/

@@ -1,7 +1,6 @@
 {
-  "producerRevision": "0a4ce8f26e39fb8740758e4eb275db9d2fe619ec",
-  "editorBaseRevision": "a835ca86a4064f0221e6052a6b451d1933bb7380",
-  "qualificationStatus": "clean-replay-passed",
-  "qualifiedEditorRevision": "07ecc3f1b659d40c0a332e8adca704ff6f6d63bd",
-  "qualificationEvidence": "docs/environment-clean-replay.json"
+  "editorBaseRevision": "7018894908a493a46eb6bd24a7a59d4a3bad071f",
+  "qualificationEvidence": "docs/final-release.md",
+  "producerRevision": "0151ae75c6e88bab17f58aeef8a7e3eee43521bc",
+  "qualificationStatus": "final-release-native-import-passed"
 }

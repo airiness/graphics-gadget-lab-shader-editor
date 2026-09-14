@@ -1,5 +1,9 @@
 # Graphics Gadget Lab — Shader Editor
 
+This project is frozen and no longer maintained. Download the self-contained
+Windows x64 archive from [the final release](https://github.com/airiness/graphics-gadget-lab-shader-editor/releases/tag/v0.1.0-final).
+See [portable release instructions and verification](docs/final-release.md).
+
 Authoring tool repository for the GGLab node-based shader graph editor.
 
 This repository owns two authoring frontends — the GUI editor and a
